@@ -16,11 +16,44 @@ class Command(BaseCommand):
         parser.add_argument("--suggestions", action="store_true", help="Also build and score each list's suggestions (slower)")
         parser.add_argument("--lists", action="store_true", help="Show every list, not just each kind")
         parser.add_argument("--label", default="", help="A note saved with the report")
+        parser.add_argument("--cutoffs", help="Several cutoffs, in days ago (e.g. 42,84,126,168): one clone each, summarised across them")
+        parser.add_argument("--horizon", type=int, default=backtest.HORIZON, help="Days after each cutoff to score (default six weeks)")
+        parser.add_argument("--jobs", type=int, default=1, help="With --cutoffs, how many cutoffs to prepare and build at once")
 
-    def handle(self, *args, days, variant, reuse, keep, suggestions, lists, label, **options):
-        reports = backtest.run(days, variants=variant or ["default"], reuse=reuse, keep=keep, suggestions=suggestions, label=label)
+    def handle(self, *args, days, variant, reuse, keep, suggestions, lists, label, cutoffs, horizon, jobs, **options):
+        if cutoffs:
+            days_ago = [int(d) for d in cutoffs.split(",") if d.strip()]
+            summary = backtest.run_many(days_ago, variants=variant or ["default"], reuse=reuse, keep=keep, suggestions=suggestions, label=label, horizon=horizon, jobs=jobs)
+            self.show_summary(summary)
+            return
+        reports = backtest.run(days, variants=variant or ["default"], reuse=reuse, keep=keep, suggestions=suggestions, label=label, horizon=horizon)
         for name, report in reports.items():
             self.show(name, report, lists)
+
+    def show_summary(self, summary):
+        cutoffs = summary["as of"]
+        self.stdout.write(self.style.MIGRATE_HEADING(f"\nAcross {len(cutoffs)} cutoffs ({', '.join(cutoffs)}), each scored on the {summary['horizon days']} days after it"))
+        self.stdout.write("Plays scored: " + ", ".join(map(str, summary["plays scored"])))
+        width = max(len(v) for v in summary["variants"]) + 2
+        for name in backtest.HEADLINE:
+            self.stdout.write(f"\n{name}")
+            self.stdout.write(f"  {'':{width}}" + "".join(f"{c:>12}" for c in cutoffs) + f"{'mean':>10}{'sd':>8}{'range':>16}")
+            for variant, rows in summary["variants"].items():
+                row = rows[name]
+                cells = "".join(f"{'' if v is None else v:>12}" for v in row["by cutoff"])
+                spread = f"{row['min']}–{row['max']}" if row["min"] is not None else ""
+                self.stdout.write(f"  {variant:{width}}{cells}{'' if row['mean'] is None else row['mean']:>10}{'' if row['sd'] is None else row['sd']:>8}{spread:>16}")
+        for variant, result in summary["against default"].items():
+            self.stdout.write(self.style.MIGRATE_HEADING(f"\n{variant} against default (paired bootstrap over tracks, mean across cutoffs)"))
+            self.stdout.write(f"  {'':26}{'difference':>12}{'95% interval':>20}{'cutoffs agree':>15}   verdict")
+            for name, r in result.items():
+                if r["difference"] is None:
+                    self.stdout.write(f"  {name:26}{'':>12}{'':>20}{'':>15}   {r['verdict']}")
+                    continue
+                interval = f"{r['95% interval'][0]} to {r['95% interval'][1]}"
+                verdict = {"better": self.style.SUCCESS, "worse": self.style.ERROR}.get(r["verdict"], str)(f"{'real: ' if r['verdict'] != 'noise' else ''}{r['verdict']}")
+                self.stdout.write(f"  {name:26}{r['difference']:>+12}{interval:>20}{r['cutoffs agreeing']:>15}   {verdict}")
+        self.stdout.write(f"\nSaved to {summary['saved to']}")
 
     def show(self, name, report, lists):
         w = report["window"]

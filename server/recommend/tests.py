@@ -1,6 +1,8 @@
 from datetime import UTC, datetime, timedelta
 from unittest import mock
 
+import numpy as np
+
 from django.test import TestCase
 
 from catalogue.models import Artist, PlatformTrack, Track
@@ -136,3 +138,53 @@ class ModelHelperTests(TestCase):
         since = context_ranker.days_since(np.array([0.0, 86400.0]), np.array([86400.0 * 3, -1.0]))
         self.assertAlmostEqual(since[0], np.log1p(2))
         self.assertGreater(since[1], 9)  # never played before: far in the past
+
+
+class MultiCutoffBacktestTests(TestCase):
+    def test_clone_names_are_per_cutoff_and_still_checked(self):
+        name = backtest.clone_name(AS_OF)
+        self.assertTrue(name.endswith("_backtest_20260901"))
+        self.assertTrue(backtest.CLONE_NAME.search(name))
+        self.assertTrue(backtest.CLONE_NAME.search("audio_brain_backtest"))
+        for live in ("audio_brain", "audio_brain_backtest_x", "audio_brain_backtest_2026"):
+            with self.assertRaises(AssertionError):
+                backtest.drop_database(live)
+
+    def table(self, n=400, better=0):
+        """Half the tracks played; default lists 200 of them at random, the variant swaps `better` misses for hits."""
+        rng = np.random.default_rng(1)
+        ids = list(range(1, n + 1))
+        played = set(ids[: n // 2])
+        days = {t: {AS_OF.date()} for t in played}
+        default = [int(t) for t in rng.choice(ids, 200, replace=False)]
+        misses = [t for t in default if t not in played][:better]
+        hits = [t for t in ids if t in played and t not in default][:better]
+        variant = [t for t in default if t not in misses] + hits
+        lists = lambda tracks: {"familiar": ids[: n // 4], "recent": [], "analysed": ids,
+                                "lists": [{"key": "m", "kind": "mix", "title": "M", "tracks": tracks, "suggestions": []}]}
+        first = {t: AS_OF for t in played}
+        plays = {t: 1 for t in played}
+        return backtest.track_table({"default": lists(default), "v": lists(variant)}, days, plays, first, AS_OF, {"recent": 50.0, "new": 50.0})
+
+    def test_identical_variants_are_noise(self):
+        result = backtest.compare([self.table(), self.table()], "v", np.random.default_rng(0), resamples=200)
+        self.assertEqual(result["played %"]["difference"], 0.0)
+        self.assertEqual(result["played %"]["verdict"], "noise")
+
+    def test_a_clear_gain_is_real_and_a_tiny_one_is_noise(self):
+        rng = np.random.default_rng(0)
+        big = backtest.compare([self.table(better=40)] * 4, "v", rng, resamples=500)["played %"]
+        self.assertEqual(big["difference"], 20.0)
+        self.assertEqual((big["verdict"], big["cutoffs agreeing"]), ("better", "4/4"))
+        small = backtest.compare([self.table(better=1)], "v", rng, resamples=500)["played %"]
+        self.assertEqual(small["verdict"], "noise")
+
+    def test_score_stops_at_the_horizon(self):
+        track = make_tracks(1)[0]
+        Listen.objects.create(track=track, played_at=AS_OF + timedelta(days=3))
+        Listen.objects.create(track=track, played_at=AS_OF + timedelta(days=50))
+        data = {"summary": "", "familiar": [], "recent": [], "analysed": [track.pk],
+                "lists": [{"key": "m", "kind": "mix", "title": "M", "tracks": [track.pk], "suggestions": []}]}
+        report = backtest.score(data, AS_OF, end=AS_OF + timedelta(days=backtest.HORIZON))
+        self.assertEqual(report["window"]["plays"], 1)
+        self.assertEqual(report["all lists"]["came back"], 0)
