@@ -168,6 +168,11 @@ class MatchingTests(NoLLM):
         self.assertEqual(provided.match_now("Calvin Harris", "Old Song"), (self.no_tidal, NO_TIDAL))
         self.assertEqual(provided.match_now("Someone Else", "Feel So Close"), (None, PENDING))  # another artist's song: ask Tidal
 
+    def test_a_playable_duplicate_beats_a_scrobbled_alias(self):
+        duplicate = Track.objects.create(name="Blame", artist=self.calvin)  # no Tidal ID
+        TrackAlias.objects.create(artist_name="Calvin Harris ft. John Newman", track_name="Blame", track=duplicate)
+        self.assertEqual(provided.match_now("Calvin Harris ft. John Newman", "Blame"), (self.blame, FOUND))
+
     def test_a_djs_own_edit_falls_back_to_the_original(self):
         self.assertEqual(provided.match_fully(self.tidal, "Calvin Harris ft. John Newman", "Blame (Calvin Harris 2026 Remix)"), (self.blame, ORIGINAL))
         track, how = provided.match_fully(self.tidal, "Faithless", "Insomnia (Calvin Harris Edit)")

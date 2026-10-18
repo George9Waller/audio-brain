@@ -450,11 +450,19 @@ def not_known(artist, title):
 
 
 def in_catalogue(artist, title):
-    """The catalogue track for a tracklist line, or None. The same spelling first, then by base title among the
-    artist's tracks (credits as "A, B" or "A feat. B" both count), preferring one Tidal can play."""
+    """The catalogue track for a tracklist line, or None: the same spelling, else the same base title (by_title)."""
     alias = TrackAlias.objects.filter(artist_name=artist, track_name=title).select_related("track__artist").first()
-    if alias:
+    if alias and has_tidal(alias.track):
         return alias.track
+    # A scrobbled spelling can point at a duplicate Tidal doesn't have ("Calvin Harris - Blessings" beside "Calvin
+    # Harris, Clementine Douglas - Blessings"), so look on and keep the alias only if nothing better turns up.
+    found = by_title(artist, title)
+    return found if found and (alias is None or has_tidal(found)) else alias.track if alias else None
+
+
+def by_title(artist, title):
+    """The artist's track with the same base title (credits as "A, B" or "A feat. B" both count), preferring one
+    Tidal can play, then the most played."""
     names = names_of(artist)
     lead = primary_artist(artist)
     if not names or not lead:
@@ -726,10 +734,11 @@ def build_set_list(set_):
         Mix.objects.filter(key=key).delete()
         return None
     title = set_.tracklist_title or set_.track.name
-    total = sum(1 for e in set_.entries.all() if e.match != ID)
-    subtitle = f"From this set: {len(picks)} of its {total} known tracks, in the order they were played"
+    items = track_items(picks)  # a track played twice (an edit over its original) appears once
+    report = summary(set_)
+    subtitle = f"From this set, in the order played: {len(items)} tracks ({report['playable']} of its {report['known']} known lines are on Tidal)"
     existing = Mix.objects.filter(key=key).first()
-    mix = save(key, "set", Mix.LISTS, title, subtitle, track_items(picks))
+    mix = save(key, "set", Mix.LISTS, title, subtitle, items)
     if existing is None:
         Mix.objects.filter(pk=mix.pk).update(logged=False, request=f"set:{set_.pk}")  # logged when first played or synced
     if ListSync.objects.filter(key=key).exists() and tidal_ready():
