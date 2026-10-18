@@ -288,7 +288,7 @@ follow-up agent task implements whichever route works.
 | A0 commit | 0 | done (a14b5c2) |
 | B1 multi-cutoff backtest | 1 | open |
 | B2 set tracklists you provide | 1 | open |
-| B3 Tidal recommendations | 1 | open |
+| B3 Tidal recommendations | 1 | built: readable via official API; daily `tidal_recommendations` job into `ExternalMix`; first snapshot OK on scratch DB; a week of snapshots accrues after merge + migrate (see NEXT.md) |
 | B4 ListenBrainz baseline | 1 | skipped for now |
 | B5 production settings and fast rebuild | 1 | open |
 | B6 MusicBrainz 503s and backfill | 1 | open |

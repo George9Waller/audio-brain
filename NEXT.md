@@ -48,6 +48,29 @@ round") is in a14b5c2.
   - The taste signal does the opposite.
   - One window is too noisy to choose on: played rates are about ±0.8 points and new-track rates about ±1.6. So the taste weight in `retrieve.SIGNAL_WEIGHTS` stays 0.
 
+### Tidal's own recommendations (B3, 18 Oct)
+
+- **Readable through the official API** (openapi.tidal.com v2, spec 1.10.184) with our user token and its `recommendations.read` scope. Read-only; nothing is written.
+  - The `userRecommendations` resource (with myMixes / discoveryMixes / newArrivalMixes) is **gone**: every form of it answers 404. It's been split into one resource per group, each addressed as `me`:
+    - `GET userDailyMixes/me/relationships/items?include=items`: My Mix 1–8;
+    - `GET userDiscoveryMixes/me/relationships/items?include=items`: My Daily Discovery ("updates every morning");
+    - `GET userNewReleaseMixes/me/relationships/items?include=items`: My New Arrivals;
+    - `GET userOfflineMixes/me/relationships/items`: empty for us (`userOfflineMixes/me` itself is 404).
+  - Each mix is a `playlists` resource with `playlistType: MIX` and `accessType: UNLISTED`. Its tracks come from `GET playlists/{id}/relationships/items?include=items.artists,items.albums`, 20 a page with `links.next` cursors. They include the ISRC, title, version and the Tidal IDs of the artists and albums.
+  - Not useful: `userFeedItems` (`filter[owners.id]=me&filter[surface]=INBOX|FEED`) is empty for us. It's where monthly and yearly "history mixes" would be announced. `userRecommendationBlocks/me` is 404.
+- So the unofficial API (api.tidal.com/v1 `pages/...`, as used by `tidalapi`) isn't needed. It uses the Tidal app's own client ID, which is against the terms and breaks without warning.
+- **Built:**
+  - `ExternalMix` (`recommend/models.py`, migration `recommend 0018_external_mix`): source, kind, external_id, name, description, taken_at, seen_at, and tracks in order. Each track is `{external_id, isrc, title, artists, album, track_id}`.
+  - The `tidal_recommendations` job (`recommend/external.py`, `TidalClient.recommendation_mixes`) runs **daily at 10:00**, not weekly, on the sync lane, because Daily Discovery changes every morning. A new row is stored only when a mix's tracks change; an unchanged mix just moves `seen_at` on.
+  - Tracks are matched to the catalogue by Tidal ID, then ISRC, then artist and title. Nothing is added to the catalogue. `external.rematch()` (run by the job, and to be called by C3 before scoring) links tracks you go on to play. `external.latest(as_of=…)` gives the version of each mix that was live at a date.
+  - B4 can store ListenBrainz as `source="listenbrainz"`, with recording MBIDs as `external_id`.
+- **First snapshot**, on a scratch copy (10 mixes, about 13 s):
+  - My Mix 1–8: 40 tracks each, 82–98% already in the catalogue, and almost all of those already played. They're mostly familiar tracks.
+  - Daily Discovery: 10 tracks, 2 known.
+  - New Arrivals: 29 tracks, 6 known.
+  - So for C3 and C4 the fair comparison is Daily Discovery and New Arrivals against our New to you and Fresh, and My Mix against our context mixes. Unmatched outside tracks aren't analysed, so `backtest.score`'s chance rate for new tracks doesn't strictly cover them.
+- Not applied to the live database yet. Run `migrate` after merging. The job then starts at the next 10:00.
+
 ### Server (`server/`, Django + Postgres/pgvector)
 
 Built in this round:
