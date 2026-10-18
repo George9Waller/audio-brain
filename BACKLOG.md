@@ -285,7 +285,7 @@ follow-up agent task implements whichever route works.
 
 | Task | Wave | State |
 |---|---|---|
-| A0 commit | 0 | open |
+| A0 commit | 0 | done (a14b5c2) |
 | B1 multi-cutoff backtest | 1 | open |
 | B2 set tracklists you provide | 1 | open |
 | B3 Tidal recommendations | 1 | open |

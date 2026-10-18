@@ -97,6 +97,8 @@ DATABASES = {
         'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
         'HOST': os.environ.get('POSTGRES_HOST', 'localhost'),
         'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+        # Parallel agents each set their own test database, so test runs don't collide.
+        'TEST': {'NAME': os.environ.get('POSTGRES_TEST_DB')},
     }
 }
 

@@ -8,8 +8,8 @@ next-steps sections below are the history behind it.
 
 ## State
 
-Everything up to the first session is in the initial commit. The second session (18 Oct, below under "Modelling
-round") is not committed yet.
+Everything up to the first session is in the initial commit; the second session (18 Oct, below under "Modelling
+round") is in a14b5c2.
 
 ### Modelling round (18 Oct, second session)
 
