@@ -5,15 +5,16 @@ filled in from Last.fm tags where it doesn't ("french", "icelandic", "british", 
 contexts (so French chanson groups by being French chanson, not by when you played it), by requests ("Icelandic",
 "French", "from Manchester", "90s") and by the names contexts are given.
 
-The stage works artist by artist, those you play most first, at MusicBrainz's one request a second: two requests per
-artist, so the first pass over a big library takes hours and later runs only do new artists.
+The stage works artist by artist, those you play most first, at MusicBrainz's one request a second (shared by every
+process; see `clients.base`): one lookup per artist, which brings their releases too, plus one search per 50 artists
+to find the IDs of those who lack one. The first pass over a big library takes hours; later runs only do new artists.
 """
 
 import logging
 from collections import Counter
 from functools import lru_cache
 
-from django.db.models import Q, Sum
+from django.db.models import Count, F, Q, Sum
 from django.utils import timezone
 
 from catalogue.models import Artist, ArtistTag, Track
@@ -22,7 +23,8 @@ from enrichment.identity import normalise
 
 logger = logging.getLogger(__name__)
 
-GIVE_UP_AFTER = 5  # failures in a row before a run stops (MusicBrainz busy or blocking us)
+GIVE_UP_AFTER = 5  # artists in a row MusicBrainz refused, through all its back-offs, before a run stops
+BATCH_SIZE = 50  # artists per recording search (50 IDs keep the query URL a safe length)
 
 # Last.fm tag words -> (country, language) they imply
 TAG_ORIGINS = {
@@ -40,29 +42,50 @@ TAG_ORIGINS = {
 
 
 def profile_artists(limit=None):
-    """Profile artists not done yet, those you play most first. Returns a summary line."""
+    """Profile artists not done yet, those you play most first, then the rest with analysed tracks. Returns a summary.
+
+    Artists go in batches: one search request finds the MusicBrainz IDs of every artist in the batch that lacks one
+    (through a recording of theirs), then each artist costs one lookup. An artist is marked done only once MusicBrainz
+    has answered for them, so an interrupted or refused run resumes where it stopped.
+    """
     client = MusicBrainzClient()
-    todo = (Artist.objects.filter(profiled_at__isnull=True).annotate(plays=Sum("tracks__intent_plays"))
-            .filter(plays__gt=0).order_by("-plays"))
+    todo = list(artists_to_profile()[:limit] if limit else artists_to_profile())
     done = found = failures = 0
-    for artist in todo[:limit] if limit else todo:
+    for start in range(0, len(todo), BATCH_SIZE):
+        batch = todo[start : start + BATCH_SIZE]
         try:
-            if profile(client, artist):
-                found += 1
-            failures = 0
+            resolved = mbids_from_tracks(client, [a for a in batch if not a.mbid])
         except Exception:
-            logger.warning("Couldn't profile %s", artist, exc_info=True)
-            failures += 1
-            if failures >= GIVE_UP_AFTER:  # MusicBrainz is refusing us: stop, and carry on next run
-                return f"{done} artists profiled ({found} found); MusicBrainz unavailable, stopped for now"
-        done += 1
+            logger.warning("Couldn't look up recordings for %d artists", len(batch), exc_info=True)
+            resolved = None  # those without an MBID wait for a later run
+        for artist in batch:
+            if not artist.mbid and resolved is None:
+                continue
+            try:
+                if profile(client, artist, artist.mbid or resolved.get(artist.pk, "")):
+                    found += 1
+                failures = 0
+            except Exception:
+                logger.warning("Couldn't profile %s", artist, exc_info=True)
+                failures += 1
+                if failures >= GIVE_UP_AFTER:  # MusicBrainz refused through every back-off: stop, carry on next run
+                    return f"{done} artists profiled ({found} found); MusicBrainz unavailable, stopped for now"
+                continue
+            done += 1
+        logger.info("Artist profiles: %d of %d done (%d found)", done, len(todo), found)
     return f"{done} artists profiled ({found} found on MusicBrainz)"
 
 
-def profile(client, artist):
-    """Fill in one artist from MusicBrainz. True if MusicBrainz had them."""
-    mbid = artist.mbid or mbid_from_tracks(client, artist)
-    record = client.artist(mbid) if mbid else None
+def artists_to_profile():
+    """Artists without a profile who you've played or who have analysed tracks, most played first."""
+    return (Artist.objects.filter(profiled_at__isnull=True)
+            .annotate(plays=Sum("tracks__intent_plays"), analysed=Count("tracks__audio"))
+            .filter(Q(plays__gt=0) | Q(analysed__gt=0)).order_by(F("plays").desc(nulls_last=True), "pk"))
+
+
+def profile(client, artist, mbid):
+    """Fill in one artist from MusicBrainz (no MBID: nothing to look up, so just mark them done). True if found."""
+    record = client.artist(mbid, releases=True) if mbid else None
     if record:
         artist.mbid = mbid
         artist.country = (record.get("country") or "")[:2]
@@ -72,12 +95,7 @@ def profile(client, artist):
         artist.active_from = year(span.get("begin"))
         artist.active_to = year(span.get("end"))
         artist.genres = [g["name"] for g in sorted(record.get("genres", []), key=lambda g: -g.get("count", 0))[:8]]
-        try:
-            releases = client.artist_releases(mbid)
-        except Exception:  # MusicBrainz busy: the language can come from Last.fm tags instead, or a later run
-            logger.warning("No releases for %s from MusicBrainz", artist)
-            releases = []
-        languages = Counter((r.get("text-representation") or {}).get("language") for r in releases)
+        languages = Counter((r.get("text-representation") or {}).get("language") for r in record.get("releases", []))
         languages.pop(None, None)
         languages.pop("zxx", None)  # no linguistic content: instrumentals
         artist.language = languages.most_common(1)[0][0] if languages else ""
@@ -86,17 +104,27 @@ def profile(client, artist):
     return bool(record)
 
 
-def mbid_from_tracks(client, artist):
-    """The artist's MusicBrainz ID via one of their tracks that has a recording ID, when the names match."""
-    track = Track.objects.filter(artist=artist).exclude(mbid="").first()
-    if not track:
-        return ""
-    recording = client.recording(track.mbid)
-    for credit in (recording or {}).get("artist-credit", []):
-        found = credit.get("artist", {})
-        if normalise(found.get("name", "")) and normalise(found.get("name", "")) in normalise(artist.name):
-            return found.get("id", "")
-    return ""
+def mbids_from_tracks(client, artists):
+    """{artist id: MusicBrainz ID}, via one recording of each artist's with an ID, when the credited name matches.
+
+    One search request covers the whole batch; artists with no such track, or whose name doesn't match, are absent.
+    """
+    recording_of = {}
+    for artist_id, mbid in Track.objects.filter(artist__in=artists).exclude(mbid="").order_by("artist_id", "pk").values_list("artist_id", "mbid"):
+        recording_of.setdefault(artist_id, mbid)
+    if not recording_of:
+        return {}
+    recordings = {r["id"]: r for r in client.recordings(sorted(set(recording_of.values())))}
+    names = {a.pk: normalise(a.name) for a in artists}
+    out = {}
+    for artist_id, mbid in recording_of.items():
+        for credit in recordings.get(mbid, {}).get("artist-credit", []):
+            found = credit.get("artist", {})
+            name = normalise(found.get("name", ""))
+            if name and name in names[artist_id] and found.get("id"):
+                out[artist_id] = found["id"]
+                break
+    return out
 
 
 def year(date):
