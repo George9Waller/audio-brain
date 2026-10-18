@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Audio Brain</string>
+    <string name="share_tracklist">Add tracklist</string>
 </resources>

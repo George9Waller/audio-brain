@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private var openSettings by mutableStateOf(false)
+    private var shared by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(SystemBarStyle.dark(android.graphics.Color.TRANSPARENT), SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
@@ -25,7 +26,7 @@ class MainActivity : ComponentActivity() {
         handle(intent)
         setContent {
             AbTheme {
-                Shell(dataGraph, openSettings, onSettingsOpened = { openSettings = false })
+                Shell(dataGraph, openSettings, onSettingsOpened = { openSettings = false }, shared = shared, onShareHandled = { shared = null })
             }
         }
     }
@@ -43,6 +44,11 @@ class MainActivity : ComponentActivity() {
 
     /** audiobrain://connect?url=…&token=… (printed by `manage.py api_token`): save the connection and show Settings. */
     private fun handle(intent: Intent?) {
+        if (intent?.action == Intent.ACTION_SEND) {  // shared text or a link: a tracklist (sets.provided on the server)
+            val text = listOfNotNull(intent.getStringExtra(Intent.EXTRA_SUBJECT), intent.getStringExtra(Intent.EXTRA_TEXT)).joinToString("\n").trim()
+            if (text.isNotBlank()) shared = text
+            return
+        }
         val uri = intent?.data ?: return
         if (uri.scheme != "audiobrain" || uri.host != "connect") return
         val url = uri.getQueryParameter("url").orEmpty()

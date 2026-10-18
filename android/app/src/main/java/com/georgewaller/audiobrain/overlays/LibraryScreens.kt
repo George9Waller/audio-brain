@@ -103,7 +103,7 @@ fun AlbumScreen(vm: AppViewModel, graph: DataGraph, id: Long, padding: PaddingVa
 
 /** A set and its tracklist: entries matched to your catalogue are full rows you can rate; the rest are listed plainly. */
 @Composable
-fun SetScreen(vm: AppViewModel, graph: DataGraph, id: Long, padding: PaddingValues, onMenu: (ListItem, String) -> Unit) {
+fun SetScreen(vm: AppViewModel, graph: DataGraph, id: Long, padding: PaddingValues, onMenu: (ListItem, String) -> Unit, onTracklist: (provided: Boolean) -> Unit = {}) {
     val verdicts by vm.verdicts.collectAsStateWithLifecycle()
     val context = LocalContext.current
     Loaded<SetPage>(id, { graph.api.setPage(id) }) { page ->
@@ -117,7 +117,12 @@ fun SetScreen(vm: AppViewModel, graph: DataGraph, id: Long, padding: PaddingValu
                         if (page.entries.isEmpty()) "No tracklist found yet" else "${page.set.inCatalogue} of ${page.entries.size} tracks are in your catalogue",
                         style = Ab.type.caption, color = Ab.colors.textFaint,
                     )
-                    AbButton(if ("youtube" in page.set.url) "Watch on YouTube" else "Find in Tidal", { openUrl(context, page.set.url) }, kind = ButtonKind.Ghost, icon = AbIcons.Open)
+                    Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
+                        AbButton(if ("youtube" in page.set.url) "Watch on YouTube" else "Find in Tidal", { openUrl(context, page.set.url) }, kind = ButtonKind.Ghost, icon = AbIcons.Open)
+                        // a tracklist you gave: its matches, to fix; any other set: give it a tracklist of your own
+                        if (page.set.source == "provided") AbButton("Matches", { onTracklist(true) }, kind = ButtonKind.Quiet)
+                        else AbButton(if (page.entries.isEmpty()) "Paste tracklist" else "Replace tracklist", { onTracklist(false) }, kind = ButtonKind.Quiet)
+                    }
                 }
             }
             items(page.entries, key = { "e-${it.position}" }) { e ->

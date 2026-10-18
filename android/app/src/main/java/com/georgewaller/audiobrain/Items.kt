@@ -64,6 +64,7 @@ fun MixList.kindLabel(): String = when (kind) {
     "radio" -> "Radio"
     "explore" -> "Explore"
     "interest" -> "New interest"
+    "set" -> "From a set"
     "draft" -> "Draft"
     else -> title
 }

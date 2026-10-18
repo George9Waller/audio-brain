@@ -77,6 +77,8 @@ import com.georgewaller.audiobrain.pages.MorePage
 import com.georgewaller.audiobrain.player.SessionTracker
 import com.georgewaller.audiobrain.settings.DeviceCheckScreen
 import com.georgewaller.audiobrain.settings.SettingsScreen
+import com.georgewaller.audiobrain.sets.TracklistScreen
+import com.georgewaller.audiobrain.sets.TracklistViewModel
 import kotlinx.coroutines.launch
 
 private val PAGES = listOf("Lists", "Home", "Discover", "Catalogue", "More")
@@ -89,6 +91,8 @@ sealed interface Overlay {
     data class Album(val id: Long) : Overlay
     data class Set(val id: Long) : Overlay
     data class Ask(val prefill: String = "") : Overlay
+    /** Give a tracklist: [prefill] from the share sheet, [attachTo] an existing set, [show] a provided set's matches. */
+    data class Tracklist(val prefill: String = "", val attachTo: Long? = null, val show: Long? = null) : Overlay
     data object Focus : Overlay
     data object Jobs : Overlay
     data object Settings : Overlay
@@ -101,11 +105,12 @@ sealed interface Overlay {
  * for lists and asking, and the Building and Draft screens while a mix is being made.
  */
 @Composable
-fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit) {
+fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit, shared: String? = null, onShareHandled: () -> Unit = {}) {
     val context = LocalContext.current
     val vm: AppViewModel = viewModel { AppViewModel(graph, context.applicationContext) }
     val jobs: JobsViewModel = viewModel { JobsViewModel(graph) }
     val library: LibraryViewModel = viewModel { LibraryViewModel(graph) }
+    val tracklist: TracklistViewModel = viewModel { TracklistViewModel(graph) }
     val pager = rememberPagerState(initialPage = HOME) { PAGES.size }
     val scope = rememberCoroutineScope()
     val overlays = remember { mutableStateListOf<Overlay>() }
@@ -118,6 +123,9 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit)
     val pending by vm.pending.collectAsStateWithLifecycle()
 
     LaunchedEffect(openSettings) { if (openSettings) { overlays.add(Overlay.Settings); onSettingsOpened() } }
+    val openTracklist: (Overlay.Tracklist) -> Unit = { o -> tracklist.start(o.prefill, o.attachTo, o.show); overlays.removeAll { it is Overlay.Tracklist }; overlays.add(o) }
+    // text or a link shared from another app (a tracklist page, a video, a friend's message) opens as a tracklist
+    LaunchedEffect(shared) { if (shared != null) { openTracklist(Overlay.Tracklist(prefill = shared)); onShareHandled() } }
     LaunchedEffect(Unit) {
         vm.events.collect { e ->
             when (e) {
@@ -166,7 +174,7 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit)
                                 AbChip("Library", selected = mode == "library") { mode = "library" }
                             }
                             if (mode == "map") MapPage(vm, graph, onMenu)
-                            else CataloguePage(vm, library, pad, { overlays.add(Overlay.Artist(it)) }, { overlays.add(Overlay.Album(it)) }, { overlays.add(Overlay.Set(it)) }, onMenu)
+                            else CataloguePage(vm, library, pad, { overlays.add(Overlay.Artist(it)) }, { overlays.add(Overlay.Album(it)) }, { overlays.add(Overlay.Set(it)) }, onMenu, onPasteTracklist = { openTracklist(Overlay.Tracklist()) })
                         }
                     }
                     else -> MorePage(vm, pad, { overlays.add(Overlay.Jobs) }, { overlays.add(Overlay.Settings) }, { overlays.add(Overlay.DeviceCheck) }, { overlays.add(Overlay.Catalog) })
@@ -205,7 +213,8 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit)
                     is Overlay.List -> ListDetail(vm, overlay.key, p, onMenu)
                     is Overlay.Artist -> ArtistScreen(vm, graph, overlay.id, p, { overlays.add(Overlay.Album(it)) }, onMenu)
                     is Overlay.Album -> AlbumScreen(vm, graph, overlay.id, p, { overlays.add(Overlay.Artist(it)) }, onMenu)
-                    is Overlay.Set -> SetScreen(vm, graph, overlay.id, p, onMenu)
+                    is Overlay.Set -> SetScreen(vm, graph, overlay.id, p, onMenu) { provided -> openTracklist(if (provided) Overlay.Tracklist(show = overlay.id) else Overlay.Tracklist(attachTo = overlay.id)) }
+                    is Overlay.Tracklist -> TracklistScreen(tracklist, p, onOpenList = { overlays.add(Overlay.List(it)) }, onPlay = vm::play)
                     is Overlay.Ask -> AskScreen(vm, overlay.prefill, p) { overlays.add(Overlay.List(it)) }
                     Overlay.Jobs -> JobsScreen(jobs, p) { message = it }
                     Overlay.Settings -> SettingsScreen(graph, p, onDeviceCheck = { overlays.add(Overlay.DeviceCheck) }, onCatalog = { overlays.add(Overlay.Catalog) }) { message = it }
