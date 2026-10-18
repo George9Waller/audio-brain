@@ -227,3 +227,36 @@ class TasteVector(models.Model):
 
     class Meta:
         indexes = [HnswIndex(name="taste_vector_hnsw", fields=["vector"], opclasses=["vector_cosine_ops"])]
+
+
+class ExternalMix(models.Model):
+    """One version of a recommendation list made outside audio-brain (recommend.external): Tidal's own mixes now,
+    ListenBrainz's later. Kept to score outside picks the same way as ours (C3) and to interleave them blind (C4).
+
+    A new row is stored only when a list's tracks change; a list seen again unchanged just moves `seen_at` on, so
+    `taken_at` to `seen_at` is how long that version was live. Tracks keep the platform's own details beside the
+    catalogue match, because most outside picks aren't in the catalogue yet and can be matched later
+    (`external.rematch`) once you've played them."""
+
+    TIDAL, LISTENBRAINZ = "tidal", "listenbrainz"
+    SOURCES = [(TIDAL, "Tidal"), (LISTENBRAINZ, "ListenBrainz")]
+
+    source = models.CharField(max_length=20, choices=SOURCES)
+    kind = models.CharField(max_length=30)  # Tidal: "daily" (My Mix n), "discovery", "new_releases", "offline"
+    external_id = models.CharField(max_length=100, blank=True)  # the platform's ID for the list, the same across versions
+    name = models.CharField(max_length=250)
+    description = models.CharField(max_length=500, blank=True)
+    taken_at = models.DateTimeField(db_index=True)  # when this version was first seen
+    seen_at = models.DateTimeField()  # when it was last seen unchanged
+    # In order: {"external_id", "isrc", "title", "artists", "album", "track_id"}; track_id is the catalogue track or None.
+    tracks = models.JSONField(default=list)
+
+    class Meta:
+        indexes = [models.Index(fields=["source", "external_id", "-taken_at"], name="external_mix_latest")]
+
+    def __str__(self):
+        return f"{self.get_source_display()} {self.name} ({self.taken_at:%Y-%m-%d})"
+
+    def track_ids(self):
+        """The catalogue tracks it holds, in order: what scoring needs."""
+        return [t["track_id"] for t in self.tracks if t.get("track_id")]

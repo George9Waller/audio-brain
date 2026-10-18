@@ -14,6 +14,7 @@ AUTH_URL = "https://login.tidal.com/authorize"
 TOKEN_URL = "https://auth.tidal.com/v1/oauth2/token"
 # Reading favourites and playlists now; writing playlists for exported mixes later.
 USER_SCOPES = "user.read collection.read playlists.read playlists.write recommendations.read"
+RECOMMENDATION_GROUPS = ["userDailyMixes", "userDiscoveryMixes", "userNewReleaseMixes", "userOfflineMixes"]
 
 
 class TidalClient(APIClient):
@@ -86,6 +87,19 @@ class TidalClient(APIClient):
 
     def similar_tracks(self, track_id):
         return [item["id"] for item in self.get(f"tracks/{track_id}/relationships/similarTracks")["data"]]
+
+    def recommendation_mixes(self):
+        """Tidal's personal mixes for you, as (group, playlist resource) pairs. Needs `user=True` and the
+        recommendations.read scope. Each group is its own resource (the older `userRecommendations` is gone, 404):
+        userDailyMixes holds My Mix 1-8, userDiscoveryMixes My Daily Discovery, userNewReleaseMixes My New Arrivals,
+        and userOfflineMixes the mixes kept offline. A mix is a playlist with playlistType MIX, so its tracks are read
+        like any playlist's, at playlists/{id}/relationships/items."""
+        mixes = []
+        for group in RECOMMENDATION_GROUPS:
+            data, included = self.get_all(f"{group}/me/relationships/items", include="items")
+            playlists = {item["id"]: item for item in included if item["type"] == "playlists"}
+            mixes += [(group, playlists[ref["id"]]) for ref in data if ref["id"] in playlists]
+        return mixes
 
 
 def app_token():

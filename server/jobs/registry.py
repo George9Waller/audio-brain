@@ -106,6 +106,7 @@ MODELS = [
     ("Candidates from Tidal's similar tracks", "recommend.candidates.expand_candidates"),
 ]
 MIXES = [("Mixes", "jobs.steps.mixes")]
+TIDAL_RECOMMENDATIONS = [("Tidal's mixes", "recommend.external.snapshot_tidal")]
 
 JOBS = {job.key: job for job in [
     Job("lastfm", "Last.fm scrobbles", "New scrobbles since the last sync", LASTFM, Every(15), lane=SYNC),
@@ -120,6 +121,8 @@ JOBS = {job.key: job for job in [
         LASTFM + FAVOURITES + FIND_SETS + FIND_RELEASES + QUEUE + ENRICHMENT + TRACKLISTS + SCORE_RELEASES + SCORE_SETS + MODELS + MIXES,
         options={"skip_enrichment": "Only find new things; enrich them on a later run"},
     ),
+    # Daily, as My Daily Discovery is replaced every morning (about 08:30 UTC); unchanged mixes aren't stored again.
+    Job("tidal_recommendations", "Tidal's recommendations", "Snapshots of Tidal's own mixes for you (My Mix, My Daily Discovery, My New Arrivals), to measure ours against", TIDAL_RECOMMENDATIONS, Daily(10), lane=SYNC),
 ]}
 
 
