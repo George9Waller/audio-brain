@@ -107,3 +107,5 @@ class MusicBrainzBusyTests(SimpleTestCase):
     def test_urllib3_no_longer_retries_busy_answers(self):
         retries = self.client.session.get_adapter("https://musicbrainz.org").max_retries
         self.assertNotIn(503, retries.status_forcelist)
+        # MusicBrainz's 503s carry Retry-After: 0, which urllib3 would otherwise retry regardless of the list.
+        self.assertFalse(retries.is_retry("GET", 503, has_retry_after=True))

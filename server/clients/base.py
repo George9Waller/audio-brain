@@ -7,7 +7,9 @@ must take turns. The lane is a small file under `RATE_LIMIT_DIR` holding the ear
 guarded by an exclusive `flock`; a process holds the lock while it waits its turn, so requests go out one at a time.
 
 Shared-lane clients also handle "busy" answers (429, 503) themselves rather than through urllib3's retries, which
-ignore the pacing and, when MusicBrainz sends `Retry-After: 0`, retry at once in a burst. They back off exponentially
+ignore the pacing (the first retry goes at once) and hide five requests behind each call. urllib3 retries any 503
+that carries a `Retry-After` even when 503 isn't in its list, and MusicBrainz sends `Retry-After: 0`, so that is
+switched off too. They back off exponentially
 (or for as long as `Retry-After` asks, if longer) and push the lane back, so the other processes wait too.
 """
 
@@ -37,8 +39,11 @@ class APIClient:
 
     def __init__(self):
         self.session = requests.Session()
-        statuses = [500, 502, 504] if self.shared_lane else [429, 500, 502, 503, 504]
-        self.session.mount("https://", HTTPAdapter(max_retries=Retry(total=5, backoff_factor=1, status_forcelist=statuses)))
+        if self.shared_lane:  # busy answers are ours to retry; urllib3 would also retry any 503 with a Retry-After
+            retry = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 504], respect_retry_after_header=False)
+        else:
+            retry = Retry(total=5, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+        self.session.mount("https://", HTTPAdapter(max_retries=retry))
         self.session.headers["User-Agent"] = f"audio-brain/0.1 ( {settings.API_CONTACT} )" if settings.API_CONTACT else "audio-brain/0.1"
         self.last_request = 0.0
         self.lane = SharedLane(self.shared_lane, self.min_interval) if self.shared_lane else None
