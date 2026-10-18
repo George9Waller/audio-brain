@@ -1,3 +1,7 @@
 **/__pycache__/
 models/
 imports/
+.secret_key
+logs/
+# in worktrees, models is a symlink to the shared folder
+/models

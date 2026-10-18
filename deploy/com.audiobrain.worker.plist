@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The audio-brain job worker, schedules on (manage.py run_jobs). Install steps are in deploy/README.md; REPO is
+     replaced by the repo's path. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.audiobrain.worker</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>REPO/deploy/run-worker.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>REPO/server</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <!-- background priority: enrichment and model training shouldn't make the machine sluggish -->
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>Nice</key>
+    <integer>5</integer>
+    <key>StandardOutPath</key>
+    <string>REPO/server/logs/worker.log</string>
+    <key>StandardErrorPath</key>
+    <string>REPO/server/logs/worker.log</string>
+</dict>
+</plist>

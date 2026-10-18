@@ -74,3 +74,28 @@ class ProviderTests(TestCase):
         with mock.patch.dict("os.environ", {}, clear=True), mock.patch("pathlib.Path.exists", return_value=False):
             self.assertIsNone(llm.provider())
             self.assertIsNone(llm.parse("system", "prompt", dict))
+
+
+class SettingsTests(TestCase):
+    def test_debug_is_off_unless_asked_for(self):
+        from unittest import mock
+        from server.settings import env_flag
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertFalse(env_flag("DEBUG"))
+        for value, expected in [("1", True), ("true", True), ("0", False), ("", False), ("no", False)]:
+            with mock.patch.dict("os.environ", {"DEBUG": value}):
+                self.assertEqual(env_flag("DEBUG"), expected)
+
+    def test_secret_key_from_env_else_generated_once_and_kept(self):
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+        from server import settings as module
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(module, "BASE_DIR", Path(folder)):
+            with mock.patch.dict("os.environ", {"SECRET_KEY": "from-env"}):
+                self.assertEqual(module.secret_key(), "from-env")
+            with mock.patch.dict("os.environ", {"SECRET_KEY": ""}):
+                first = module.secret_key()
+                self.assertGreater(len(first), 40)
+                self.assertEqual(module.secret_key(), first)
+                self.assertEqual((Path(folder) / ".secret_key").stat().st_mode & 0o777, 0o600)
