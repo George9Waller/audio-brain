@@ -123,6 +123,19 @@ JOBS = {job.key: job for job in [
 ]}
 
 
+# Tracklists you provide (sets.provided): queued by the API after each one, so its lines are looked up on Tidal and
+# its new tracks analysed without waiting for the nightly enrichment.
+JOBS["tracklist"] = Job(
+    "tracklist", "Provided tracklists", "Tidal lookups and analysis for tracklists you've given, then their lists rebuilt",
+    [
+        ("Look up their tracks on Tidal", "sets.provided.resolve_pending"),
+        ("Analyse their new tracks", "sets.provided.analyse_new_tracks"),
+        ("Rebuild their lists", "sets.provided.rebuild_set_lists"),
+    ],
+    lane=SYNC,
+)
+
+
 def steps_for(job: Job, options: dict) -> list[tuple[str, str]]:
     if options.get("skip_enrichment"):
         return [step for step in job.steps if step not in ENRICHMENT]

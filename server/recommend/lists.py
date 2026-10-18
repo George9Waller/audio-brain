@@ -106,7 +106,7 @@ def build_lists(mixes=12, push=None):
             except Exception:
                 logger.warning("No suggestions for %s", mix.key, exc_info=True)
     keys = {m.key for m in built}
-    Mix.objects.exclude(key__in=keys).exclude(kind__in=["asked", "draft", "radio", "explore"]).delete()  # contexts that rotated out
+    Mix.objects.exclude(key__in=keys).exclude(kind__in=["asked", "draft", "radio", "explore", "set"]).delete()  # contexts that rotated out
     for position, mix in enumerate(sorted(built, key=lambda m: (m.section, ORDER.index(m.kind), m.pk))):
         Mix.objects.filter(pk=mix.pk).update(position=position)
     tracks = sum(len(m.items) for m in built if m.section == Mix.LISTS)
@@ -114,7 +114,7 @@ def build_lists(mixes=12, push=None):
     return f"{sum(m.section == Mix.LISTS for m in built)} mixes ({tracks} tracks, {pushed} synced to Tidal), {sum(m.section == Mix.DISCOVER for m in built)} discovery lists"
 
 
-ORDER = ["interest", "explore", "mix", "fresh", "new", "repeat", "rediscovery", "era", "year", "releases", "artists", "albums", "sets", "revisit"]
+ORDER = ["interest", "explore", "set", "mix", "fresh", "new", "repeat", "rediscovery", "era", "year", "releases", "artists", "albums", "sets", "revisit"]
 LIST_LENGTH = 50
 OVERFETCH = 90  # picks asked for, so a list still fills after dropping tracks Tidal can't play or other mixes have
 
