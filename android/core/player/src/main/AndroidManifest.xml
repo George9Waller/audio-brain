@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Android 11+ hides other apps unless asked for: the players, and who handles Tidal links and media searches -->
+    <queries>
+        <package android:name="com.aspiro.tidal" />
+        <package android:name="com.extreamsd.usbaudioplayerpro" />
+        <package android:name="com.fiio.music" />
+        <package android:name="com.google.android.apps.youtube.music" />
+        <package android:name="com.spotify.music" />
+        <package android:name="deezer.android.app" />
+        <package android:name="com.maxmpz.audioplayer" />
+        <package android:name="com.google.android.gms" />
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" android:host="tidal.com" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" android:host="listen.tidal.com" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="tidal" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+        </intent>
+        <intent>
+            <action android:name="android.media.browse.MediaBrowserService" />
+        </intent>
+    </queries>
+
+    <application>
+        <service
+            android:name=".NowPlayingListener"
+            android:exported="true"
+            android:label="Now playing"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name=".FeedbackActionReceiver"
+            android:exported="false" />
+    </application>
+</manifest>

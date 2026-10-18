@@ -1,0 +1,362 @@
+package com.georgewaller.audiobrain.data
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import java.time.Instant
+import java.time.OffsetDateTime
+
+/** The server's types, as `server/api` sends them. Times stay ISO strings on the wire; [instant] parses them. */
+
+fun instant(iso: String?): Instant? = iso?.let { runCatching { OffsetDateTime.parse(it).toInstant() }.getOrNull() }
+
+@Serializable
+data class Health(val ok: Boolean, @SerialName("server_time") val serverTime: String, @SerialName("worker_alive") val workerAlive: Boolean)
+
+// Jobs
+
+@Serializable
+data class WorkerState(
+    val alive: Boolean,
+    val scheduling: Boolean,
+    @SerialName("seen_at") val seenAt: String? = null,
+    @SerialName("started_at") val startedAt: String? = null,
+    val host: String = "",
+)
+
+@Serializable
+data class Step(val name: String, val state: String, val seconds: Int? = null, val result: String? = null)
+
+@Serializable
+data class RunSummary(
+    val id: Long,
+    val job: String,
+    val state: String,
+    val trigger: String,
+    @SerialName("queued_at") val queuedAt: String,
+    @SerialName("started_at") val startedAt: String? = null,
+    @SerialName("finished_at") val finishedAt: String? = null,
+    @SerialName("steps_done") val stepsDone: Int,
+    @SerialName("steps_total") val stepsTotal: Int,
+    @SerialName("steps_failed") val stepsFailed: Int,
+    @SerialName("current_step") val currentStep: String? = null,
+) {
+    val active get() = state == "queued" || state == "running"
+}
+
+@Serializable
+data class RunDetail(
+    val id: Long,
+    val job: String,
+    val state: String,
+    val trigger: String,
+    @SerialName("queued_at") val queuedAt: String,
+    @SerialName("started_at") val startedAt: String? = null,
+    @SerialName("finished_at") val finishedAt: String? = null,
+    @SerialName("steps_done") val stepsDone: Int,
+    @SerialName("steps_total") val stepsTotal: Int,
+    @SerialName("steps_failed") val stepsFailed: Int,
+    @SerialName("current_step") val currentStep: String? = null,
+    val options: Map<String, Boolean> = emptyMap(),
+    val steps: List<Step> = emptyList(),
+    val log: String = "",
+    val error: String = "",
+) {
+    val active get() = state == "queued" || state == "running"
+}
+
+@Serializable
+data class Job(
+    val key: String,
+    val title: String,
+    val description: String,
+    val schedule: String? = null,
+    val lane: String,
+    val options: Map<String, String> = emptyMap(),
+    @SerialName("next_due") val nextDue: String? = null,
+    @SerialName("active_run") val activeRun: RunSummary? = null,
+    @SerialName("last_run") val lastRun: RunSummary? = null,
+    @SerialName("last_success_at") val lastSuccessAt: String? = null,
+)
+
+@Serializable
+data class JobsResponse(val worker: WorkerState, val jobs: List<Job>)
+
+// Music
+
+@Serializable
+data class PlaylistDto(val key: String, val name: String, @SerialName("tidal_url") val tidalUrl: String? = null, @SerialName("updated_at") val updatedAt: String)
+
+@Serializable
+data class ContextDto(
+    val id: Long,
+    val name: String,
+    val description: String = "",
+    val family: String = "",
+    @SerialName("era_start") val eraStart: String? = null,
+    @SerialName("era_end") val eraEnd: String? = null,
+    val size: Int = 0,
+    @SerialName("bpm_low") val bpmLow: Double? = null,
+    @SerialName("bpm_high") val bpmHigh: Double? = null,
+    val energy: Double? = null,
+    val instrumental: Double? = null,
+    @SerialName("top_styles") val topStyles: List<String> = emptyList(),
+    @SerialName("top_artists") val topArtists: List<String> = emptyList(),
+    @SerialName("novelty_share") val noveltyShare: Double = 0.35,
+    val hue: Float = 0f,
+    val playlist: PlaylistDto? = null,
+    val probability: Double? = null,
+)
+
+@Serializable
+data class NowResponse(
+    val at: String,
+    @SerialName("ranked_by") val rankedBy: String,
+    val contexts: List<ContextDto>,
+    val mixes: List<PlaylistDto> = emptyList(),
+)
+
+@Serializable
+data class Sound(
+    val bpm: Float,
+    val key: String,
+    val scale: String,
+    val camelot: String? = null,
+    val energy: Float,
+    val danceability: Float,
+    val instrumental: Float,
+    val happy: Float,
+    val sad: Float,
+    val aggressive: Float,
+    val relaxed: Float,
+    val party: Float,
+)
+
+@Serializable
+data class TrackContext(val id: Long, val name: String, val hue: Float)
+
+@Serializable
+data class VerdictDto(val verdict: String, @SerialName("given_at") val givenAt: String, val where: String = "")
+
+@Serializable
+data class TrackDto(
+    val id: Long,
+    val name: String,
+    val artist: String,
+    val album: String? = null,
+    @SerialName("length_ms") val lengthMs: Long? = null,
+    val isrc: String = "",
+    @SerialName("tidal_id") val tidalId: String? = null,
+    @SerialName("tidal_url") val tidalUrl: String? = null,
+    val plays: Int = 0,
+    @SerialName("last_played") val lastPlayed: String? = null,
+    val favourite: Boolean = false,
+    val verdict: VerdictDto? = null,
+    val context: TrackContext? = null,
+    val sound: Sound? = null,
+)
+
+@Serializable
+data class Resolved(val track: TrackDto? = null)
+
+/** A track as the app knows it: a catalogue ID, or what a player reported. Sent with feedback and lookups. */
+@Serializable
+data class TrackRef(
+    val id: Long? = null,
+    @SerialName("tidal_id") val tidalId: String? = null,
+    val artist: String = "",
+    val title: String = "",
+    val album: String = "",
+    @SerialName("duration_ms") val durationMs: Long? = null,
+    @SerialName("package") val packageName: String = "",
+) {
+    /**
+     * Same track for the app's purposes: the key lookups and local verdicts are stored under. The player's own
+     * identity comes first, so a verdict from the notification and one from the app (which may also know the
+     * catalogue ID) land on the same key.
+     */
+    val key: String
+        get() = tidalId?.let { "tidal:$it" } ?: if (title.isNotBlank()) "${artist.lowercase()}\u0000${title.lowercase()}" else "id:$id"
+}
+
+// Sync
+
+@Serializable
+data class FeedbackItem(
+    @SerialName("client_id") val clientId: String,
+    val verdict: String,
+    val track: TrackRef,
+    val note: String = "",
+    val where: String = "",
+    @SerialName("context_id") val contextId: Long? = null,
+    @SerialName("given_at") val givenAt: String,
+)
+
+@Serializable
+data class SyncRequest(val feedback: List<FeedbackItem> = emptyList(), val queue: List<QueueItem> = emptyList())
+
+@Serializable
+data class Accepted(@SerialName("client_id") val clientId: String, @SerialName("track_id") val trackId: Long)
+
+@Serializable
+data class Rejected(@SerialName("client_id") val clientId: String, val reason: String)
+
+@Serializable
+data class SyncResponse(val accepted: List<Accepted>, val rejected: List<Rejected>)
+
+/** The four verdicts and their API names. */
+enum class Verdict(val api: String) {
+    Keep("yes"), No("no"), NotNow("not_now"), Never("never");
+
+    companion object {
+        fun fromApi(name: String?) = entries.firstOrNull { it.api == name }
+    }
+}
+
+// Lists, asking and radio
+
+@Serializable
+data class ItemSound(val bpm: Float, val camelot: String? = null, val energy: Float, val instrumental: Float = 0f, val moods: List<Float> = emptyList())
+
+/** One entry in a list: a track, or for discovery lists a release, artist, album or set. See server/recommend/lists.py. */
+@Serializable
+data class ListItem(
+    val kind: String,
+    @SerialName("track_id") val trackId: Long? = null,
+    @SerialName("release_id") val releaseId: Long? = null,
+    @SerialName("artist_id") val artistId: Long? = null,
+    @SerialName("set_id") val setId: Long? = null,
+    val title: String,
+    val artist: String = "",
+    val album: String = "",
+    val detail: String = "",
+    val reason: String = "",
+    val novel: Boolean = false,
+    val score: Double? = null,
+    @SerialName("tidal_id") val tidalId: String? = null,
+    @SerialName("context_id") val contextId: Long? = null,
+    val styles: List<String> = emptyList(),
+    val sound: ItemSound? = null,
+    val hue: Float? = null,
+    val verdict: String? = null,
+    val state: String? = null,
+    val url: String? = null,
+) {
+    val isTrack get() = kind == "track" && trackId != null
+    val ref: TrackRef get() = TrackRef(trackId, tidalId, artist, title, album)
+}
+
+@Serializable
+data class ListContext(val id: Long, val name: String, val hue: Float, val family: String = "")
+
+@Serializable
+data class MixList(
+    val key: String,
+    val kind: String,
+    val section: String,
+    val title: String,
+    val subtitle: String = "",
+    @SerialName("built_at") val builtAt: String,
+    val context: ListContext? = null,
+    val playlist: PlaylistDto? = null,
+    val sync: Boolean = false,
+    val items: List<ListItem> = emptyList(),
+) {
+    val tracks get() = items.filter { it.isTrack }
+    /** Kept in Tidal as its own playlist. */
+    val synced get() = sync
+    val novelShare get() = if (tracks.isEmpty()) 0f else tracks.count { it.novel }.toFloat() / tracks.size
+}
+
+@Serializable
+data class ListsResponse(val lists: List<MixList>)
+
+@Serializable
+data class QuickAction(val label: String, val detail: String, val recipe: kotlinx.serialization.json.JsonObject, @SerialName("list_key") val listKey: String? = null)
+
+@Serializable
+data class MakeRequest(val prompt: String = "", val recipe: kotlinx.serialization.json.JsonObject? = null, val length: Int? = null)
+
+@Serializable
+data class DraftResponse(val mix: MixList? = null, val understood: String = "")
+
+@Serializable
+data class KeepRequest(val title: String? = null, val remove: List<Long> = emptyList())
+
+@Serializable
+data class SyncRequest2(val on: Boolean)
+
+@Serializable
+data class Synced(val sync: Boolean, @SerialName("tidal_url") val tidalUrl: String? = null)
+
+@Serializable
+data class EditRequest(val add: List<Long> = emptyList(), val remove: List<Long> = emptyList())
+
+@Serializable
+data class ExploreRequest(val artist: String? = null, @SerialName("artist_id") val artistId: Long? = null, @SerialName("track_id") val trackId: Long? = null)
+
+@Serializable
+data class Played(@SerialName("tidal_url") val tidalUrl: String? = null)
+
+@Serializable
+data class RadioRequest(@SerialName("track_id") val trackId: Long? = null, val track: TrackRef? = null)
+
+@Serializable
+data class RadioResponse(val mix: MixList, @SerialName("tidal_url") val tidalUrl: String? = null, val added: Int = 0)
+
+@Serializable
+data class QueueItem(@SerialName("client_id") val clientId: String, @SerialName("release_id") val releaseId: Long, val state: String, @SerialName("given_at") val givenAt: String)
+
+// Catalogue
+
+@Serializable
+data class SearchRequest(val q: String, val sound: Boolean = false)
+
+@Serializable
+data class ArtistHit(val id: Long, val name: String, val tracks: Int)
+
+@Serializable
+data class SearchResult(val tracks: List<ListItem> = emptyList(), val artists: List<ArtistHit> = emptyList(), val contexts: List<ListContext> = emptyList(), val understood: String = "")
+
+// Library
+
+@Serializable
+data class TrackPage(val total: Int, val offset: Int, val items: List<ListItem>)
+
+@Serializable
+data class ArtistRow(val id: Long, val name: String, val tracks: Int, val plays: Double)
+
+@Serializable
+data class AlbumRow(
+    val id: Long, val name: String, val artist: String, @SerialName("artist_id") val artistId: Long,
+    val tracks: Int, val plays: Double, @SerialName("tidal_url") val tidalUrl: String? = null,
+)
+
+@Serializable
+data class SetRow(
+    val id: Long, val title: String, val by: String, val source: String, val minutes: Int? = null,
+    val published: String? = null, val entries: Int = 0, @SerialName("in_catalogue") val inCatalogue: Int = 0, val url: String,
+)
+
+@Serializable
+data class ArtistPage(val artist: ArtistRow, @SerialName("tidal_url") val tidalUrl: String? = null, val albums: List<AlbumRow>, val tracks: List<ListItem>)
+
+@Serializable
+data class AlbumPage(val album: AlbumRow, val tracks: List<ListItem>)
+
+@Serializable
+data class SetEntry(val position: Int, val cue: String = "", val artist: String, val title: String, val label: String = "", val track: ListItem? = null)
+
+@Serializable
+data class SetPage(val set: SetRow, val entries: List<SetEntry>)
+
+// Map
+
+@Serializable
+data class MapPlace(val key: String, val name: String, val hue: Float? = null, val x: Float, val y: Float, val r: Float, val kind: String, val size: Int, val members: List<Long> = emptyList())
+
+/** Every placed track as [id, x, y, hue or -1, flags]; flags 1 favourite, 2 played, 4 Fresh/Rediscovery, 8 in a list. */
+@Serializable
+data class MapData(
+    val version: String, val scale: Int, val points: List<List<Float>>,
+    val families: List<MapPlace> = emptyList(), val contexts: List<MapPlace>, val artists: List<MapPlace> = emptyList(), val lists: List<MapPlace>,
+)

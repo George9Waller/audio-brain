@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The server is reached over Tailscale, which encrypts the link itself, often by plain http to a ts.net name or 100.x address -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

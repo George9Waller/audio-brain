@@ -1,0 +1,11 @@
+<resources>
+    <style name="Theme.AudioBrain" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/ground</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+    <color name="ground">#FF0B0C0E</color>
+    <color name="accent">#FFD7FF5C</color>
+    <color name="icon_background">#FF14161A</color>
+</resources>

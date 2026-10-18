@@ -1,0 +1,15 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- a sound sigil: the mood blob inside the energy ring -->
+    <path
+        android:strokeColor="#FFD7FF5C"
+        android:strokeWidth="3.2"
+        android:fillColor="#00000000"
+        android:pathData="M54,30a24,24 0,1 0,0.01 0z" />
+    <path
+        android:fillColor="#FFD7FF5C"
+        android:pathData="M54,38C60,38 68,44 66,52C64.5,58 70,64 63,68C57,71.5 52,64 46,67C40,70 37,61 41,55C44,50 39,44 44,41C47.5,39 50,38 54,38z" />
+</vector>
