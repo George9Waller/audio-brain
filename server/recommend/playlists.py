@@ -1,17 +1,22 @@
-"""Write recommendations to Tidal playlists, and log every suggestion so later scrobbles can say what worked."""
+"""Write recommendations to Tidal playlists, and log every suggestion so later scrobbles can say what worked.
+
+Before a playlist is rewritten, what's in it on Tidal is compared with what was last pushed (read_back): tracks you
+deleted there are removed from the list, tracks you added there are added, as list edits. So editing a synced
+playlist in Tidal works like editing the list in the app, and each edit is a label (recommend.labels)."""
 
 import logging
 
 import requests
 from django.db import transaction
 
-from catalogue.models import PlatformTrack
+from catalogue.models import PlatformTrack, Track
 from clients.tidal import TidalClient
 from recommend.features import energy, play_stats
-from recommend.models import Playlist, Recommendation
+from recommend.models import ListEdit, Playlist, Recommendation
 
 PREFIX = "Audio Brain · "
 BATCH = 50  # most items Tidal adds or removes per request
+NOT_LISTS = {"now"}  # playlists that aren't a list of their own, so edits there aren't read back
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +42,19 @@ def push_playlist(key, name, description, tracks, context=None):
         playlist.external_id = created["data"]["id"]
 
     current, _ = client.get_all(f"playlists/{playlist.external_id}/relationships/items")
+    added, removed = read_back(playlist, current)
+    if added or removed:
+        present = {t.pk for t in tracks}
+        tracks = [t for t in tracks if t.pk not in removed] + list(Track.objects.filter(pk__in=[t for t in added if t not in present]))
+        tidal_ids.update(PlatformTrack.objects.filter(platform=PlatformTrack.TIDAL, track__in=added).values_list("track_id", "external_id"))
+        items = [tidal_ids[t.pk] for t in tracks if t.pk in tidal_ids]
     for start in range(0, len(current), BATCH):
         batch = [{"id": i["id"], "type": i["type"], "meta": {"itemId": i["meta"]["itemId"]}} for i in current[start : start + BATCH]]
         client.send("DELETE", f"playlists/{playlist.external_id}/relationships/items", {"data": batch})
     for start in range(0, len(items), BATCH):
         client.send("POST", f"playlists/{playlist.external_id}/relationships/items", {"data": [{"id": i, "type": "tracks"} for i in items[start : start + BATCH]]})
 
-    playlist.name, playlist.context = name, context
+    playlist.name, playlist.context, playlist.pushed = name, context, items
     playlist.save()
     logger.info("Tidal playlist %s: %d tracks (%d had no Tidal ID)", name, len(items), len(tracks) - len(items))
     return playlist
@@ -84,5 +95,31 @@ def append_playlist(key, tracks):
     items = [tidal_ids[t.pk] for t in tracks if t.pk in tidal_ids]
     for start in range(0, len(items), BATCH):
         client.send("POST", f"playlists/{playlist.external_id}/relationships/items", {"data": [{"id": i, "type": "tracks"} for i in items[start : start + BATCH]]})
-    playlist.save()  # updated_at
+    playlist.pushed = list(playlist.pushed or []) + items
+    playlist.save()
     return len(items)
+
+
+def read_back(playlist, current=None):
+    """Edits you made on Tidal to a pushed playlist since it was last written, saved as list edits for its list.
+    `current` is the playlist's items as Tidal returns them (fetched if not given). Returns (added, removed) as
+    catalogue track IDs. Tracks added on Tidal that aren't in the catalogue are skipped. Nothing is read back until a
+    push has been recorded, so the first push after this was added doesn't read everything as yours."""
+    if not playlist.pushed or not playlist.external_id or playlist.key in NOT_LISTS:
+        return [], set()
+    if current is None:
+        current, _ = TidalClient(user=True).get_all(f"playlists/{playlist.external_id}/relationships/items")
+    there = [i["id"] for i in current if i.get("type") == "tracks"]
+    pushed = set(playlist.pushed)
+    deleted, new = pushed - set(there), [i for i in dict.fromkeys(there) if i not in pushed]
+    if not deleted and not new:
+        return [], set()
+    track_of = dict(PlatformTrack.objects.filter(platform=PlatformTrack.TIDAL, external_id__in=list(deleted) + new).values_list("external_id", "track_id"))
+    removed = {track_of[i] for i in deleted if i in track_of}
+    added = [track_of[i] for i in new if i in track_of]
+    for track_id in removed:
+        ListEdit.objects.update_or_create(key=playlist.key, track_id=track_id, defaults={"action": ListEdit.REMOVE})
+    for track_id in added:
+        ListEdit.objects.update_or_create(key=playlist.key, track_id=track_id, defaults={"action": ListEdit.ADD})
+    logger.info("Read back from Tidal for %s: %d added, %d removed (%d added tracks not in the catalogue)", playlist.key, len(added), len(removed), len(new) - len(added))
+    return added, removed

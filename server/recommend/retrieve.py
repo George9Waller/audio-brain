@@ -28,7 +28,7 @@ RECENTLY_PLAYED = timedelta(days=2)
 IGNORED_FOR = timedelta(days=21)  # suggested but not played: hold back this long
 CLOSE = 0.85  # embedding similarity to a context centroid that reads as "sounds like it"
 
-SIGNAL_WEIGHTS = {"text": 1.0, "context": 0.8, "seed": 0.8, "session": 0.6, "together": 0.4, "graph": 0.3, "artist": 0.2, "stick": 0.8}
+SIGNAL_WEIGHTS = {"text": 1.0, "context": 0.8, "seed": 0.8, "session": 0.6, "together": 0.4, "graph": 0.3, "artist": 0.2, "stick": 0.8, "taste": 0.0}
 CANON_BONUS = 0.5
 
 
@@ -81,6 +81,12 @@ def recommend(length=30, text_vector=None, context=None, seeds=(), filters=None,
     session_vector = session_centroid([m for m in context._member_ids] if context is not None else [s.track_id for s in seeds])
     if session_vector is not None:
         add_session_neighbours(pool, analysed, session_vector)
+    # Taste vectors (recommend.taste): close to the context's or seeds' tracks in how you'd play them, which reaches
+    # tracks you've never played. Off while its weight is 0, until the backtest says it helps.
+    from recommend.taste import centroid as taste_centroid
+    taste_vector = taste_centroid(list(context._member_ids) if context is not None else [s.track_id for s in seeds])
+    if taste_vector is not None and SIGNAL_WEIGHTS["taste"]:
+        add_taste_neighbours(pool, analysed, taste_vector)
     seed_vector = None
     if seeds:
         seed_vector = np.mean([np.array(s.embedding) for s in seeds], axis=0)
@@ -115,6 +121,10 @@ def recommend(length=30, text_vector=None, context=None, seeds=(), filters=None,
             session = np.zeros(len(candidates))  # tracks you've never played sit at the average
             session[have] = zscore(similarities([vectors[candidates[i].track_id] for i in have], session_vector))
             signals["session"] = session
+    if taste_vector is not None and SIGNAL_WEIGHTS["taste"]:
+        from recommend.taste import taste_matrix
+        vectors = taste_matrix([a.track_id for a in candidates])
+        signals["taste"] = np.array([float(vectors[a.track_id] @ taste_vector) if a.track_id in vectors else 0.0 for a in candidates])
     # Agreement: sounds right for the mix *and* sits with it in your sessions. Only counts where both are known.
     fit = signals.get("text", signals.get("context", signals.get("seed")))
     if fit is not None and "session" in signals:
@@ -125,7 +135,7 @@ def recommend(length=30, text_vector=None, context=None, seeds=(), filters=None,
         # The trained scorer already weighs artist history, so it replaces the artist signal. It's told the company
         # each track will be heard in: this mix's sound, its share of tracks you know, its length.
         centroid = context.centroid if context is not None else seed_vector if seed_vector is not None else np.mean([a.embedding for a in candidates], axis=0)
-        placement = {"liked_share": 1 - novelty_share, "centroid": centroid, "size": length}
+        placement = {"liked_share": 1 - novelty_share, "centroid": centroid, "size": length, "taste_centroid": taste_vector}
         probabilities = scorer.predict([a.track_id for a in candidates], placement=placement)
         signals["stick"] = np.array([logit(probabilities.get(a.track_id, 0.5)) for a in candidates])
     else:
@@ -180,6 +190,13 @@ def session_centroid(track_ids):
 
 def add_session_neighbours(pool, analysed, vector):
     near = TrackVector.objects.annotate(distance=CosineDistance("vector", list(vector))).order_by("distance").values_list("track_id", flat=True)[:POOL]
+    for audio in analysed.filter(track__in=list(near)):
+        pool.setdefault(audio.track_id, audio)
+
+
+def add_taste_neighbours(pool, analysed, vector):
+    from recommend.models import TasteVector
+    near = TasteVector.objects.annotate(distance=CosineDistance("vector", list(vector))).order_by("distance").values_list("track_id", flat=True)[:POOL]
     for audio in analysed.filter(track__in=list(near)):
         pool.setdefault(audio.track_id, audio)
 

@@ -26,7 +26,7 @@ from library.models import OAuthToken
 from recommend.editorial import CAMELOT
 from recommend.features import energy
 from recommend.mixes import active_contexts, context_mix, dormant_contexts, fresh_picks, mix_description
-from recommend.models import ContextTrack, ListEdit, ListSync, Mix
+from recommend.models import ContextTrack, ListEdit, ListSync, Mix, Playlist
 from recommend.playlists import log_recommendations, push_playlist
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,13 @@ def build_lists(mixes=12, push=None):
 
     push = OAuthToken.objects.filter(platform="tidal").exists() if push is None else push
     synced = set(ListSync.objects.values_list("key", flat=True))
+    if push:  # edits made on Tidal since the last build, read first so this build respects them
+        from recommend.playlists import read_back
+        for playlist in Playlist.objects.filter(key__in=synced).exclude(external_id=""):
+            try:
+                read_back(playlist)
+            except Exception:
+                logger.warning("Couldn't read %s back from Tidal", playlist.key, exc_info=True)
     built, used = [], set()  # used: tracks already in a mix this build, so mixes don't repeat each other
 
     def track_mix(key, kind, title, subtitle, picks, context=None, exclusive=True):

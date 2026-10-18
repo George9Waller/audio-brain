@@ -54,6 +54,7 @@ class Playlist(models.Model):
     platform = models.CharField(max_length=20, default="tidal")
     external_id = models.CharField(max_length=100, blank=True)
     context = models.ForeignKey(Context, on_delete=models.SET_NULL, null=True, blank=True)
+    pushed = models.JSONField(default=list, blank=True)  # the platform track IDs last written, to read your edits there back
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
@@ -198,3 +199,31 @@ class ListEdit(models.Model):
 
     class Meta:
         unique_together = ["key", "track"]
+
+
+class DraftOutcome(models.Model):
+    """What became of a draft you asked for: kept, played, thrown away, or left to expire, with the tracks it showed
+    and the ones swiped out before keeping it. Drafts themselves are deleted, so this is the only record, and a label
+    source (recommend.labels): a discarded draft is a weak no to what it offered."""
+
+    KEPT, PLAYED, DISCARDED, EXPIRED = "kept", "played", "discarded", "expired"
+    OUTCOMES = [(KEPT, "Kept"), (PLAYED, "Played"), (DISCARDED, "Discarded"), (EXPIRED, "Expired")]
+
+    key = models.CharField(max_length=100, db_index=True)  # the draft's key, "draft:…"
+    request = models.CharField(max_length=500, blank=True)
+    outcome = models.CharField(max_length=10, choices=OUTCOMES)
+    tracks = models.JSONField(default=list)  # track IDs the draft showed
+    removed = models.JSONField(default=list)  # track IDs swiped out before keeping
+    at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+
+class TasteVector(models.Model):
+    """A track's place in a space learned from your sessions over what's known about it (recommend.taste): close to
+    the tracks you'd play it with. Every analysed track has one, played or not."""
+
+    track = models.OneToOneField(Track, on_delete=models.CASCADE, related_name="taste_vector")
+    vector = VectorField(dimensions=64)
+    trained_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [HnswIndex(name="taste_vector_hnsw", fields=["vector"], opclasses=["vector_cosine_ops"])]

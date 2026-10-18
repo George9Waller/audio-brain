@@ -18,7 +18,7 @@ from history.models import Listen
 from library.models import OAuthToken
 from recommend.lists import save, track_items
 from recommend.mixes import context_mix, contexts_for_now, fresh_picks
-from recommend.models import Context, Mix, Playlist
+from recommend.models import Context, DraftOutcome, Mix, Playlist
 from recommend.playlists import append_playlist, log_recommendations, push_playlist
 from recommend.retrieve import Filters, Pick, recommend
 from recommend.timetravel import time_travel
@@ -143,7 +143,9 @@ def make(prompt="", recipe=None, length=None):
         title, understood = prompt.strip()[:120], describe(request)
         subtitle = understood
     picks = playable(picks, wanted)  # only tracks Tidal can play, as with lists
-    Mix.objects.filter(kind="draft", built_at__lt=timezone.now() - DRAFTS_LAST).delete()
+    for old in Mix.objects.filter(kind="draft", built_at__lt=timezone.now() - DRAFTS_LAST):
+        record_draft(old, DraftOutcome.EXPIRED)
+        old.delete()
     if not picks:
         return None, understood
     draft = save(f"draft:{uuid.uuid4().hex[:8]}", "draft", Mix.DRAFTS, title, subtitle, track_items(picks))
@@ -155,6 +157,7 @@ def make(prompt="", recipe=None, length=None):
 def keep(draft, title=None, remove=()):
     """Save a draft to Lists as an asked mix, without any tracks swiped out of it, logging its tracks as
     recommendations if playing it hasn't already."""
+    record_draft(draft, DraftOutcome.KEPT, remove)
     if remove:
         draft.items = [i for i in draft.items if i.get("track_id") not in set(remove)]
     if not draft.logged:
@@ -176,10 +179,23 @@ def play(mix):
         return None
     tracks = {t.pk: t for t in Track.objects.filter(pk__in=[i["track_id"] for i in mix.items if i.get("kind") == "track"])}
     playlist = push_playlist("now", "Now", f"{mix.title}: {mix.subtitle}", [tracks[i["track_id"]] for i in mix.items if i.get("track_id") in tracks])
+    if mix.kind == "draft":
+        record_draft(mix, DraftOutcome.PLAYED)
     if not mix.logged:
         log_recommendations(picks_from(mix.items), source="ask", playlist=playlist, request=(mix.request or mix.title)[:500])
         Mix.objects.filter(pk=mix.pk).update(logged=True)
     return f"https://tidal.com/browse/playlist/{playlist.external_id}" if playlist.external_id else None
+
+
+def discard(draft):
+    """Throw a draft away, noting what it offered: a weak no to it (recommend.labels)."""
+    record_draft(draft, DraftOutcome.DISCARDED)
+    draft.delete()
+
+
+def record_draft(draft, outcome, removed=()):
+    DraftOutcome.objects.create(key=draft.key, request=(draft.request or draft.title)[:500], outcome=outcome,
+                                tracks=[i["track_id"] for i in draft.items if i.get("kind") == "track"], removed=list(removed))
 
 
 RADIOS_KEPT = 8

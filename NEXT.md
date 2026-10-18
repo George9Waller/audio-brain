@@ -5,7 +5,45 @@ Handoff notes, 18 Oct 2026. Start a new session by reading this, then `spec.md`,
 
 ## State
 
-**Nothing is committed to git yet.** Commit before anything else.
+Everything up to the first session is in the initial commit. The second session (18 Oct, below under "Modelling
+round") is not committed yet.
+
+### Modelling round (18 Oct, second session)
+
+- **Backtest** (`manage.py backtest`, `recommend/backtest.py`):
+  - clones the database and deletes everything from the cutoff on: plays, verdicts, edits, the log, unreleased releases, and tracks known only through later plays;
+  - reruns the real pipeline with the clock stopped at the cutoff (time-machine), with no Tidal or LLM calls;
+  - scores every list against the plays after the cutoff: played, came back (2+ days), new played, lift against chance, lift against recent plays, discoveries caught;
+  - `--reuse` keeps a prepared clone (`audio_brain_backtest`, about 1.1 GB; `dropdb audio_brain_backtest` to free it), and `--variant` compares build variants (`VARIANTS`);
+  - reports go to `server/models/backtests/<cutoff>/`.
+- **Labels** (`recommend/labels.py`) gather everything, from −1 to +1:
+  - verdicts, list edits, draft outcomes, played or passed-over suggestions, and favourites;
+  - drafts now record what became of them (`DraftOutcome`: kept, played, discarded, expired, and tracks swiped out).
+- **Tidal read-back** (`recommend/playlists.read_back`): before a synced playlist is rewritten, tracks you deleted or added in Tidal become list edits. `Playlist.pushed` records what was last written. Built and tested, but not tried against real Tidal yet; sync work is paused for modelling.
+- **Taste vectors** (`recommend/taste.py`, `TasteVector`, in the nightly models job):
+  - a small PyTorch network over sound, CLAP, styles, artist tags, audio numbers and an artist ID, trained contrastively on pairs played within 3 tracks of each other, weighted by session intent, with a logQ correction;
+  - on the most recent tenth of sessions, held out: partner track in the top 10 of 33k, 4.1–5% against 1.1% for sound and 3.9% for word2vec (which can only place 64% of pairs); median rank 1.7k against 4.3k for sound;
+  - trains in about a minute on CPU.
+- **Track scorer:**
+  - five taste features added; for its test score they come from a taste model trained only on sessions before the test period;
+  - test AUC 0.635 → **0.689**; `taste_recent` and `taste_liked` are the top two features;
+  - LightGBM was tried and dropped, because it needs Homebrew `libomp`.
+- **Context ranker** rewritten as a pairwise model, each (moment, context) scored by boosted trees:
+  - features: share of the last two hours, last track's context, taste closeness to what's playing, hour, weekday and country fit, plays in the last day, week, month and year, days since last played;
+  - top-3 accuracy on the last 180 days **34.6%** against 23.7% for the old logistic regression on the same split (top-1 16.2%).
+- **Backtest results** (cutoff 6 Sep, scored on 1,419 plays to 18 Oct):
+
+  | Variant | Played % | New played % | New in mixes % | Lift vs recent | Plays covered % |
+  |---|---|---|---|---|---|
+  | old scorer | 10.6 | 6.5 | 7.1 | 0.48 | 25.1 |
+  | new scorer, taste off (live) | 8.6 | 7.6 | 9.9 | 0.38 | 21.0 |
+  | taste signal on | 9.4 | 7.0 | 7.6 | 0.43 | 20.1 |
+  | taste replaces session signal | 10.4 | 6.2 | 6.3 | 0.49 | 20.1 |
+
+  - New-to-you picks were barely above chance before (1.2×).
+  - The new scorer helps new tracks and costs familiar hits.
+  - The taste signal does the opposite.
+  - One window is too noisy to choose on: played rates are about ±0.8 points and new-track rates about ±1.6. So the taste weight in `retrieve.SIGNAL_WEIGHTS` stays 0.
 
 ### Server (`server/`, Django + Postgres/pgvector)
 
@@ -62,7 +100,7 @@ Built in this round:
 ## Known issues
 
 - **MusicBrainz is answering 503 to this machine,** so the artist-profile backfill stopped after 65 artists. It resumes nightly in the Enrichment job and stops after 5 failures in a row. Setting `API_CONTACT` in `.env` should help.
-- **The context ranker's top-3 accuracy is down to 24.6%,** from 39.8%, since contexts became sound-led. For now makes up for some of it with hour and day fit, but the ranker needs work (see the model section).
+- **The context ranker** was down to 24.6% top-3 after contexts became sound-led; the pairwise rewrite brings it to 34.6% (see Modelling round).
 - **Fresh has only 15 tracks:** just 30 of 93 releases have analysed tracks so far. The enrichment backfill is still running.
 - **List edits, sync, Explore, Ask and suggestions are online-only.** Only verdicts and release decisions queue offline.
 - **The full Mixes rebuild takes about 25 minutes:** suggestions and Tidal lookups run one at a time.
@@ -83,7 +121,16 @@ Built in this round:
 3. Install the app on the JM21 and M23 and run the device check (Settings › Device check) with Tidal, then UAPP, playing. The report decides whether play-from-search and the media browser can start specific tracks.
 4. Set `API_CONTACT` so MusicBrainz backfills profiles.
 
+### 2a. Next in modelling (picks up from the modelling round)
+1. **Backtest over several cutoffs** (for example 6, 12, 18 and 24 weeks ago) and average them, so variants can be told apart. Then decide on the taste weight and whether the new scorer stays in lists.
+2. **Split the scorer's job:** use it for new tracks, where it helps, and rank familiar tracks by recent plays and canon, where the backtest says that's stronger ("lift vs recent" is below 1 for every variant).
+3. **Taste vectors in contexts:** use them in place of word2vec in `contexts.session_components`, and for Explore and suggestions.
+4. **Context ranker inputs from the app:** device, headphones or speaker, and calendar.
+5. **Train on `recommend.labels`** once verdicts and edits accumulate.
+
 ### 2. Measure before changing models (2–3 days)
+
+The offline evaluation, labels from everything you do, and the Tidal read-back are now built (see "Modelling round" above).
 
 There's no reliable way yet to tell whether a change makes recommendations better. Build one first.
 - **Offline evaluation:** rebuild lists as of a past date (say 6 weeks ago), then score them against what happened next: tracks played through, Keeps, list edits, and later favourites. Report it per list type and per context.

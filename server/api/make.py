@@ -12,7 +12,7 @@ from recommend.lists import track_items
 from api.matching import match
 from api.music import TrackRef
 from catalogue.models import AudioFeatures, Track
-from recommend.actions import edit_list, extend_radio, keep, make, play, playlist_url, quick_actions, start_radio, suggestions, sync_list
+from recommend.actions import discard, edit_list, extend_radio, keep, make, play, playlist_url, quick_actions, start_radio, suggestions, sync_list
 from recommend.models import Mix, Playlist
 
 router = Router(tags=["make"])
@@ -82,7 +82,9 @@ def keep_draft(request, key: str, body: KeepIn = None):
 
 @router.delete("/drafts/{key}", response={204: None})
 def discard_draft(request, key: str):
-    Mix.objects.filter(key=key, kind="draft").delete()
+    draft = Mix.objects.filter(key=key, kind="draft").first()
+    if draft:
+        discard(draft)
     return 204, None
 
 

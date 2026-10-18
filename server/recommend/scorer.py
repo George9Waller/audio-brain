@@ -51,6 +51,8 @@ MODEL_PATH = Path(settings.BASE_DIR) / "models" / "scorer.joblib"
 
 FEATURES = [
     "sound_recent", "sound_recent_max", "sound_liked", "sound_liked_max",
+    # The same in the taste space (recommend.taste): close to what you'd been playing in how you play it.
+    "taste_recent", "taste_recent_max", "taste_liked", "taste_liked_max", "placement_taste_fit",
     "artist_plays", "artist_recent_plays", "artist_known", "artist_stick_rate", "artist_tracks_tried",
     "style_recent", "style_liked",
     "bpm", "energy", "danceability", "instrumental", "happy", "sad", "aggressive", "relaxed", "party", "loudness",
@@ -139,6 +141,7 @@ class Catalogue:
             EnrichmentAttempt.objects.filter(stage="tidal").values_list("track_id", flat=True)
         )
         self.processed = np.isin(self.track_ids, list(through))
+        self.set_taste(stored_taste(self.track_ids))
 
         # Labels and remixers, indexed like artists, for their track records.
         labels = dict(Track.objects.filter(pk__in=self.track_ids).exclude(label=None).values_list("pk", "label_id"))
@@ -175,6 +178,13 @@ class Catalogue:
         self.session_rows = defaultdict(set)
         for session_id, track_id in Listen.objects.filter(session__in=wanted, track__in=self.track_ids).values_list("session_id", "track_id"):
             self.session_rows[session_id].add(self.row[track_id])
+
+    def set_taste(self, vectors):
+        """Taste vectors by track id; tracks without one get zeros (no similarity to anything)."""
+        self.taste = np.zeros((len(self.track_ids), 64), dtype=np.float32)
+        for track_id, vector in vectors.items():
+            if track_id in self.row:
+                self.taste[self.row[track_id]] = vector
 
     def before(self, moment):
         """Play counts per track before a moment, and in the RECENT window before it."""
@@ -218,6 +228,9 @@ class FeatureBuilder:
         vectors = cat.vectors[rows]
         recent_sims = nearest(vectors, cat.vectors[self.recent_rows], rows, self.recent_rows)
         liked_sims = nearest(vectors, cat.vectors[self.liked_rows], rows, self.liked_rows)
+        tastes = cat.taste[rows]
+        taste_recent = nearest(tastes, cat.taste[self.recent_rows], rows, self.recent_rows)
+        taste_liked = nearest(tastes, cat.taste[self.liked_rows], rows, self.liked_rows)
         artists = cat.artist[rows]
         tried = c.artist_tried[artists]
         moment_year = datetime.fromtimestamp(self.moment, UTC).year
@@ -229,6 +242,10 @@ class FeatureBuilder:
             "sound_recent_max": recent_sims.max(axis=1) if recent_sims.size else np.zeros(len(rows)),
             "sound_liked": liked_sims.mean(axis=1) if liked_sims.size else np.zeros(len(rows)),
             "sound_liked_max": liked_sims.max(axis=1) if liked_sims.size else np.zeros(len(rows)),
+            "taste_recent": taste_recent.mean(axis=1) if taste_recent.size else np.zeros(len(rows)),
+            "taste_recent_max": taste_recent.max(axis=1) if taste_recent.size else np.zeros(len(rows)),
+            "taste_liked": taste_liked.mean(axis=1) if taste_liked.size else np.zeros(len(rows)),
+            "taste_liked_max": taste_liked.max(axis=1) if taste_liked.size else np.zeros(len(rows)),
             "artist_plays": np.log1p(c.artist_plays[artists] - c.total[rows]),
             "artist_recent_plays": np.log1p(c.artist_recent[artists] - c.recent[rows]),
             "artist_known": (c.artist_plays[artists] - c.total[rows] > 0).astype(float),
@@ -265,19 +282,23 @@ class FeatureBuilder:
         if placement is not None:
             centroid = np.asarray(placement["centroid"], dtype=np.float32)
             centroid = centroid / (np.linalg.norm(centroid) or 1)
+            taste = placement.get("taste_centroid")
             return {
                 "placement_liked_share": np.full(len(rows), placement["liked_share"]),
                 "placement_sound_fit": cat.vectors[rows] @ centroid,
+                "placement_taste_fit": cat.taste[rows] @ np.asarray(taste, dtype=np.float32) if taste is not None else np.full(len(rows), np.nan),
                 "placement_size": np.full(len(rows), np.log1p(placement["size"])),
             }
-        liked_share, fit = np.full(len(rows), np.nan), np.full(len(rows), np.nan)
+        liked_share, fit, taste_fit = np.full(len(rows), np.nan), np.full(len(rows), np.nan), np.full(len(rows), np.nan)
         for i, row in enumerate(rows):
             others = list(cat.session_rows.get(cat.first_session[row], set()) - {row})
             if others:
                 liked_share[i] = self.liked[others].mean()
                 company = cat.vectors[others].mean(axis=0)
                 fit[i] = cat.vectors[row] @ (company / (np.linalg.norm(company) or 1))
-        return {"placement_liked_share": liked_share, "placement_sound_fit": fit, "placement_size": np.log1p(cat.first_session_size[rows])}
+                company = cat.taste[others].mean(axis=0)
+                taste_fit[i] = cat.taste[row] @ (company / (np.linalg.norm(company) or 1))
+        return {"placement_liked_share": liked_share, "placement_sound_fit": fit, "placement_taste_fit": taste_fit, "placement_size": np.log1p(cat.first_session_size[rows])}
 
     def graph_columns(self, artists):
         names = [self.c.artist_names[a] for a in artists]
@@ -371,10 +392,14 @@ def train(test_from=date(2024, 1, 1)):
     from sklearn.metrics import average_precision_score, roc_auc_score
 
     catalogue = Catalogue()
+    cut = datetime(test_from.year, test_from.month, test_from.day, tzinfo=UTC).timestamp()
+    # For testing, taste vectors from a model trained only on sessions before the test period, so the test can't
+    # see the future through them. The final model is trained on the stored ones, as live scoring uses.
+    stored = catalogue.taste
+    catalogue.set_taste(taste_before(datetime.fromtimestamp(cut, UTC)))
     data = training_data(catalogue)
     if data is None or len(data.y) < 500:
         return {"error": f"Only {0 if data is None else len(data.y)} first plays with audio; need more analysed tracks"}
-    cut = datetime(test_from.year, test_from.month, test_from.day, tzinfo=UTC).timestamp()
     train_mask, test_mask = data.when < cut, data.when >= cut
 
     from sklearn.linear_model import LogisticRegression
@@ -420,6 +445,8 @@ def train(test_from=date(2024, 1, 1)):
     importance = permutation_importance(booster, X_test, y_test, scoring="roc_auc", n_repeats=3, random_state=0)
     importance = dict(sorted(zip(FEATURES, importance.importances_mean.round(4).tolist()), key=lambda kv: -kv[1]))
     # Final model on all history, so today's scoring has learned from the most recent years too.
+    catalogue.taste = stored
+    data = training_data(catalogue)
     final = model().fit(data.X, data.y)
     report = {
         "trained_at": timezone.now().isoformat(timespec="minutes"),
@@ -445,7 +472,7 @@ def load_model():
 def model_is_useful():
     """Whether the saved model tested clearly better than the hand-weighted score it replaces."""
     saved = load_model()
-    if saved is None:
+    if saved is None or saved["features"] != FEATURES:  # trained before the features changed: retrain first
         return False
     metrics = saved["report"]["metrics"]
     # It has to beat the best simple ranking it could replace, not just the old hand-weighted one. Popularity isn't a
@@ -457,7 +484,7 @@ def model_is_useful():
 def predict(track_ids, moment=None, placement=None):
     """{track id: probability it sticks}, for tracks with audio analysis; empty if no model is trained yet."""
     saved = load_model()
-    if saved is None:
+    if saved is None or saved["features"] != FEATURES:
         return {}
     catalogue = shared_catalogue()
     rows = [catalogue.row[t] for t in track_ids if t in catalogue.row]
@@ -477,6 +504,24 @@ def shared_catalogue():
     if _catalogue["value"] is None or now - _catalogue["loaded"] > timedelta(hours=1):
         _catalogue.update(value=Catalogue(), loaded=now)
     return _catalogue["value"]
+
+
+def stored_taste(track_ids):
+    from recommend.models import TasteVector
+    return {t: np.asarray(v, dtype=np.float32) for t, v in TasteVector.objects.filter(track__in=list(map(int, track_ids))).values_list("track_id", "vector")}
+
+
+def taste_before(moment):
+    """{track id: taste vector} from a taste model trained only on sessions before `moment`."""
+    from history.sessions import session_sequences
+    from recommend import taste
+
+    inputs = taste.Inputs()
+    left, right, weights = taste.pairs(session_sequences(before=moment, with_intent=True), inputs)
+    if len(left) < taste.BATCH * 10:
+        return {}
+    vectors = taste.embed(taste.fit(inputs, left, right, weights), inputs)
+    return dict(zip(inputs.track_ids.tolist(), vectors))
 
 
 def zscore(values):
