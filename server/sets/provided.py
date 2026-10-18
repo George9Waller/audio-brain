@@ -118,7 +118,7 @@ def parse_text(text):
     lines = text.splitlines()
     from_1001 = bool(MARKERS_1001.search(text))
     out, header, pending_cue = [], [], ""
-    rows = []  # (cue, left, right, label, numbered): two sides of each line, before deciding which is the artist
+    rows = []  # (cue, left, right, label, numbered, "tab"/"dash"/"bare"): before deciding which side is the artist
     for raw in lines:
         line = re.sub(r"[ \t]{2,}(?=\S)", lambda m: "\t" if "\t" in m.group(0) else " ", raw.strip())
         if not line:
