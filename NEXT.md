@@ -79,6 +79,11 @@ Built in this round:
   - tracks with no listening history have their listening half filled from their sound neighbours, so there's no separate island;
   - family, context and artist labels by zoom.
 - The library (`/api/v1/library/*`): tracks, artists, albums and sets, with search, sorting and paging.
+- **Tracklists you provide (B2, `sets/provided.py`):** paste text, a file or a link (1001Tracklists, MixesDB, YouTube, SoundCloud, any page) with `POST /api/v1/sets/tracklist`, the app's Paste tracklist and share target, or `manage.py add_tracklist <file|url>`.
+  - Lines match the catalogue, then Tidal (new tracks are added and analysed by the `tracklist` job); a DJ's own edit nobody has falls back to the original, marked `original`.
+  - Each set gets a "From this set" list (`Mix` kind `set`, key `set:<id>`), kept through rebuilds; `PATCH /sets/{id}/tracklist/{position}` fixes a line.
+  - On a real 1001Tracklists page (Calvin Harris @ Head Trip, 41 lines): 34 of 40 known lines matched (85%), 19 of them the exact version.
+  - Needs `migrate sets` (0005).
 
 ### Android (`android/`, Kotlin + Compose, minSdk 30)
 
@@ -89,6 +94,7 @@ Built in this round:
 - Track rows: swipe for verdicts; in a list, swipe left removes the track.
 - Ask flow: Building, then a Draft to review.
 - Radio and Explore.
+- Tracklists: Paste tracklist on the Catalogue's Sets tab and on each set, and a share target for text and links; each line shows its match, with a fix-match picker. Not yet tried on the emulator.
 - Map: drawn on a native canvas, with double-tap zoom and lists shown as their own tracks.
 - Offline: verdicts and release decisions go through the outbox. Lists, the map and Now are cached.
 

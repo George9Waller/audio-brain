@@ -287,7 +287,7 @@ follow-up agent task implements whichever route works.
 |---|---|---|
 | A0 commit | 0 | done (a14b5c2) |
 | B1 multi-cutoff backtest | 1 | open |
-| B2 set tracklists you provide | 1 | open |
+| B2 set tracklists you provide | 1 | done (branch b2-provided-tracklists; needs `migrate sets`) |
 | B3 Tidal recommendations | 1 | open |
 | B4 ListenBrainz baseline | 1 | skipped for now |
 | B5 production settings and fast rebuild | 1 | open |
