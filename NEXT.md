@@ -3,6 +3,9 @@
 Handoff notes, 18 Oct 2026. Start a new session by reading this, then `spec.md`, `android/PLAN.md` and
 `android/CATALOGUE.md`.
 
+**Everything left to do is in [BACKLOG.md](BACKLOG.md)**, as self-contained tasks in waves for parallel agents. The
+next-steps sections below are the history behind it.
+
 ## State
 
 Everything up to the first session is in the initial commit. The second session (18 Oct, below under "Modelling
@@ -99,7 +102,7 @@ Built in this round:
 
 ## Known issues
 
-- **MusicBrainz is answering 503 to this machine,** so the artist-profile backfill stopped after 65 artists. It resumes nightly in the Enrichment job and stops after 5 failures in a row. Setting `API_CONTACT` in `.env` should help.
+- **MusicBrainz is answering 503 to this machine,** so the artist-profile backfill stopped after 65 artists. It resumes nightly in the Enrichment job and stops after 5 failures in a row. `API_CONTACT` is set and sent, so it's likely rate-limiting (see BACKLOG B6).
 - **The context ranker** was down to 24.6% top-3 after contexts became sound-led; the pairwise rewrite brings it to 34.6% (see Modelling round).
 - **Fresh has only 15 tracks:** just 30 of 93 releases have analysed tracks so far. The enrichment backfill is still running.
 - **List edits, sync, Explore, Ask and suggestions are online-only.** Only verdicts and release decisions queue offline.
@@ -119,7 +122,7 @@ Built in this round:
    - a real `API_TOKEN` via `manage.py api_token`;
    - reached over Tailscale.
 3. Install the app on the JM21 and M23 and run the device check (Settings › Device check) with Tidal, then UAPP, playing. The report decides whether play-from-search and the media browser can start specific tracks.
-4. Set `API_CONTACT` so MusicBrainz backfills profiles.
+4. ~~Set `API_CONTACT`~~: already set; the 503s are BACKLOG B6.
 
 ### 2a. Next in modelling (picks up from the modelling round)
 1. **Backtest over several cutoffs** (for example 6, 12, 18 and 24 weeks ago) and average them, so variants can be told apart. Then decide on the taste weight and whether the new scorer stays in lists.

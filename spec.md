@@ -365,8 +365,8 @@ The home server only reaches Sonos in its own house
 Claude's Sonos connector or the Sonos cloud API in the other house
 Open questions
 [ ] Hosted inference for preview embeddings: Modal, Replicate or GitHub Actions?
-[ ] Which calendar: Google or iCloud?
-[ ] Does Beatport stay in scope for metadata and the Set prep mix?
+[x] Which calendar: Google or iCloud? Google Calendar (18 Oct 2026).
+[x] Does Beatport stay in scope for metadata and the Set prep mix? No (18 Oct 2026): not used. Set prep uses the Essentia BPM and key, and the Tidal catalogue.
 [x] Default novelty share per mix? 35% for context mixes, settable per context.
 [ ] Spotify and Deezer exports: which files you have (Spotify's extended history or the basic one?) and where to drop them.
 [ ] Android app: native Kotlin, or a cross-platform toolkit to share code with a desktop app later?
