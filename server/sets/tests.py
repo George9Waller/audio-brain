@@ -154,7 +154,8 @@ class MatchingTests(NoLLM):
         self.came_for = self.track(Artist.objects.create(name="Calvin Harris, Rihanna"), "This Is What You Came For", "3")
         self.no_tidal = Track.objects.create(name="Old Song", artist=self.calvin)
         EnrichmentAttempt.objects.create(track=self.no_tidal, stage="tidal", status=EnrichmentAttempt.NOT_FOUND)
-        self.tidal = FakeTidal({"900": (["Eric Prydz"], "Pjanoo", "Calvin Harris Remix", "GB0000000001"), "901": (["Faithless"], "Insomnia", "", "GB0000000002")})
+        self.tidal = FakeTidal({"900": (["Eric Prydz"], "Pjanoo", "Calvin Harris Remix", "GB0000000001"), "901": (["Faithless"], "Insomnia", "", "GB0000000002"),
+                                "902": (["Hector Couto"], "Red Velvet", "", "GB0000000003")})
 
     def track(self, artist, name, tidal_id):
         t = Track.objects.create(name=name, artist=artist)
@@ -184,6 +185,7 @@ class MatchingTests(NoLLM):
         self.assertEqual(PlatformTrack.objects.get(track=track).external_id, "900")
         self.assertEqual(provided.match_fully(self.tidal, "Eric Prydz", "Pjanoo (Calvin Harris Remix)"), (track, FOUND))  # known now
         self.assertEqual(provided.match_fully(self.tidal, "Nobody", "Nothing"), (None, UNMATCHED))
+        self.assertEqual(provided.match_fully(self.tidal, "Hector Couto", "Red Velvet (Original Mix)")[1], ADDED)  # the same recording, not a stand-in
 
     def add(self, text, **kwargs):
         return provided.add_tracklist(provided.read_text(text, use_llm=False), **kwargs)

@@ -421,6 +421,13 @@ def names_of(artist):
     return {normalise(p) for p in parts if normalise(p)}
 
 
+def without_same_recording(title):
+    """The title without notes that name the same recording: "Red Velvet (Original Mix)" -> "Red Velvet"."""
+    cleaned = re.sub(rf"\s*[(\[]\s*{SAME_RECORDING}\s*[)\]]", "", title, flags=re.I)
+    cleaned = re.sub(rf"\s+[-–]\s+{SAME_RECORDING}\s*$", "", cleaned, flags=re.I).strip()
+    return cleaned or title
+
+
 def base_title(title):
     """The title without featured artists and notes that don't change the recording (radio edit, extended mix)."""
     cleaned = clean_title(title)
@@ -540,7 +547,8 @@ def from_tidal(client, artist, title):
     from enrichment.stages import record
     from enrichment.tidal import STAGE, find_on_tidal, match_track
 
-    stand_in = SimpleNamespace(isrc="", name=title, artist=SimpleNamespace(name=artist), length_ms=None)
+    # Tidal titles rarely say "Original Mix" or "Extended Mix", which would fail its title check
+    stand_in = SimpleNamespace(isrc="", name=without_same_recording(title), artist=SimpleNamespace(name=artist), length_ms=None)
     found, how = find_on_tidal(client, stand_in)
     if found is None:
         return None
