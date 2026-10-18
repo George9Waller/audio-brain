@@ -3,7 +3,8 @@ from clients.base import APIClient
 
 class MusicBrainzClient(APIClient):
     base_url = "https://musicbrainz.org/ws/2/"
-    min_interval = 1.05  # MusicBrainz allows one request per second
+    min_interval = 1.05  # MusicBrainz allows one request a second per IP address
+    shared_lane = "musicbrainz"  # so parallel jobs and processes share that one request a second
 
     def recording(self, mbid):
         """Return the recording, or None if MusicBrainz doesn't know the ID."""
@@ -28,10 +29,9 @@ class MusicBrainzClient(APIClient):
         """Several recordings in one request, via search. IDs MusicBrainz doesn't know are left out."""
         return self.get("recording", fmt="json", query=" OR ".join(f"rid:{mbid}" for mbid in mbids), limit=100)["recordings"]
 
-
-    def artist(self, mbid):
-        """The artist with its genres, or None if MusicBrainz doesn't know the ID."""
-        response = self.get_response(f"artist/{mbid}", fmt="json", inc="genres")
+    def artist(self, mbid, releases=False):
+        """The artist with its genres (and up to 25 of their releases), or None if MusicBrainz doesn't know the ID."""
+        response = self.get_response(f"artist/{mbid}", fmt="json", inc="genres+releases" if releases else "genres")
         if response.status_code in (400, 404):
             return None
         response.raise_for_status()
