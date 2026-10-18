@@ -14,7 +14,11 @@ class Set(models.Model):
     SCROBBLE = "scrobble"
     PLAYLIST = "playlist"
     CHANNEL = "channel"
-    SOURCES = [(SCROBBLE, "Found in listening history"), (PLAYLIST, "Your YouTube sets playlist"), (CHANNEL, "New upload on a watched channel")]
+    PROVIDED = "provided"
+    SOURCES = [
+        (SCROBBLE, "Found in listening history"), (PLAYLIST, "Your YouTube sets playlist"), (CHANNEL, "New upload on a watched channel"),
+        (PROVIDED, "A tracklist you gave it"),
+    ]
 
     track = models.OneToOneField(Track, on_delete=models.CASCADE, related_name="set")
     source = models.CharField(max_length=20, choices=SOURCES, default=SCROBBLE)
@@ -53,6 +57,8 @@ class SetTrack(models.Model):
     track_name = models.CharField(max_length=500, blank=True)
     label_name = models.CharField(max_length=500, blank=True)
     track = models.ForeignKey(Track, on_delete=models.SET_NULL, null=True, blank=True, related_name="set_appearances")
+    # How a provided tracklist's line was matched (sets.provided.MATCHES); blank for tracklists found on YouTube or MixesDB.
+    match = models.CharField(max_length=20, blank=True)
 
     class Meta:
         unique_together = ["set", "position"]
