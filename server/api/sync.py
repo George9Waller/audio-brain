@@ -59,12 +59,20 @@ class ListEditIn(Schema):
     remove: list[int] = []
 
 
+class ListSyncIn(Schema):
+    client_id: UUID
+    key: str
+    on: bool
+    pinned: bool = False
+
+
 class SyncIn(Schema):
     feedback: list[FeedbackIn] = []
     queue: list[QueueIn] = []  # discovery queue decisions on releases
     ratings: list[MixRatingIn] = []
     comparisons: list[ComparisonIn] = []
     list_edits: list[ListEditIn] = []
+    list_syncs: list[ListSyncIn] = []
 
 
 class Accepted(Schema):
@@ -141,5 +149,13 @@ def sync(request, body: SyncIn):
         # ListEdit is itself an upsert by list/track, so replaying this event is safe.
         from recommend.actions import edit_list
         edit_list(mix, item.add, item.remove)
+        accepted.append({"client_id": item.client_id, "track_id": 0})
+    for item in body.list_syncs:
+        mix = Mix.objects.filter(key=item.key, section=Mix.LISTS).first()
+        if mix is None:
+            rejected.append({"client_id": item.client_id, "reason": "No such list"})
+            continue
+        from recommend.actions import sync_list
+        sync_list(mix, item.on, item.pinned)
         accepted.append({"client_id": item.client_id, "track_id": 0})
     return {"accepted": accepted, "rejected": rejected}
