@@ -7,12 +7,13 @@ from uuid import UUID
 
 from django.db import transaction
 from ninja import Router, Schema
+from pydantic import Field
 
 from api.matching import resolve
 from api.music import TrackRef
 from catalogue.models import Track
 from discovery.models import Release
-from recommend.models import Context, Feedback
+from recommend.models import Comparison, Context, Feedback, MixRating
 
 router = Router(tags=["sync"])
 
@@ -34,9 +35,28 @@ class QueueIn(Schema):
     given_at: datetime
 
 
+class MixRatingIn(Schema):
+    client_id: UUID
+    key: str
+    rating: int = Field(ge=1, le=5)
+    note: str = ""
+    given_at: datetime
+
+
+class ComparisonIn(Schema):
+    client_id: UUID
+    left: TrackRef
+    right: TrackRef
+    preferred: Literal["left", "right"]
+    key: str = ""
+    given_at: datetime
+
+
 class SyncIn(Schema):
     feedback: list[FeedbackIn] = []
     queue: list[QueueIn] = []  # discovery queue decisions on releases
+    ratings: list[MixRatingIn] = []
+    comparisons: list[ComparisonIn] = []
 
 
 class Accepted(Schema):
@@ -82,4 +102,27 @@ def sync(request, body: SyncIn):
             accepted.append({"client_id": item.client_id, "track_id": 0})
         else:
             rejected.append({"client_id": item.client_id, "reason": "No such release"})
+    rated = set(MixRating.objects.filter(client_id__in=[r.client_id for r in body.ratings]).values_list("client_id", flat=True))
+    for item in body.ratings:
+        if item.client_id in rated:
+            accepted.append({"client_id": item.client_id, "track_id": 0})
+            continue
+        MixRating.objects.create(client_id=item.client_id, key=item.key[:100], rating=item.rating, note=item.note, given_at=item.given_at)
+        accepted.append({"client_id": item.client_id, "track_id": 0})
+    compared = set(Comparison.objects.filter(client_id__in=[c.client_id for c in body.comparisons]).values_list("client_id", flat=True))
+    for item in body.comparisons:
+        if item.client_id in compared:
+            accepted.append({"client_id": item.client_id, "track_id": 0})
+            continue
+        with transaction.atomic():
+            left = Track.objects.filter(pk=item.left.id).first() if item.left.id else resolve(**item.left.dict(exclude={"id"}))
+            right = Track.objects.filter(pk=item.right.id).first() if item.right.id else resolve(**item.right.dict(exclude={"id"}))
+            if left is None or right is None:
+                rejected.append({"client_id": item.client_id, "reason": "Couldn't match both comparison tracks"})
+                continue
+            if left == right:
+                rejected.append({"client_id": item.client_id, "reason": "A comparison needs two different tracks"})
+                continue
+            Comparison.objects.create(client_id=item.client_id, left=left, right=right, preferred=item.preferred, key=item.key[:100], given_at=item.given_at)
+        accepted.append({"client_id": item.client_id, "track_id": 0})
     return {"accepted": accepted, "rejected": rejected}

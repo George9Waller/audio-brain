@@ -124,6 +124,44 @@ class Feedback(models.Model):
         indexes = [models.Index(fields=["track", "given_at"])]
 
 
+class MixRating(models.Model):
+    """A considered judgement of a whole mix, kept separately from track verdicts.
+
+    Mix rows are rebuilt, but their keys are stable.  Keeping the key lets a
+    future list-level ranker learn from ratings even after the next rebuild.
+    """
+
+    key = models.CharField(max_length=100, db_index=True)
+    rating = models.PositiveSmallIntegerField()  # one to five
+    note = models.TextField(blank=True)
+    given_at = models.DateTimeField(db_index=True)
+    client_id = models.UUIDField(null=True, blank=True, unique=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["key", "given_at"])]
+
+
+class Comparison(models.Model):
+    """A rare forced choice between two tracks, which is stronger than a swipe.
+
+    Client IDs make an offline outbox retry safe.  The optional mix key says
+    what the comparison was trying to improve without tying it to one rebuild.
+    """
+
+    LEFT, RIGHT = "left", "right"
+    CHOICES = [(LEFT, "Left"), (RIGHT, "Right")]
+
+    left = models.ForeignKey(Track, on_delete=models.CASCADE, related_name="comparisons_left")
+    right = models.ForeignKey(Track, on_delete=models.CASCADE, related_name="comparisons_right")
+    preferred = models.CharField(max_length=5, choices=CHOICES)
+    key = models.CharField(max_length=100, blank=True)
+    given_at = models.DateTimeField(db_index=True)
+    client_id = models.UUIDField(null=True, blank=True, unique=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["left", "given_at"]), models.Index(fields=["right", "given_at"])]
+
+
 class FusedVector(models.Model):
     """Sound and listening together: the Essentia embedding (reduced to 64 dimensions) beside the session vector, each
     unit length and weighted, so two tracks are close only when they sound alike *and* you play them alike. Tracks

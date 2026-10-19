@@ -302,7 +302,7 @@ follow-up agent task implements whichever route works.
 | C8 list-shaping sweeps | 2 | sweep variants implemented; awaiting B1 multi-cutoff verdict |
 | D1 LLM discovery | 3 | open |
 | D2 Explore by genre or place, and Edges | 3 | open |
-| D3 ratings and comparisons | 3 | open |
+| D3 ratings and comparisons | 3 | server and sync API in progress; Android feedback UI/outbox still open |
 | D4 context controls | 3 | open |
 | D5 offline edits and requests | 3 | open |
 | D6 map improvements | 3 | open |

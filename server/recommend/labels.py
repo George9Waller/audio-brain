@@ -11,6 +11,9 @@ than what's inferred from plays.
                       once; one that went to Tidal in a playlist and wasn't played -0.1 (seen, probably, and passed
                       over). Lists only shown in the app aren't counted unplayed: there's no telling they were seen.
   Tidal favourite     +1, undated (platform migrations overwrite the date)
+  comparison          +0.75 for the chosen track, -0.75 for the other; a direct
+                      forced choice is useful before there are enough ratings to
+                      train a list-level model
 
 `collect` returns the labels; `by_track` folds them into one strength per track, with your latest verdict, if any,
 overriding everything inferred.
@@ -21,13 +24,14 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from library.models import Favourite
-from recommend.models import DraftOutcome, Feedback, ListEdit, Recommendation
+from recommend.models import Comparison, DraftOutcome, Feedback, ListEdit, MixRating, Recommendation
 
 VERDICT = {Feedback.YES: 1.0, Feedback.NO: -1.0, Feedback.NEVER: -1.0, Feedback.NOT_NOW: -0.3}
 ADDED, REMOVED = 1.0, -0.5
 KEPT, SWIPED_OUT, DISCARDED = 0.3, -0.5, -0.2
 PLAYED, PLAYED_AGAIN, PASSED_OVER = 0.5, 0.8, -0.1
 FAVOURITE = 1.0
+COMPARISON = 0.75
 
 
 @dataclass(frozen=True)
@@ -67,6 +71,9 @@ def collect(since=None, until=None, favourites=True):
             labels.append(Label(track_id, PLAYED_AGAIN if plays >= 2 else PLAYED, "suggestion", played_at, source))
         elif outcome == "not_played" and pushed:
             labels.append(Label(track_id, PASSED_OVER, "suggestion", at, source))
+    for left, right, preferred, at, key in window(Comparison.objects.all(), "given_at").values_list("left_id", "right_id", "preferred", "given_at", "key"):
+        chosen, other = (left, right) if preferred == Comparison.LEFT else (right, left)
+        labels.extend([Label(chosen, COMPARISON, "comparison", at, key), Label(other, -COMPARISON, "comparison", at, key)])
     if favourites and since is None and until is None:
         for track_id in Favourite.objects.filter(kind=Favourite.TRACK).exclude(track=None).values_list("track_id", flat=True):
             labels.append(Label(track_id, FAVOURITE, "favourite", None))
@@ -91,4 +98,13 @@ def summary(since=None, until=None):
     labels = collect(since, until, favourites=since is None and until is None)
     counts = Counter(l.source for l in labels)
     yes = Counter(l.source for l in labels if l.strength > 0)
-    return {source: {"labels": n, "yes": yes[source], "no": n - yes[source]} for source, n in counts.most_common()}
+    result = {source: {"labels": n, "yes": yes[source], "no": n - yes[source]} for source, n in counts.most_common()}
+    ratings = MixRating.objects.all()
+    if since:
+        ratings = ratings.filter(given_at__gte=since)
+    if until:
+        ratings = ratings.filter(given_at__lt=until)
+    values = list(ratings.values_list("rating", flat=True))
+    if values:
+        result["mix rating"] = {"ratings": len(values), "mean": round(sum(values) / len(values), 2)}
+    return result

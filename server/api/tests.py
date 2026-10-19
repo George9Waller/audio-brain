@@ -7,7 +7,7 @@ from django.test import TestCase, override_settings
 from catalogue.models import Artist, Track
 from jobs.models import JobRun
 from jobs.registry import Daily, Every, Weekly
-from recommend.models import Feedback
+from recommend.models import Comparison, Feedback, MixRating
 
 LONDON = ZoneInfo("Europe/London")
 
@@ -52,6 +52,16 @@ class ApiTests(TestCase):
         item = {"client_id": str(uuid.uuid4()), "verdict": "no", "given_at": "2026-10-17T10:00:00Z", "track": {}}
         response = self.post("/api/v1/sync", {"feedback": [item]}).json()
         self.assertEqual(len(response["rejected"]), 1)
+
+    def test_sync_stores_ratings_and_pairwise_comparisons_once(self):
+        other = Track.objects.create(name="Other", artist=self.track.artist)
+        rating = {"client_id": str(uuid.uuid4()), "key": "context:12", "rating": 5, "note": "Perfect for dinner", "given_at": "2026-10-17T10:00:00Z"}
+        comparison = {"client_id": str(uuid.uuid4()), "left": {"id": self.track.pk}, "right": {"id": other.pk}, "preferred": "right", "key": "context:12", "given_at": "2026-10-17T10:01:00Z"}
+        body = {"ratings": [rating], "comparisons": [comparison]}
+        self.assertEqual(len(self.post("/api/v1/sync", body).json()["accepted"]), 2)
+        self.assertEqual(self.post("/api/v1/sync", body).json()["rejected"], [])
+        self.assertEqual(MixRating.objects.get().rating, 5)
+        self.assertEqual(Comparison.objects.get().preferred, Comparison.RIGHT)
 
     def test_run_job_queues_once(self):
         first = self.post("/api/v1/jobs/mixes/run").json()

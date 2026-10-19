@@ -9,7 +9,7 @@ from catalogue.models import Artist, PlatformTrack, Track
 from history.models import Listen
 from recommend import backtest, labels
 from recommend.actions import discard, keep
-from recommend.models import DraftOutcome, Feedback, ListEdit, Mix, Playlist, Recommendation
+from recommend.models import Comparison, DraftOutcome, Feedback, ListEdit, Mix, MixRating, Playlist, Recommendation
 from recommend.playlists import read_back
 
 AS_OF = datetime(2026, 9, 1, tzinfo=UTC)
@@ -90,6 +90,15 @@ class LabelTests(TestCase):
     def test_unplayed_suggestion_never_pushed_is_no_label(self):
         Recommendation.objects.create(track=self.c, source="mix", rank=1, score=1, novel=True, outcome="not_played")
         self.assertEqual(labels.collect(favourites=False), [])
+
+    def test_comparison_is_a_pair_of_opposing_labels(self):
+        Comparison.objects.create(left=self.a, right=self.b, preferred=Comparison.RIGHT, given_at=datetime.now(UTC))
+        strengths = labels.by_track(labels.collect(favourites=False))
+        self.assertEqual(strengths, {self.a.pk: -labels.COMPARISON, self.b.pk: labels.COMPARISON})
+
+    def test_summary_includes_mix_ratings(self):
+        MixRating.objects.create(key="context:1", rating=4, given_at=datetime.now(UTC))
+        self.assertEqual(labels.summary()["mix rating"], {"ratings": 1, "mean": 4.0})
 
 
 class BacktestScoreTests(TestCase):
