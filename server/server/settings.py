@@ -21,14 +21,29 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / '.env')
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-4wy4x7kwa3+n*x6yfpn!@orubf-9(x6utf*8a(d2hx621d26vb'
+def env_flag(name, default=False):
+    value = os.environ.get(name)
+    return default if value is None else value.strip().lower() in ('1', 'true', 'yes', 'on')
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+
+def secret_key():
+    """SECRET_KEY from .env; failing that, one generated on first run and kept in `.secret_key` (gitignored), so a
+    fresh install is never left on a key that's published in the repo."""
+    if os.environ.get('SECRET_KEY'):
+        return os.environ['SECRET_KEY']
+    path = BASE_DIR / '.secret_key'
+    if not path.exists():
+        import secrets
+        path.write_text(secrets.token_urlsafe(50))
+        path.chmod(0o600)
+    return path.read_text().strip()
+
+
+SECRET_KEY = secret_key()
+
+# Off unless asked for: `DEBUG=1` in .env or on the command line, for development.
+DEBUG = env_flag('DEBUG')
 
 # The API is reached over Tailscale by MagicDNS name (*.ts.net) or from this machine.
 ALLOWED_HOSTS = [h for h in os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1,.ts.net').split(',') if h]
@@ -125,6 +140,9 @@ ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
 # Bearer token the companion app sends; the API refuses every request while it's unset (see `manage.py api_token`).
 API_TOKEN = os.environ.get('API_TOKEN', '')
 
+# Threads the Mixes job builds lists and suggestions on (recommend.lists); 1 builds them one at a time.
+MIXES_THREADS = int(os.environ.get('MIXES_THREADS', '6'))
+
 # Contact sent in the User-Agent header; MusicBrainz asks for a URL or email here.
 API_CONTACT = os.environ.get('API_CONTACT', '')
 
@@ -177,4 +195,17 @@ MAILERS = {
     'default': {
         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
     },
+}
+
+
+# Logging: Django's own messages (including tracebacks for failed requests, which DEBUG=False would otherwise drop) go
+# to stderr, which launchd writes to the files named in deploy/*.plist. The root logger is left alone so `run_job` and
+# `run_jobs` keep their own format; other modules' warnings reach stderr through Python's last-resort handler.
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {'plain': {'format': '%(asctime)s %(levelname)s %(name)s %(message)s', 'datefmt': '%Y-%m-%d %H:%M:%S'}},
+    'handlers': {'console': {'class': 'logging.StreamHandler', 'formatter': 'plain'}},
+    'loggers': {'django': {'handlers': ['console'], 'level': os.environ.get('DJANGO_LOG_LEVEL', 'INFO'), 'propagate': False}},
 }

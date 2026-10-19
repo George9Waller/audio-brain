@@ -3,7 +3,7 @@ from unittest import mock
 
 import numpy as np
 
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 
 from catalogue.models import Artist, PlatformTrack, Track
 from history.models import Listen
@@ -188,3 +188,129 @@ class MultiCutoffBacktestTests(TestCase):
         report = backtest.score(data, AS_OF, end=AS_OF + timedelta(days=backtest.HORIZON))
         self.assertEqual(report["window"]["plays"], 1)
         self.assertEqual(report["all lists"]["came back"], 0)
+
+
+def fake_match(have):
+    """A stand-in for enrichment.tidal.match_track: Tidal has the tracks in `have`, and every call is counted."""
+    from enrichment.models import EnrichmentAttempt
+    from enrichment.stages import record
+
+    calls = []
+
+    def match(client, track):
+        calls.append(track.pk)
+        if track.pk in have:
+            PlatformTrack.objects.create(track=track, platform=PlatformTrack.TIDAL, external_id=f"t{track.pk}", match="search")
+            record(track, "tidal", EnrichmentAttempt.OK)
+        else:
+            record(track, "tidal", EnrichmentAttempt.NOT_FOUND)
+    return match, calls
+
+
+def picks_of(tracks):
+    from recommend.retrieve import Pick
+    return [Pick(audio=None, score=1.0, signals={}, novel=False, track=t) for t in tracks]
+
+
+class PlayableTests(TestCase):
+    def setUp(self):
+        from recommend.lists import LOOKUPS
+        LOOKUPS.reset()
+        self.known = make_tracks(2)  # already on Tidal
+        artist = Artist.objects.get()
+        self.unknown = [Track.objects.create(name=f"New {i}", artist=artist) for i in range(4)]
+
+    def run_playable(self, picks, length, have):
+        from recommend import lists
+        match, calls = fake_match(have)
+        with mock.patch("enrichment.tidal.match_track", match), mock.patch.object(lists, "SharedTidalClient"):
+            return [p.track for p in lists.playable(picks_of(picks), length)], calls
+
+    def test_looks_up_missing_ids_and_skips_what_tidal_lacks(self):
+        a, b, c, d = self.unknown
+        out, calls = self.run_playable([self.known[0], a, b, self.known[1], c], 10, have={a.pk, c.pk})
+        self.assertEqual(out, [self.known[0], a, self.known[1], c])
+        self.assertEqual(sorted(calls), sorted([a.pk, b.pk, c.pk]))
+
+    def test_not_found_is_remembered_and_only_needed_lookups_run(self):
+        a, b, c, d = self.unknown
+        self.run_playable([b], 5, have=set())
+        # b is known not to be on Tidal; with room for two, only a is needed after the known track
+        out, calls = self.run_playable([b, self.known[0], a, c, d], 2, have={a.pk, c.pk, d.pk})
+        self.assertEqual(out, [self.known[0], a])
+        self.assertEqual(calls, [a.pk])
+
+    def test_tidal_unreachable_keeps_the_track_and_asks_again_later(self):
+        from recommend import lists
+        a = self.unknown[0]
+        with mock.patch("enrichment.tidal.match_track", side_effect=ConnectionError), mock.patch.object(lists, "SharedTidalClient"):
+            self.assertEqual([p.track for p in lists.playable(picks_of([a]), 5)], [a])
+        out, calls = self.run_playable([a], 5, have=set())
+        self.assertEqual((out, calls), ([], [a.pk]))
+
+    def test_build_lists_runs_end_to_end(self):
+        from recommend import lists
+        with mock.patch("recommend.beyond.albums", return_value=[]), mock.patch("recommend.beyond.artists_to_try", return_value=[]):
+            summary = lists.build_lists(push=False)
+        self.assertIn("discovery lists", summary)
+        self.assertTrue(Mix.objects.filter(key="releases").exists())
+
+    def test_work_runs_inline_inside_a_transaction(self):
+        from recommend.lists import Pool, inline
+        self.assertTrue(inline())
+        pool = Pool(threads=4)
+        self.assertIsNone(pool.executor)
+        self.assertEqual(pool.submit(sum, [1, 2]).result(), 3)
+        with self.assertRaises(ZeroDivisionError):
+            pool.submit(lambda: 1 / 0).result()
+
+
+class ThreadedPlayableTests(TransactionTestCase):
+    """Lists build on several threads at once (recommend.lists.Pool), sharing one set of Tidal lookups."""
+
+    def test_each_track_is_looked_up_once_across_threads(self):
+        from django.test import override_settings
+        from recommend import lists
+
+        lists.LOOKUPS.reset()
+        tracks = make_tracks(1) + [Track.objects.create(name=f"New {i}", artist=Artist.objects.get()) for i in range(6)]
+        have = {t.pk for t in tracks[1::2]}
+        match, calls = fake_match(have)
+        with override_settings(MIXES_THREADS=4), mock.patch("enrichment.tidal.match_track", match), mock.patch.object(lists, "SharedTidalClient"):
+            pool = lists.Pool()
+            self.assertIsNotNone(pool.executor)
+            futures = [pool.submit(lambda: [p.track.pk for p in lists.playable(picks_of(tracks), 10)]) for _ in range(6)]
+            results = [f.result() for f in futures]
+            pool.close()
+        expected = [t.pk for t in tracks if t.pk in have or t == tracks[0]]
+        self.assertTrue(all(r == expected for r in results))
+        self.assertEqual(sorted(calls), sorted(t.pk for t in tracks[1:]))
+        self.assertEqual((lists.LOOKUPS.looked_up, lists.LOOKUPS.found), (6, len(have)))
+
+    def test_lists_lookups_go_ahead_of_suggestions(self):
+        import threading
+        from django.test import override_settings
+        from recommend import lists
+
+        artist = Artist.objects.create(name="Someone")
+        a, b, c, d = [Track.objects.create(name=f"New {i}", artist=artist) for i in range(4)]
+        match, calls = fake_match(set())
+        release = threading.Event()
+
+        def slow_match(client, track):
+            if track == a:
+                release.wait(5)
+            match(client, track)
+
+        lookups = lists.TidalLookups()
+        with override_settings(MIXES_THREADS=4), mock.patch("enrichment.tidal.match_track", slow_match), \
+                mock.patch.object(lists, "SharedTidalClient"), mock.patch.object(lists.TidalLookups, "THREADS", 1):
+            first = lookups.start(a)  # holds the one lookup thread
+            with lookups.later():
+                queued = [lookups.start(b), lookups.start(c)]
+            wanted = lookups.start(d)
+            again = lookups.start(c)  # c is now wanted by a list too: moves up, still looked up once
+            release.set()
+            for future in [first, wanted, again, *queued]:
+                self.assertFalse(future.result(timeout=5))
+        self.assertEqual(calls, [a.pk, d.pk, c.pk, b.pk])
