@@ -387,9 +387,13 @@ data class FixLineRequest(@SerialName("track_id") val trackId: Long? = null, val
 @Serializable
 data class MapPlace(val key: String, val name: String, val hue: Float? = null, val x: Float, val y: Float, val r: Float, val kind: String, val size: Int, val members: List<Long> = emptyList())
 
+@Serializable
+data class MapPointMeta(val country: String = "", val language: String = "", val era: Int? = null, val energy: Float? = null)
+
 /** Every placed track as [id, x, y, hue or -1, flags]; flags 1 favourite, 2 played, 4 Fresh/Rediscovery, 8 in a list. */
 @Serializable
 data class MapData(
     val version: String, val scale: Int, val points: List<List<Float>>,
     val families: List<MapPlace> = emptyList(), val contexts: List<MapPlace>, val artists: List<MapPlace> = emptyList(), val lists: List<MapPlace>,
+    val metadata: Map<String, MapPointMeta> = emptyMap(),
 )

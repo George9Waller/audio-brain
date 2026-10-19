@@ -240,6 +240,34 @@ class ListEdit(models.Model):
         unique_together = ["key", "track"]
 
 
+class DiscoveryCandidate(models.Model):
+    """A bounded suggestion from the optional discovery researcher.
+
+    A model is allowed to *propose* an artist or a deep cut, never to put one
+    straight into a mix.  Resolution records the catalogue track we could
+    actually verify and analyse; failures are retained too, so the same bad
+    suggestion is not repeatedly sent to Tidal.
+    """
+
+    PROPOSED, RESOLVED, REJECTED = "proposed", "resolved", "rejected"
+    STATUSES = [(PROPOSED, "Proposed"), (RESOLVED, "Resolved"), (REJECTED, "Rejected")]
+
+    key = models.CharField(max_length=100, unique=True)  # stable context/week/name hash: makes runs idempotent
+    week = models.DateField(db_index=True)
+    context = models.ForeignKey(Context, on_delete=models.SET_NULL, null=True, blank=True, related_name="discovery_candidates")
+    artist_name = models.CharField(max_length=500)
+    track_name = models.CharField(max_length=500, blank=True)  # a deep-cut hint; blank means any suitable track
+    rationale = models.CharField(max_length=500, blank=True)
+    source = models.CharField(max_length=20, default="llm")
+    status = models.CharField(max_length=20, choices=STATUSES, default=PROPOSED, db_index=True)
+    track = models.ForeignKey(Track, on_delete=models.SET_NULL, null=True, blank=True, related_name="discovery_candidates")
+    score = models.FloatField(null=True, blank=True)  # fit after resolution, not a model's self-assessment
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["week", "status"]), models.Index(fields=["context", "status"])]
+
+
 class DraftOutcome(models.Model):
     """What became of a draft you asked for: kept, played, thrown away, or left to expire, with the tracks it showed
     and the ones swiped out before keeping it. Drafts themselves are deleted, so this is the only record, and a label

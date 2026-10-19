@@ -9,7 +9,7 @@ from catalogue.models import Artist, PlatformTrack, Track
 from history.models import Listen
 from recommend import backtest, labels
 from recommend.actions import discard, keep
-from recommend.models import Comparison, DraftOutcome, Feedback, ListEdit, Mix, MixRating, Playlist, Recommendation
+from recommend.models import Comparison, Context, DiscoveryCandidate, DraftOutcome, Feedback, ListEdit, Mix, MixRating, Playlist, Recommendation
 from recommend.playlists import read_back
 
 AS_OF = datetime(2026, 9, 1, tzinfo=UTC)
@@ -99,6 +99,27 @@ class LabelTests(TestCase):
     def test_summary_includes_mix_ratings(self):
         MixRating.objects.create(key="context:1", rating=4, given_at=datetime.now(UTC))
         self.assertEqual(labels.summary()["mix rating"], {"ratings": 1, "mean": 4.0})
+
+
+class ResearchedDiscoveryTests(TestCase):
+    def setUp(self):
+        self.context = Context.objects.create(name="Night drive", centroid=[0.0] * 1280, top_styles=["garage"], top_artists=["Known artist"])
+
+    def test_proposals_are_bounded_to_contexts_and_cached_for_the_week(self):
+        from recommend import discovery
+
+        answer = discovery.ProposedArtists(candidates=[
+            discovery.ProposedArtist(context_id=self.context.pk, artist="A new name", rationale="Adjacent UK garage"),
+            discovery.ProposedArtist(context_id=999999, artist="Ignore this", rationale="Not a real context"),
+        ])
+        now = datetime(2026, 10, 19, tzinfo=UTC)
+        with mock.patch("recommend.llm.available", return_value=True), mock.patch("recommend.llm.parse", return_value=answer) as parse:
+            candidates = discovery.propose(now)
+            again = discovery.propose(now + timedelta(days=2))
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual([c.pk for c in again], [candidates[0].pk])
+        self.assertEqual((candidates[0].status, candidates[0].context, candidates[0].week), (DiscoveryCandidate.PROPOSED, self.context, now.date()))
+        parse.assert_called_once()
 
 
 class BacktestScoreTests(TestCase):

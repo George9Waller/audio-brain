@@ -104,6 +104,7 @@ MODELS = [
     ("Context ranker", "jobs.steps.train_context_ranker"),
     ("Map layout", "recommend.atlas.build_map"),
     ("Candidates from Tidal's similar tracks", "recommend.candidates.expand_candidates"),
+    ("Weekly researched discovery leads", "recommend.discovery.run_discovery"),
 ]
 MIXES = [("Mixes", "jobs.steps.mixes")]
 TIDAL_RECOMMENDATIONS = [("Tidal's mixes", "recommend.external.snapshot_tidal")]

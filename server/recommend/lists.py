@@ -446,6 +446,12 @@ def new_to_you(contexts, per_context=10):
     from recommend.retrieve import Filters, recommend
 
     rounds = [recommend(length=per_context * 2, context=c, filters=Filters(familiarity="new"), novelty_share=1.0) for c in contexts]
+    # Verified language-model leads are a small extra source, not a bypass of
+    # retrieval: they were resolved via Tidal/audio and scored in discovery.picks.
+    from recommend.discovery import picks as discovery_picks
+    leads = discovery_picks(contexts)
+    if leads:
+        rounds.insert(0, leads)
     out, seen = [], set()
     for i in range(per_context * 2):
         for r in rounds:

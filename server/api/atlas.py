@@ -6,7 +6,7 @@ from django.db.models import Avg, Max
 from ninja import Router, Schema
 
 from api.music import all_hues
-from catalogue.models import Artist, Track
+from catalogue.models import Artist, AudioFeatures, Track
 from history.models import Listen
 from library.models import Favourite
 from recommend.atlas import placed_by_sound
@@ -41,6 +41,9 @@ class MapOut(Schema):
     contexts: list[Place]  # labels between
     artists: list[Place]  # labels zoomed in: artists with several tracks, where most of them sit
     lists: list[Place]
+    # Per-track attributes stay outside the hot point rows.  The app can switch
+    # colour modes without asking the server for a second copy of the layout.
+    metadata: dict[str, dict[str, Any]] = {}
 
 
 @router.get("/map", response=MapOut)
@@ -61,6 +64,13 @@ def atlas(request):
         c = member.get(t)
         flags = (FAVOURITE if t in favourite else 0) | (PLAYED if t in played else 0) | (DISCOVERY if t in discovery else 0) | (IN_LIST if t in listed else 0) | (BY_SOUND if t in by_sound else 0)
         points.append([t, round(x * SCALE), round(y * SCALE), round(hues[c], 1) if c in hues else -1, flags])
+    track_rows = Track.objects.filter(pk__in=pos).select_related("artist").values_list("pk", "artist__country", "artist__language", "first_release_date")
+    audio_rows = AudioFeatures.objects.filter(track_id__in=pos).values_list("track_id", "danceability", "aggressive", "party", "loudness")
+    energy = {track_id: round((dance + aggressive + party + min(max((loudness + 20) / 14, 0), 1)) / 4, 3)
+              for track_id, dance, aggressive, party, loudness in audio_rows}
+    metadata = {str(track_id): {"country": country, "language": language, "era": int(released[:4]) if released[:4].isdigit() else None,
+                               "energy": energy.get(track_id)}
+                for track_id, country, language, released in track_rows}
 
     def place(key, name, hue, ids, kind, members=False):
         """Labelled where its tracks are densest: the track with the most others close by. A list's tracks are often
@@ -101,4 +111,4 @@ def atlas(request):
     lists = [p for m in mixes if m.section == Mix.LISTS and (p := place(m.key, m.title, hues.get(m.context_id) if m.context_id else None, [i["track_id"] for i in m.items if i.get("kind") == "track"], m.kind, members=True))]
     stamp = MapPoint.objects.aggregate(n=Max("pk"))["n"]
     built = max((m.built_at for m in mixes), default=None)
-    return {"version": f"{len(points)}-{stamp}-{built:%Y%m%d%H%M}" if built else f"{len(points)}-{stamp}", "scale": SCALE, "points": points, "families": family_places, "contexts": contexts, "artists": artist_places, "lists": lists}
+    return {"version": f"{len(points)}-{stamp}-{built:%Y%m%d%H%M}" if built else f"{len(points)}-{stamp}", "scale": SCALE, "points": points, "families": family_places, "contexts": contexts, "artists": artist_places, "lists": lists, "metadata": metadata}

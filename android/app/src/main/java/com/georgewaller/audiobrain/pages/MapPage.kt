@@ -24,6 +24,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
@@ -66,7 +72,7 @@ import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 /** The map's points prepared once for drawing: one flat x,y array per colour, and a grid for finding a tapped point. */
-private class Prepared(data: MapData, val size: Float) {
+private class Prepared(data: MapData, val size: Float, colourMode: String) {
     val ids = LongArray(data.points.size)
     val xs = FloatArray(data.points.size)
     val ys = FloatArray(data.points.size)
@@ -89,7 +95,19 @@ private class Prepared(data: MapData, val size: Float) {
             val y = p[2] / data.scale * size
             ids[i] = p[0].toLong(); xs[i] = x; ys[i] = y; flags[i] = p[4].toInt(); index[ids[i]] = i
             val hue = p[3]
-            val colour = if (hue < 0) grey else contextColor((hue / 10f).roundToInt() * 10f).toArgb()
+            val meta = data.metadata[ids[i].toString()]
+            val value = when (colourMode) {
+                "country" -> meta?.country.orEmpty()
+                "language" -> meta?.language.orEmpty()
+                "era" -> meta?.era?.let { "${it / 10 * 10}s" }.orEmpty()
+                "energy" -> meta?.energy?.let { "${(it * 5).toInt().coerceIn(0, 4)}" }.orEmpty()
+                else -> ""
+            }
+            val colour = when {
+                colourMode == "context" && hue >= 0 -> contextColor((hue / 10f).roundToInt() * 10f).toArgb()
+                value.isNotEmpty() -> contextColor(((value.hashCode().toUInt().toLong() % 36) * 10).toFloat()).toArgb()
+                else -> grey
+            }
             buckets.getOrPut(colour) { ArrayList() }.apply { add(x); add(y) }
             if (flags[i] and 4 != 0) { disc.add(x); disc.add(y) }
             if (flags[i] and 8 != 0) { lst.add(x); lst.add(y) }
@@ -138,7 +156,7 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, onMenu: (ListItem, String) -> Un
 
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
-    var colours by remember { mutableStateOf(true) }
+    var colourMode by remember { mutableStateOf("context") }
     var showLists by remember { mutableStateOf(true) }
     var showDiscovery by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
@@ -152,7 +170,9 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, onMenu: (ListItem, String) -> Un
     var controlsHeight by remember { mutableFloatStateOf(0f) }
     val listLabels = remember { ArrayList<Pair<android.graphics.RectF, String>>() }
     val density = LocalDensity.current
-    val prepared = remember(data?.version, viewport) { data?.let { Prepared(it, viewport) } }
+    val prepared = remember(data?.version, viewport, colourMode) { data?.let { Prepared(it, viewport, colourMode) } }
+    val nowPlaying by vm.track.collectAsStateWithLifecycle()
+    val pulse by rememberInfiniteTransition(label = "map-playing").animateFloat(0f, 1f, infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart), label = "map-playing")
 
     // search: names, then fit the view to the matches
     LaunchedEffect(query) {
@@ -236,7 +256,7 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, onMenu: (ListItem, String) -> Un
                 dot.strokeWidth = pointSize
                 val dim = hits != null
                 p.byColour.forEach { (colour, pts) ->
-                    dot.color = if (colours) colour else faint.toArgb()
+                    dot.color = colour
                     dot.alpha = if (dim) 45 else 255
                     c.drawPoints(pts, dot)
                 }
@@ -273,6 +293,10 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, onMenu: (ListItem, String) -> Un
                     val ring = Paint().apply { isAntiAlias = true; style = Paint.Style.STROKE; strokeWidth = 2.dp.toPx() / scale; color = textColour.toArgb() }
                     c.drawCircle(p.xs[i], p.ys[i], 9.dp.toPx() / scale, ring)
                 }
+                nowPlaying?.id?.let { trackId -> p.index[trackId]?.let { i ->
+                    val ring = Paint().apply { isAntiAlias = true; style = Paint.Style.STROKE; strokeWidth = 2.dp.toPx() / scale; color = textColour.toArgb(); alpha = (220 * (1f - pulse)).toInt() }
+                    c.drawCircle(p.xs[i], p.ys[i], (10 + pulse * 18).dp.toPx() / scale, ring)
+                } }
                 c.restore()
 
                 // Labels in screen space, never overlapping, in tiers by zoom: families when the whole map is in view,
@@ -329,7 +353,11 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, onMenu: (ListItem, String) -> Un
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s), verticalAlignment = Alignment.CenterVertically) {
-                AbChip("Colours", selected = colours) { colours = !colours }
+                AbChip("Context", selected = colourMode == "context") { colourMode = "context" }
+                AbChip("Country", selected = colourMode == "country") { colourMode = "country" }
+                AbChip("Language", selected = colourMode == "language") { colourMode = "language" }
+                AbChip("Era", selected = colourMode == "era") { colourMode = "era" }
+                AbChip("Energy", selected = colourMode == "energy") { colourMode = "energy" }
                 AbChip("Lists", selected = showLists) { showLists = !showLists }
                 AbChip("New and faded", selected = showDiscovery) { showDiscovery = !showDiscovery }
                 if (searching) Spinner(size = 14.dp)
@@ -365,6 +393,7 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, onMenu: (ListItem, String) -> Un
                         AbButton("Keep", { vm.give(Verdict.Keep, item, "map") }, kind = ButtonKind.Quiet)
                         AbButton("No", { vm.give(Verdict.No, item, "map") }, kind = ButtonKind.Ghost)
                         AbButton("Radio", { vm.startRadio(item) }, kind = ButtonKind.Ghost)
+                        AbButton("Explore", { vm.explore(trackId = d.id) }, kind = ButtonKind.Ghost)
                         d.tidalUrl?.let { url -> AbButton("Tidal", { openUrl(context, url) }, kind = ButtonKind.Ghost) }
                     }
                 }
