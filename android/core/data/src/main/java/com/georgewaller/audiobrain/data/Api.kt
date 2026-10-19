@@ -70,6 +70,12 @@ class ApiClient(private val settings: SettingsStore) {
     suspend fun albumPage(id: Long): AlbumPage = get("/library/albums/$id")
     suspend fun setPage(id: Long): SetPage = get("/library/sets/$id")
 
+    suspend fun addTracklist(request: TracklistRequest): Tracklist = post("/sets/tracklist", ApiJson.encodeToString(request))
+    suspend fun tracklist(setId: Long): Tracklist = get("/sets/$setId/tracklist")
+    suspend fun fixLine(setId: Long, position: Int, request: FixLineRequest): Tracklist =
+        ApiJson.decodeFromString(call("/sets/$setId/tracklist/$position", ApiJson.encodeToString(request), method = "PATCH"))
+    suspend fun lineCandidates(setId: Long, position: Int, q: String = ""): List<ListItem> = get("/sets/$setId/tracklist/$position/candidates?q=${enc(q)}")
+
     suspend fun mapRaw(): String = call("/map", null)
     suspend fun track(id: Long): TrackDto = get("/tracks/$id")
 

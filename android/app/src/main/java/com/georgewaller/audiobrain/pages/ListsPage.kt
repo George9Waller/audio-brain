@@ -47,7 +47,7 @@ fun ListsPage(vm: AppViewModel, padding: PaddingValues, onOpenList: (String) -> 
     // in search, tracks inside your lists that match, each saying which list it's in
     val found = if (words.isEmpty()) emptyList() else all.flatMap { l -> l.tracks.filter { matches(it.title, it.artist, it.album) }.map { it.copy(reason = "in ${shortName(l.title)}") } }
         .distinctBy { it.trackId }.take(40)
-    val yours = mixes.filter { it.kind in setOf("radio", "asked", "explore", "interest") }
+    val yours = mixes.filter { it.kind in setOf("radio", "asked", "explore", "interest", "set") }
     // one group per family, marked with its first context's colour; Fresh and Rediscovery last
     val groups: List<Pair<Pair<String, Float?>, List<MixList>>> = mixes.filter { it !in yours }
         .groupBy { l -> l.context?.family?.takeIf { it.isNotBlank() } ?: if (l.kind == "year") "Your years" else "From your listening" }

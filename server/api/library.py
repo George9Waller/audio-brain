@@ -121,7 +121,7 @@ class SetRow(Schema):
     url: str
 
 
-SOURCES = {Set.SCROBBLE: "played", Set.PLAYLIST: "saved", Set.CHANNEL: "new"} if hasattr(Set, "SCROBBLE") else {}
+SOURCES = {Set.SCROBBLE: "played", Set.PLAYLIST: "saved", Set.CHANNEL: "new", Set.PROVIDED: "provided"} if hasattr(Set, "SCROBBLE") else {}
 
 
 def set_row(s):

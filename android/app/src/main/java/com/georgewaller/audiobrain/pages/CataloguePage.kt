@@ -23,7 +23,9 @@ import com.georgewaller.audiobrain.AppViewModel
 import com.georgewaller.audiobrain.ItemRow
 import com.georgewaller.audiobrain.data.ListItem
 import com.georgewaller.audiobrain.design.Ab
+import com.georgewaller.audiobrain.design.AbButton
 import com.georgewaller.audiobrain.design.AbChip
+import com.georgewaller.audiobrain.design.ButtonKind
 import com.georgewaller.audiobrain.design.AbText
 import com.georgewaller.audiobrain.design.AbTextField
 import com.georgewaller.audiobrain.design.EmptyState
@@ -46,6 +48,7 @@ fun CataloguePage(
     onAlbum: (Long) -> Unit,
     onSet: (Long) -> Unit,
     onMenu: (ListItem, String) -> Unit,
+    onPasteTracklist: () -> Unit = {},
 ) {
     val s by library.state.collectAsStateWithLifecycle()
     val verdicts by vm.verdicts.collectAsStateWithLifecycle()
@@ -69,12 +72,13 @@ fun CataloguePage(
                 SegmentTabs(Tab.entries.map { it.label }, s.tab.ordinal, { library.setTab(Tab.entries[it]) })
                 Row(Modifier.fillMaxWidth().padding(vertical = Ab.space.xs), horizontalArrangement = Arrangement.spacedBy(Ab.space.s), verticalAlignment = Alignment.CenterVertically) {
                     if (s.tab == Tab.Sets) {
-                        listOf("" to "All", "played" to "Played", "saved" to "Saved", "new" to "New").forEach { (k, label) -> AbChip(label, selected = s.setSource == k) { library.setSource(k) } }
+                        listOf("" to "All", "played" to "Played", "saved" to "Saved", "new" to "New", "provided" to "Yours").forEach { (k, label) -> AbChip(label, selected = s.setSource == k) { library.setSource(k) } }
                     } else {
                         val sorts = if (s.tab == Tab.Tracks) listOf("plays" to "Most played", "recent" to "Recent", "az" to "A–Z") else listOf("plays" to "Most played", "az" to "A–Z")
                         sorts.forEach { (k, label) -> AbChip(label, selected = s.sort == k) { library.setSort(k) } }
                     }
                 }
+                if (s.tab == Tab.Sets) AbButton("Paste tracklist", onPasteTracklist, kind = ButtonKind.Quiet)
                 if (s.tab == Tab.Tracks && s.total != null) AbText("${s.total} tracks", style = Ab.type.number, color = Ab.colors.textFaint)
                 s.error?.let { AbText(it, style = Ab.type.caption, color = Ab.colors.no) }
             }

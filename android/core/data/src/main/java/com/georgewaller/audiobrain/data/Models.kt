@@ -349,6 +349,33 @@ data class SetEntry(val position: Int, val cue: String = "", val artist: String,
 @Serializable
 data class SetPage(val set: SetRow, val entries: List<SetEntry>)
 
+// Tracklists you provide (server/api/sets.py)
+
+@Serializable
+data class TracklistRequest(
+    val text: String = "", val url: String = "", val title: String = "", val dj: String = "",
+    @SerialName("set_id") val setId: Long? = null, val wait: Boolean = false,
+)
+
+/** One line of a provided tracklist and how it matched: matched, added, original, fixed, no_tidal, pending, unmatched or id. */
+@Serializable
+data class TracklistLine(
+    val position: Int, val cue: String = "", val artist: String = "", val title: String = "", val label: String = "",
+    val match: String, val track: ListItem? = null,
+)
+
+@Serializable
+data class TracklistSummary(val known: Int, val matched: Int, val playable: Int, val rate: Float, val pending: Int = 0, val counts: Map<String, Int> = emptyMap())
+
+@Serializable
+data class Tracklist(
+    val set: SetRow, @SerialName("list_key") val listKey: String? = null, val via: String = "",
+    val summary: TracklistSummary, val lines: List<TracklistLine>,
+)
+
+@Serializable
+data class FixLineRequest(@SerialName("track_id") val trackId: Long? = null, val id: Boolean = false, val clear: Boolean = false)
+
 // Map
 
 @Serializable

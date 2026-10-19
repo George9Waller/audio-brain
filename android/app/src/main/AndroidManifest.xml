@@ -29,6 +29,12 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="audiobrain" android:host="connect" />
             </intent-filter>
+            <!-- a tracklist shared as text or a link (1001Tracklists, MixesDB, YouTube, SoundCloud): Paste tracklist -->
+            <intent-filter android:label="@string/share_tracklist">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>
