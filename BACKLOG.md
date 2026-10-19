@@ -291,7 +291,7 @@ follow-up agent task implements whichever route works.
 | B3 Tidal recommendations | 1 | open |
 | B4 ListenBrainz baseline | 1 | skipped for now |
 | B5 production settings and fast rebuild | 1 | open |
-| B6 MusicBrainz 503s and backfill | 1 | open |
+| B6 MusicBrainz 503s and backfill | 1 | fixed on b6-musicbrainz-backfill; backfill at 67% profiled (49% found), still running |
 | C1 new versus familiar ranking | 2 | open |
 | C2 taste vectors beyond retrieval | 2 | open |
 | C3 score outside recommendations | 2 | open |
