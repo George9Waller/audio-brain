@@ -37,7 +37,7 @@ from enrichment.identity import primary_artist
 from history.models import Listen
 from recommend import llm
 from recommend.features import energy
-from recommend.models import Context, ContextTrack, TrackVector
+from recommend.models import Context, ContextMembershipOverride, ContextTrack, TrackVector
 
 TRACKS_PER_FAMILY = 150  # sets the number of families: about 12 for 1,800 liked tracks
 MIN_FAMILIES, MAX_FAMILIES = 6, 14
@@ -98,6 +98,9 @@ def build_contexts():
                 ContextTrack(context=context, track=a.track, distance=float(1 - unit(np.array(a.embedding)) @ centroid)) for a in members
             )
         Context.objects.filter(active=True).exclude(pk__in=kept).update(active=False)
+        # Automatic clustering is the default, but an explicit human move wins.
+        for override in ContextMembershipOverride.objects.filter(context__active=True).select_related("context", "track"):
+            ContextTrack.objects.update_or_create(track=override.track, defaults={"context": override.context, "distance": 0})
         name_contexts(Context.objects.filter(active=True, name=""))
     logger.info("Built %d contexts from %d liked tracks", len(groups), len(audio))
     return len(groups)

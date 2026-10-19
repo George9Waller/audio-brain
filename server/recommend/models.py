@@ -46,6 +46,14 @@ class ContextTrack(models.Model):
     distance = models.FloatField()  # cosine distance to the context centroid
 
 
+class ContextMembershipOverride(models.Model):
+    """A deliberate track move, replayed after every automatic context rebuild."""
+
+    track = models.OneToOneField(Track, on_delete=models.CASCADE, related_name="context_override")
+    context = models.ForeignKey(Context, on_delete=models.CASCADE, related_name="pinned_members")
+    moved_at = models.DateTimeField(auto_now=True)
+
+
 class Playlist(models.Model):
     """A playlist this app writes on a platform and rewrites on each refresh."""
 

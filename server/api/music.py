@@ -9,6 +9,7 @@ from django.db.models import Count, Max
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from ninja import Router, Schema
+from ninja.errors import HttpError
 
 from api.matching import match
 from catalogue.models import AudioFeatures, PlatformTrack, Track
@@ -16,7 +17,7 @@ from library.models import Favourite
 from recommend import context_ranker
 from recommend.editorial import CAMELOT
 from recommend.features import energy
-from recommend.models import Context, ContextTrack, Feedback, Playlist
+from recommend.models import Context, ContextMembershipOverride, ContextTrack, Feedback, Playlist
 
 router = Router(tags=["music"])
 
@@ -209,6 +210,36 @@ def now(request, country: str = ""):
 def contexts(request):
     playlists = context_playlists()
     return [context_out(c, playlists) for c in Context.objects.filter(active=True).order_by("family", "name")]
+
+
+class ContextRenameIn(Schema):
+    name: str
+
+
+class ContextMoveIn(Schema):
+    track_id: int
+    context_id: int
+
+
+@router.post("/contexts/{int:context_id}/rename", response=ContextOut)
+def rename_context(request, context_id: int, body: ContextRenameIn):
+    context = get_object_or_404(Context, pk=context_id, active=True)
+    name = body.name.strip()
+    if not name:
+        raise HttpError(400, "Give this context a name")
+    context.name, context.named_by_user = name[:100], True
+    context.save(update_fields=["name", "named_by_user", "updated_at"])
+    return context_out(context, context_playlists())
+
+
+@router.post("/contexts/move", response=ContextOut)
+def move_to_context(request, body: ContextMoveIn):
+    """Move one track and retain that choice across nightly reclustering."""
+    context = get_object_or_404(Context, pk=body.context_id, active=True)
+    track = get_object_or_404(Track, pk=body.track_id)
+    ContextMembershipOverride.objects.update_or_create(track=track, defaults={"context": context})
+    ContextTrack.objects.update_or_create(track=track, defaults={"context": context, "distance": 0})
+    return context_out(context, context_playlists())
 
 
 @router.get("/tracks/{int:track_id}", response=TrackOut)
