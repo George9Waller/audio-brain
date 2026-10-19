@@ -300,15 +300,15 @@ follow-up agent task implements whichever route works.
 | C6 newer audio embeddings | 2 | open |
 | C7 train on labels | 2 | waiting for labels |
 | C8 list-shaping sweeps | 2 | sweep variants implemented; awaiting B1 multi-cutoff verdict |
-| D1 LLM discovery | 3 | open |
-| D2 Explore by genre or place, and Edges | 3 | open |
-| D3 ratings and comparisons | 3 | server and sync API in progress; Android feedback UI/outbox still open |
-| D4 context controls | 3 | open |
+| D1 LLM discovery | 3 | implemented: weekly cached candidates are Tidal/audio verified, scored, Never-filtered, and logged as `llm`; needs a live run and outcome data |
+| D2 Explore by genre or place, and Edges | 3 | Edges implemented and test-covered; genre/place Explore entry points remain |
+| D3 ratings and comparisons | 3 | done: API, labels, offline outbox, rating row and comparison controls |
+| D4 context controls | 3 | server rename/move/merge/split with rebuild-persistent overrides implemented; Android management UI remains |
 | D5 offline edits and requests | 3 | open |
-| D6 map improvements | 3 | open |
-| D7 two-way Tidal sync | 3 | open (needs real Tidal) |
-| D8 labels and remixers tab | 3 | open |
-| D9 weekly summary | 3 | open |
+| D6 map improvements | 3 | implemented: modes, routes, now-playing pulse and Explore; needs DAP performance check |
+| D7 two-way Tidal sync | 3 | pin and read-back implementation complete; needs real Tidal validation |
+| D8 labels and remixers tab | 3 | done: release queue split by artist, remixer and label |
+| D9 weekly summary | 3 | done: weekly Discover card/job; device notification remains optional polish |
 | E1 MCP server | 4 | open |
 | E2 Sonos | 4 | open |
 | E3 calendar (Google), location, weather | 4 | open |
