@@ -254,7 +254,7 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
         graph.lists.upsert(list.copy(items = list.items.filter { it.trackId != remove?.trackId } + listOfNotNull(add?.copy(reason = "You added this"))))
         viewModelScope.launch {
             try {
-                graph.lists.upsert(graph.api.editList(list.key, listOfNotNull(add?.trackId), listOfNotNull(remove?.trackId)))
+                graph.feedback.editList(list.key, add?.trackId, remove?.trackId)
                 message(if (add != null) "Added to ${shortName(list.title)}" else "Removed from this list")
             } catch (e: ApiException) {
                 graph.lists.upsert(list)

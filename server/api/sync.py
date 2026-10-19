@@ -13,7 +13,7 @@ from api.matching import resolve
 from api.music import TrackRef
 from catalogue.models import Track
 from discovery.models import Release
-from recommend.models import Comparison, Context, Feedback, MixRating
+from recommend.models import Comparison, Context, Feedback, Mix, MixRating
 
 router = Router(tags=["sync"])
 
@@ -52,11 +52,19 @@ class ComparisonIn(Schema):
     given_at: datetime
 
 
+class ListEditIn(Schema):
+    client_id: UUID
+    key: str
+    add: list[int] = []
+    remove: list[int] = []
+
+
 class SyncIn(Schema):
     feedback: list[FeedbackIn] = []
     queue: list[QueueIn] = []  # discovery queue decisions on releases
     ratings: list[MixRatingIn] = []
     comparisons: list[ComparisonIn] = []
+    list_edits: list[ListEditIn] = []
 
 
 class Accepted(Schema):
@@ -124,5 +132,14 @@ def sync(request, body: SyncIn):
                 rejected.append({"client_id": item.client_id, "reason": "A comparison needs two different tracks"})
                 continue
             Comparison.objects.create(client_id=item.client_id, left=left, right=right, preferred=item.preferred, key=item.key[:100], given_at=item.given_at)
+        accepted.append({"client_id": item.client_id, "track_id": 0})
+    for item in body.list_edits:
+        mix = Mix.objects.filter(key=item.key, section=Mix.LISTS).first()
+        if mix is None:
+            rejected.append({"client_id": item.client_id, "reason": "No such list"})
+            continue
+        # ListEdit is itself an upsert by list/track, so replaying this event is safe.
+        from recommend.actions import edit_list
+        edit_list(mix, item.add, item.remove)
         accepted.append({"client_id": item.client_id, "track_id": 0})
     return {"accepted": accepted, "rejected": rejected}

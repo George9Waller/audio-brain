@@ -122,6 +122,9 @@ data class MixRatingEntity(@PrimaryKey val clientId: String, val key: String, va
 @Entity(tableName = "comparison")
 data class ComparisonEntity(@PrimaryKey val clientId: String, val leftId: Long, val rightId: Long, val preferred: String, val key: String, val givenAt: Long, val sent: Boolean = false)
 
+@Entity(tableName = "list_edit")
+data class ListEditEntity(@PrimaryKey val clientId: String, val key: String, val addId: Long?, val removeId: Long?, val givenAt: Long, val sent: Boolean = false)
+
 @Dao
 interface RatingDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(item: MixRatingEntity)
@@ -138,15 +141,24 @@ interface ComparisonDao {
     @Query("DELETE FROM comparison WHERE clientId = :clientId") suspend fun delete(clientId: String)
 }
 
+@Dao
+interface ListEditDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(item: ListEditEntity)
+    @Query("SELECT * FROM list_edit WHERE sent = 0 ORDER BY givenAt LIMIT :limit") suspend fun pending(limit: Int): List<ListEditEntity>
+    @Query("UPDATE list_edit SET sent = 1 WHERE clientId = :clientId") suspend fun markSent(clientId: String)
+    @Query("DELETE FROM list_edit WHERE clientId = :clientId") suspend fun delete(clientId: String)
+}
+
 /** The latest verdict per track key, for colouring rows anywhere in the app. */
 data class KeyVerdict(val trackKey: String, val verdict: String)
 
-@Database(entities = [FeedbackEntity::class, QueueEntity::class, MixRatingEntity::class, ComparisonEntity::class], version = 3)
+@Database(entities = [FeedbackEntity::class, QueueEntity::class, MixRatingEntity::class, ComparisonEntity::class, ListEditEntity::class], version = 4)
 abstract class OutboxDatabase : RoomDatabase() {
     abstract fun feedback(): FeedbackDao
     abstract fun queue(): QueueDao
     abstract fun ratings(): RatingDao
     abstract fun comparisons(): ComparisonDao
+    abstract fun listEdits(): ListEditDao
 
     companion object {
         private val ADD_QUEUE = object : Migration(1, 2) {
@@ -161,7 +173,12 @@ abstract class OutboxDatabase : RoomDatabase() {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `comparison` (`clientId` TEXT NOT NULL, `leftId` INTEGER NOT NULL, `rightId` INTEGER NOT NULL, `preferred` TEXT NOT NULL, `key` TEXT NOT NULL, `givenAt` INTEGER NOT NULL, `sent` INTEGER NOT NULL, PRIMARY KEY(`clientId`))")
             }
         }
+        private val ADD_LIST_EDITS = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `list_edit` (`clientId` TEXT NOT NULL, `key` TEXT NOT NULL, `addId` INTEGER, `removeId` INTEGER, `givenAt` INTEGER NOT NULL, `sent` INTEGER NOT NULL, PRIMARY KEY(`clientId`))")
+            }
+        }
 
-        fun create(context: Context) = Room.databaseBuilder(context, OutboxDatabase::class.java, "outbox.db").addMigrations(ADD_QUEUE, ADD_RATINGS).build()
+        fun create(context: Context) = Room.databaseBuilder(context, OutboxDatabase::class.java, "outbox.db").addMigrations(ADD_QUEUE, ADD_RATINGS, ADD_LIST_EDITS).build()
     }
 }

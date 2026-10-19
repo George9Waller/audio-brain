@@ -27,12 +27,14 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         val queue = graph.db.queue()
         val ratings = graph.db.ratings()
         val comparisons = graph.db.comparisons()
+        val listEdits = graph.db.listEdits()
         repeat(MAX_BATCHES) {
             val batch = dao.pending(BATCH)
             val decisions = queue.pending(BATCH)
             val ratingBatch = ratings.pending(BATCH)
             val comparisonBatch = comparisons.pending(BATCH)
-            if (batch.isEmpty() && decisions.isEmpty() && ratingBatch.isEmpty() && comparisonBatch.isEmpty()) return Result.success()
+            val editBatch = listEdits.pending(BATCH)
+            if (batch.isEmpty() && decisions.isEmpty() && ratingBatch.isEmpty() && comparisonBatch.isEmpty() && editBatch.isEmpty()) return Result.success()
             val request = SyncRequest(
                 feedback = batch.map {
                     FeedbackItem(it.clientId, it.verdict, it.ref, where = it.where, contextId = it.contextId, givenAt = Instant.ofEpochMilli(it.givenAt).toString())
@@ -40,6 +42,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 queue = decisions.map { QueueItem(it.clientId, it.releaseId, it.state, Instant.ofEpochMilli(it.givenAt).toString()) },
                 ratings = ratingBatch.map { MixRatingItem(it.clientId, it.key, it.rating, it.note, Instant.ofEpochMilli(it.givenAt).toString()) },
                 comparisons = comparisonBatch.map { ComparisonItem(it.clientId, TrackRef(id = it.leftId), TrackRef(id = it.rightId), it.preferred, it.key, Instant.ofEpochMilli(it.givenAt).toString()) },
+                listEdits = editBatch.map { ListEditItem(it.clientId, it.key, it.addId?.let(::listOf) ?: emptyList(), it.removeId?.let(::listOf) ?: emptyList()) },
             )
             val response = try {
                 graph.api.sync(request)
@@ -54,10 +57,12 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             val queued = decisions.map { it.clientId }.toSet()
             val rated = ratingBatch.map { it.clientId }.toSet()
             val compared = comparisonBatch.map { it.clientId }.toSet()
+            val edited = editBatch.map { it.clientId }.toSet()
             response.accepted.forEach { when {
                 it.clientId in queued -> queue.markSent(it.clientId)
                 it.clientId in rated -> ratings.markSent(it.clientId)
                 it.clientId in compared -> comparisons.markSent(it.clientId)
+                it.clientId in edited -> listEdits.markSent(it.clientId)
                 else -> dao.markSent(it.clientId, it.trackId)
             } }
             response.rejected.forEach {
@@ -65,6 +70,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     it.clientId in queued -> queue.delete(it.clientId)
                     it.clientId in rated -> ratings.delete(it.clientId)
                     it.clientId in compared -> comparisons.delete(it.clientId)
+                    it.clientId in edited -> listEdits.delete(it.clientId)
                     else -> dao.markRejected(it.clientId, it.reason)
                 }
             }

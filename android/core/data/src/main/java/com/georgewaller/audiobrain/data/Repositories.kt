@@ -27,7 +27,7 @@ class DataGraph(context: Context) {
     val settings = SettingsStore(app)
     val api = ApiClient(settings)
     val db = OutboxDatabase.create(app)
-    val feedback = FeedbackRepository(app, db.feedback(), db.queue(), db.ratings(), db.comparisons())
+    val feedback = FeedbackRepository(app, db.feedback(), db.queue(), db.ratings(), db.comparisons(), db.listEdits())
     val now = NowRepository(app, api)
     val lists = ListsRepository(app, api)
     val make = MakeRepository(api)
@@ -35,7 +35,7 @@ class DataGraph(context: Context) {
     val jobs = JobsRepository(api)
 }
 
-class FeedbackRepository(private val context: Context, private val dao: FeedbackDao, private val queue: QueueDao, private val ratings: RatingDao, private val comparisons: ComparisonDao) {
+class FeedbackRepository(private val context: Context, private val dao: FeedbackDao, private val queue: QueueDao, private val ratings: RatingDao, private val comparisons: ComparisonDao, private val listEdits: ListEditDao) {
     fun latestFor(track: TrackRef): Flow<FeedbackEntity?> = dao.latestFor(track.key)
     fun pendingCount(): Flow<Int> = combine(dao.pendingCount(), queue.pendingCount()) { a, b -> a + b }
     fun recent(limit: Int = 50): Flow<List<FeedbackEntity>> = dao.recent(limit)
@@ -87,6 +87,11 @@ class FeedbackRepository(private val context: Context, private val dao: Feedback
     suspend fun compare(key: String, leftId: Long, rightId: Long, preferred: String) {
         require(leftId != rightId && preferred in setOf("left", "right"))
         comparisons.upsert(ComparisonEntity(UUID.randomUUID().toString(), leftId, rightId, preferred, key, System.currentTimeMillis()))
+        SyncScheduler.requestNow(context)
+    }
+
+    suspend fun editList(key: String, addId: Long? = null, removeId: Long? = null) {
+        listEdits.upsert(ListEditEntity(UUID.randomUUID().toString(), key, addId, removeId, System.currentTimeMillis()))
         SyncScheduler.requestNow(context)
     }
 

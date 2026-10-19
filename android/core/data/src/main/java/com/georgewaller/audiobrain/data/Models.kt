@@ -198,7 +198,10 @@ data class MixRatingItem(@SerialName("client_id") val clientId: String, val key:
 data class ComparisonItem(@SerialName("client_id") val clientId: String, val left: TrackRef, val right: TrackRef, val preferred: String, val key: String = "", @SerialName("given_at") val givenAt: String)
 
 @Serializable
-data class SyncRequest(val feedback: List<FeedbackItem> = emptyList(), val queue: List<QueueItem> = emptyList(), val ratings: List<MixRatingItem> = emptyList(), val comparisons: List<ComparisonItem> = emptyList())
+data class ListEditItem(@SerialName("client_id") val clientId: String, val key: String, val add: List<Long> = emptyList(), val remove: List<Long> = emptyList())
+
+@Serializable
+data class SyncRequest(val feedback: List<FeedbackItem> = emptyList(), val queue: List<QueueItem> = emptyList(), val ratings: List<MixRatingItem> = emptyList(), val comparisons: List<ComparisonItem> = emptyList(), @SerialName("list_edits") val listEdits: List<ListEditItem> = emptyList())
 
 @Serializable
 data class Accepted(@SerialName("client_id") val clientId: String, @SerialName("track_id") val trackId: Long)
