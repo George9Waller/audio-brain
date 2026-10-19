@@ -19,6 +19,7 @@ from recommend import llm, scorer
 from recommend.explore import find_artist, ingest, own_tracks
 from recommend.models import Context, DiscoveryCandidate
 from recommend.retrieve import Pick
+from recommend import editorial
 
 logger = logging.getLogger(__name__)
 WEEKLY_LIMIT = 20
@@ -133,6 +134,8 @@ def picks(contexts):
         return []
     played = set(Track.objects.filter(intent_plays__gt=0).values_list("pk", flat=True))
     rows = [r for r in rows if r.track_id not in played]
+    _, never = editorial.verdict_adjustments([r.track_id for r in rows])
+    rows = [r for r in rows if r.track_id not in never]
     if not rows:
         return []
     probabilities = scorer.predict([r.track_id for r in rows]) if scorer.model_is_useful() else {}
