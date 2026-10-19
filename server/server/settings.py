@@ -128,6 +128,10 @@ API_TOKEN = os.environ.get('API_TOKEN', '')
 # Contact sent in the User-Agent header; MusicBrainz asks for a URL or email here.
 API_CONTACT = os.environ.get('API_CONTACT', '')
 
+# Where clients rate-limited per IP address (MusicBrainz) keep the lane every process on this machine shares. /tmp
+# rather than the checkout, so worktrees and the main checkout take turns too.
+RATE_LIMIT_DIR = os.environ.get('RATE_LIMIT_DIR', '/tmp')
+
 
 # Password validation
 # https://docs.djangoproject.com/en/6.1/ref/settings/#auth-password-validators

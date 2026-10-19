@@ -1,7 +1,7 @@
 from django.core.management.base import BaseCommand
 from django.db.models import Count, Q
 
-from catalogue.models import Track
+from catalogue.models import Artist, Track
 from enrichment.models import EnrichmentAttempt
 from sets.models import Set
 
@@ -32,6 +32,15 @@ class Command(BaseCommand):
                 count = qs.filter(pk__in=Track.objects.filter(condition).values("pk")).count()
                 cells.append(f"{count:>9} ({count / totals[name]:4.0%})" if totals[name] else f"{'-':>18}")
             self.stdout.write(f"{label:22}" + "".join(f"{cell:>18}" for cell in cells))
+
+        self.stdout.write("\nArtist profiles (profiled / found on MusicBrainz):")
+        for label, artists in {"with analysed tracks": Artist.objects.filter(tracks__audio__isnull=False),
+                               "played": Artist.objects.filter(tracks__intent_plays__gt=0)}.items():
+            artists = Artist.objects.filter(pk__in=artists.values("pk"))
+            total, profiled = artists.count(), artists.filter(profiled_at__isnull=False).count()
+            found = artists.filter(profiled_at__isnull=False).exclude(mbid="").count()
+            if total:
+                self.stdout.write(f"  {label:22}{total:>7}{profiled:>9} ({profiled / total:4.0%}){found:>9} ({found / total:4.0%})")
 
         self.stdout.write("\nStage attempts (ok / not found / error):")
         for stage in EnrichmentAttempt.objects.values_list("stage", flat=True).distinct().order_by("stage"):

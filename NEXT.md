@@ -125,7 +125,7 @@ Built in this round:
 
 ## Known issues
 
-- **MusicBrainz is answering 503 to this machine,** so the artist-profile backfill stopped after 65 artists. It resumes nightly in the Enrichment job and stops after 5 failures in a row. `API_CONTACT` is set and sent, so it's likely rate-limiting (see BACKLOG B6).
+- **MusicBrainz 503s (B6, fixed on `b6-musicbrainz-backfill`):** the User-Agent was fine. MusicBrainz sheds load globally (503 with `Retry-After: 0` when its shared bucket runs dry, about 1 in 6 requests even at one every 5 s), and our per-IP rate went over 1 a second when the identity stage and the profiles ran side by side. urllib3 then retried at once, in bursts. Now every process shares one MusicBrainz lane (`clients.base.SharedLane`, a flock'd file in `RATE_LIMIT_DIR`, default `/tmp`) and backs off exponentially on 429/503. Profiles cost one request per artist and include analysed artists without plays; `manage.py coverage` shows them. Backfill on 19 Oct: 67% of artists with analysed tracks profiled, 49% found on MusicBrainz (the rest have no MBID and no track MusicBrainz knows; Last.fm tags fill in for them).
 - **The context ranker** was down to 24.6% top-3 after contexts became sound-led; the pairwise rewrite brings it to 34.6% (see Modelling round).
 - **Fresh has only 15 tracks:** just 30 of 93 releases have analysed tracks so far. The enrichment backfill is still running.
 - **List edits, sync, Explore, Ask and suggestions are online-only.** Only verdicts and release decisions queue offline.
