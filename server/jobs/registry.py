@@ -113,6 +113,7 @@ JOBS = {job.key: job for job in [
     Job("favourites", "Tidal favourites", "Favourite tracks, albums and artists from Tidal", FAVOURITES, Daily(4), lane=SYNC),
     Job("sets", "Sets", "New sets on YouTube and in your history, their tracklists, and how well each fits", FIND_SETS + TRACKLISTS + SCORE_SETS, Daily(4, 30)),
     Job("releases", "New releases", "Releases from watched artists, remixers and labels, scored and queued", FIND_RELEASES + SCORE_RELEASES + QUEUE, Weekly(4, 5)),
+    Job("discovery_summary", "Weekly discovery", "A weekly card of releases found by artist, remixer and label, and the five best fits", [("Weekly discovery card", "discovery.summary.build_weekly_summary")], Weekly(4, 6)),
     Job("enrichment", "Enrichment", "Identity, Tidal IDs, audio analysis, CLAP, genres and tags for tracks that lack them", ENRICHMENT, Daily(1)),
     Job("models", "Models", "Sessions, vectors (session, combined, taste), contexts, the track scorer and the context ranker, retrained", QUEUE + MODELS, Daily(3)),
     Job("mixes", "Mixes and lists", "Context, era, Fresh and Rediscovery mixes (pushed to Tidal), and the discovery lists: releases, artists, albums and sets", MIXES, Daily(6, 30)),

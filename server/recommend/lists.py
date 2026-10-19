@@ -166,7 +166,7 @@ def build_lists(mixes=12, push=None):
     return f"{sum(m.section == Mix.LISTS for m in built)} mixes ({tracks} tracks, {pushed} synced to Tidal), {sum(m.section == Mix.DISCOVER for m in built)} discovery lists"
 
 
-ORDER = ["interest", "explore", "set", "mix", "fresh", "new", "repeat", "rediscovery", "era", "year", "releases", "artists", "albums", "sets", "revisit"]
+ORDER = ["summary", "interest", "explore", "set", "mix", "fresh", "new", "repeat", "rediscovery", "era", "year", "releases", "artists", "albums", "sets", "revisit"]
 LIST_LENGTH = 50
 OVERFETCH = 90  # picks asked for, so a list still fills after dropping tracks Tidal can't play or other mixes have
 
