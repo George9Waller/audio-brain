@@ -304,7 +304,7 @@ follow-up agent task implements whichever route works.
 | D2 Explore by genre or place, and Edges | 3 | Edges implemented and test-covered; genre/place Explore entry points remain |
 | D3 ratings and comparisons | 3 | done: API, labels, offline outbox, rating row and comparison controls |
 | D4 context controls | 3 | server rename/move/merge/split with rebuild-persistent overrides implemented; Android management UI remains |
-| D5 offline edits and requests | 3 | open |
+| D5 offline edits and requests | 3 | list edits are queued and replayed through `/sync`; Ask, Explore and sync-toggle persistence remain |
 | D6 map improvements | 3 | implemented: modes, routes, now-playing pulse and Explore; needs DAP performance check |
 | D7 two-way Tidal sync | 3 | pin and read-back implementation complete; needs real Tidal validation |
 | D8 labels and remixers tab | 3 | done: release queue split by artist, remixer and label |
