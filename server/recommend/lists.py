@@ -49,7 +49,8 @@ def build_lists(mixes=12, push=None):
     from recommend.rediscovery import rediscovery
 
     push = OAuthToken.objects.filter(platform="tidal").exists() if push is None else push
-    synced = set(ListSync.objects.values_list("key", flat=True))
+    sync_rows = {sync.key: sync for sync in ListSync.objects.all()}
+    synced = set(sync_rows)
     if push:  # edits made on Tidal since the last build, read first so this build respects them
         from recommend.playlists import read_back
         for playlist in Playlist.objects.filter(key__in=synced).exclude(external_id=""):
@@ -71,6 +72,13 @@ def build_lists(mixes=12, push=None):
             waiting.clear()
 
     def track_mix(key, kind, title, subtitle, picks, context=None, exclusive=True):
+        if sync_rows.get(key) and sync_rows[key].pinned:
+            existing = Mix.objects.filter(key=key).first()
+            if existing:
+                built.append(existing)
+                if exclusive:
+                    used.update(item["track_id"] for item in existing.items if item.get("kind") == "track")
+                return
         before = LOOKUPS.looked_up
         picks = shape_list(key, picks, used if exclusive else set(), LIST_LENGTH)
         if exclusive:

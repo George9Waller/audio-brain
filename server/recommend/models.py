@@ -217,6 +217,7 @@ class ListSync(models.Model):
     lists, and only these, each time it rebuilds them. Kept by key, so the choice survives rebuilds."""
 
     key = models.CharField(max_length=100, unique=True)  # a Mix key
+    pinned = models.BooleanField(default=False)  # don't replace its stored items or Tidal playlist on a rebuild
     since = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
