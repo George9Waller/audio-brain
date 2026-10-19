@@ -100,7 +100,18 @@ def evaluate_sessions(sequences, epochs=8, history=12, batch_size=512):
     with torch.no_grad():
         predicted = model(torch.tensor(test_x)).argsort(descending=True)[:, :10]
     transformer_hits = sum(target in {inverse.get(int(x)) for x in row.tolist()} for target, row in zip(targets, predicted))
+    transitions = {}
+    for sequence in train_sequences:
+        encoded = [vocab[t] for t in sequence if t in vocab]
+        for left, right in zip(encoded, encoded[1:]):
+            transitions.setdefault(left, Counter())[right] += 1
+    markov_hits = 0
+    for row, target in zip(test_x, holdout_rows):
+        last = next((token for token in reversed(row) if token), 0)
+        choices = [token for token, _ in transitions.get(last, Counter()).most_common(10)]
+        markov_hits += target in choices
     report["holdout transitions"] = len(targets)
     report["holdout transformer recall@10"] = round(transformer_hits / len(targets), 3)
+    report["Markov recall@10"] = round(markov_hits / len(targets), 3)
     report["popularity recall@10"] = round(sum(t in popular for t in targets) / len(targets), 3)
     return report
