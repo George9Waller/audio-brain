@@ -5,11 +5,23 @@ import android.graphics.Paint
 import android.graphics.Typeface
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.draw.clip
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.graphics.Brush
+import com.georgewaller.audiobrain.design.Dot
+import com.georgewaller.audiobrain.design.Overline
+import com.georgewaller.audiobrain.design.SegmentTabs
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -85,27 +97,41 @@ private class Prepared(data: MapData, val size: Float, colourMode: String) {
     private val grid = HashMap<Int, MutableList<Int>>()
     private val cells = 64
 
+    val legend: Legend
+
     init {
         val buckets = HashMap<Int, MutableList<Float>>()
         val disc = ArrayList<Float>()
         val lst = ArrayList<Float>()
         val grey = DarkColors.textFaint.copy(alpha = 0.55f).toArgb()
+        val metas = data.points.map { data.metadata[it[0].toLong().toString()] }
+        // Categories get distinct colours by how common they are; the long tail shares one "other" colour.
+        val categories = when (colourMode) {
+            "country" -> metas.map { it?.country.orEmpty() }
+            "language" -> metas.map { it?.language.orEmpty() }
+            else -> null
+        }
+        val top = categories?.filter { it.isNotEmpty() }?.groupingBy { it }?.eachCount()
+            ?.entries?.sortedByDescending { it.value }?.take(CATEGORY_HUES.size)
+            ?.mapIndexed { k, e -> e.key to contextColor(CATEGORY_HUES[k]).toArgb() }?.toMap().orEmpty()
+        val other = DarkColors.textMuted.copy(alpha = 0.7f).toArgb()
+        // Era and energy are ordered, so they share one ramp; era runs over the middle 96% of years so a few
+        // very old tracks don't squash everything else into one end.
+        val years = metas.mapNotNull { it?.era }.sorted()
+        val yearLo = years.getOrNull((years.size * 0.02).toInt()) ?: 1970
+        val yearHi = years.getOrNull((years.size * 0.98).toInt().coerceAtMost(years.size - 1)) ?: 2025
+        fun ramp(t: Float) = rampColour((t * RAMP_STEPS).roundToInt() / RAMP_STEPS.toFloat()).toArgb()
         data.points.forEachIndexed { i, p ->
             val x = p[1] / data.scale * size
             val y = p[2] / data.scale * size
             ids[i] = p[0].toLong(); xs[i] = x; ys[i] = y; flags[i] = p[4].toInt(); index[ids[i]] = i
             val hue = p[3]
-            val meta = data.metadata[ids[i].toString()]
-            val value = when (colourMode) {
-                "country" -> meta?.country.orEmpty()
-                "language" -> meta?.language.orEmpty()
-                "era" -> meta?.era?.let { "${it / 10 * 10}s" }.orEmpty()
-                "energy" -> meta?.energy?.let { "${(it * 5).toInt().coerceIn(0, 4)}" }.orEmpty()
-                else -> ""
-            }
-            val colour = when {
-                colourMode == "context" && hue >= 0 -> contextColor((hue / 10f).roundToInt() * 10f).toArgb()
-                value.isNotEmpty() -> contextColor(((value.hashCode().toUInt().toLong() % 36) * 10).toFloat()).toArgb()
+            val meta = metas[i]
+            val colour = when (colourMode) {
+                "context" -> if (hue >= 0) contextColor((hue / 10f).roundToInt() * 10f).toArgb() else grey
+                "country", "language" -> categories!![i].let { if (it.isEmpty()) grey else top[it] ?: other }
+                "era" -> meta?.era?.let { ramp(((it - yearLo).toFloat() / (yearHi - yearLo).coerceAtLeast(1)).coerceIn(0f, 1f)) } ?: grey
+                "energy" -> meta?.energy?.let { ramp(it.coerceIn(0f, 1f)) } ?: grey
                 else -> grey
             }
             buckets.getOrPut(colour) { ArrayList() }.apply { add(x); add(y) }
@@ -114,6 +140,15 @@ private class Prepared(data: MapData, val size: Float, colourMode: String) {
             grid.getOrPut(cell(x, y)) { ArrayList() }.add(i)
         }
         byColour = buckets.mapValues { it.value.toFloatArray() }
+        legend = when (colourMode) {
+            "country", "language" -> Legend.Categories(top.map { (name, c) -> name to c } + ("Other" to other))
+            "era" -> Legend.Ramp("$yearLo", "${(yearLo + yearHi) / 2}", "$yearHi")
+            "energy" -> Legend.Ramp("Calm", "", "Intense")
+            else -> Legend.Categories(
+                data.families.filter { it.hue != null }.sortedByDescending { it.size }.take(CATEGORY_HUES.size)
+                    .map { shortName(it.name) to contextColor(it.hue).toArgb() },
+            )
+        }
         discovery = disc.toFloatArray()
         listed = lst.toFloatArray()
     }
@@ -142,11 +177,29 @@ private class Prepared(data: MapData, val size: Float, colourMode: String) {
     }
 }
 
+/** What the map's colours mean: named swatches, or a low-to-high ramp. */
+private sealed interface Legend {
+    data class Categories(val items: List<Pair<String, Int>>) : Legend
+    data class Ramp(val low: String, val mid: String, val high: String) : Legend
+}
+
+/** Hues for the most common countries or languages, spaced so neighbours in the key never look alike. */
+private val CATEGORY_HUES = listOf(205f, 28f, 140f, 330f, 52f, 265f, 175f, 0f)
+private const val RAMP_STEPS = 24
+/** Deep violet through teal to warm yellow: ordered, readable on the dark ground, and kind to colour blindness. */
+private val RAMP = listOf(Color(0xFF5A4FCF), Color(0xFF2E8FB0), Color(0xFF35B48C), Color(0xFFB8D45A), Color(0xFFF4D35E))
+private fun rampColour(t: Float): Color {
+    val x = t.coerceIn(0f, 1f) * (RAMP.size - 1)
+    val i = x.toInt().coerceAtMost(RAMP.size - 2)
+    return androidx.compose.ui.graphics.lerp(RAMP[i], RAMP[i + 1], x - i)
+}
+
 /**
  * Your catalogue as a place: every analysed track where its sound and the way you play it put it. Pinch and pan;
  * tap a point for the track. Layers show your contexts' colours, your lists as labelled areas, and Fresh and
  * Rediscovery picked out; a search lights up its matches and moves there.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MapPage(vm: AppViewModel, graph: DataGraph, onMenu: (ListItem, String) -> Unit) {
     val data by graph.map.data.collectAsStateWithLifecycle()
@@ -168,10 +221,14 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, onMenu: (ListItem, String) -> Un
     var placedInitially by remember { mutableStateOf(false) }
     var focusedList by remember { mutableStateOf<String?>(null) }
     var controlsHeight by remember { mutableFloatStateOf(0f) }
+    var keyTop by remember { mutableFloatStateOf(Float.MAX_VALUE) }
     val listLabels = remember { ArrayList<Pair<android.graphics.RectF, String>>() }
     val density = LocalDensity.current
     val prepared = remember(data?.version, viewport, colourMode) { data?.let { Prepared(it, viewport, colourMode) } }
     val nowPlaying by vm.track.collectAsStateWithLifecycle()
+    // the now-playing chip covers the bottom of the page only while something plays
+    val session by vm.nowPlaying.collectAsStateWithLifecycle()
+    val chipRoom = if (session?.hasTrack == true) 76.dp else Ab.space.s
     val pulse by rememberInfiniteTransition(label = "map-playing").animateFloat(0f, 1f, infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart), label = "map-playing")
 
     // search: names, then fit the view to the matches
@@ -242,9 +299,13 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, onMenu: (ListItem, String) -> Un
         ) {
             if (viewport != size.minDimension) viewport = size.minDimension
             if (p == null) return@Canvas
-            if (!placedInitially) {  // start with the whole map centred in the screen
+            if (!placedInitially && controlsHeight > 0f && keyTop < Float.MAX_VALUE && p.xs.isNotEmpty()) {
+                // start with the whole map filling the space between the search panel and the key
                 placedInitially = true
-                offset = Offset((size.width - viewport) / 2, (size.height - viewport) / 2)
+                val left = p.xs.min(); val right = p.xs.max(); val top = p.ys.min(); val bottom = p.ys.max()
+                val areaTop = controlsHeight; val areaBottom = keyTop
+                scale = (minOf(size.width / (right - left), (areaBottom - areaTop) / (bottom - top)) * 0.94f).coerceAtLeast(0.2f)
+                offset = Offset(size.width / 2 - (left + right) / 2 * scale, (areaTop + areaBottom) / 2 - (top + bottom) / 2 * scale)
             }
             drawIntoCanvas { canvas ->
                 val c = canvas.nativeCanvas
@@ -325,8 +386,8 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, onMenu: (ListItem, String) -> Un
                     val w = paint.measureText(l.text)
                     val y = at.y - if (l.list) 10.dp.toPx() else 0f
                     val rect = android.graphics.RectF(at.x - w / 2 - 6, y - paint.textSize - 2, at.x + w / 2 + 6, y + 5)
-                    // whole labels only, and none under the search box and layer chips
-                    if (rect.left < 0 || rect.right > size.width || rect.top < controlsHeight || rect.bottom > size.height) return@forEach
+                    // whole labels only, and none under the search box or the key
+                    if (rect.left < 0 || rect.right > size.width || rect.top < controlsHeight || rect.bottom > minOf(size.height, keyTop)) return@forEach
                     if (placed.any { android.graphics.RectF.intersects(it, rect) }) return@forEach
                     placed.add(rect)
                     if (l.list) listLabels.add(rect to l.place.key)
@@ -348,20 +409,62 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, onMenu: (ListItem, String) -> Un
         // search and layers on top
         Column(Modifier.fillMaxWidth().onSizeChanged { controlsHeight = it.height.toFloat() }.padding(horizontal = Ab.space.gutter, vertical = Ab.space.s), verticalArrangement = Arrangement.spacedBy(Ab.space.s)) {
             AbSurface(Modifier.fillMaxWidth(), color = Ab.colors.ground.copy(alpha = 0.92f), shape = Ab.shapes.medium) {
-                Column(Modifier.padding(Ab.space.xs)) {
-                    AbTextField(query, { query = it }, "Find on the map", placeholder = "A track, artist or album")
+                Column(Modifier.padding(horizontal = Ab.space.xs, vertical = Ab.space.xs)) {
+                    AbTextField(query, { query = it }, "", placeholder = "Find a track, artist or album")
+                    if (searching || hits != null) Row(Modifier.padding(horizontal = Ab.space.s, vertical = Ab.space.xs), verticalAlignment = Alignment.CenterVertically) {
+                        if (searching) Spinner(size = 14.dp)
+                        hits?.let { AbText("${it.size} found", style = Ab.type.number, color = Ab.colors.textMuted) }
+                    }
+                    SegmentTabs(COLOUR_MODES.map { it.second }, COLOUR_MODES.indexOfFirst { it.first == colourMode }, { colourMode = COLOUR_MODES[it].first })
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s), verticalAlignment = Alignment.CenterVertically) {
-                AbChip("Context", selected = colourMode == "context") { colourMode = "context" }
-                AbChip("Country", selected = colourMode == "country") { colourMode = "country" }
-                AbChip("Language", selected = colourMode == "language") { colourMode = "language" }
-                AbChip("Era", selected = colourMode == "era") { colourMode = "era" }
-                AbChip("Energy", selected = colourMode == "energy") { colourMode = "energy" }
-                AbChip("Lists", selected = showLists) { showLists = !showLists }
-                AbChip("New and faded", selected = showDiscovery) { showDiscovery = !showDiscovery }
-                if (searching) Spinner(size = 14.dp)
-                hits?.let { AbText("${it.size} found", style = Ab.type.number, color = Ab.colors.textMuted) }
+        }
+
+        // the key: what the colours mean, and the overlays; out of the way while a track is open
+        val key = prepared?.legend
+        if (selected == null && key != null) {
+            DisposableEffect(Unit) { onDispose { keyTop = Float.MAX_VALUE } }
+            var open by remember { mutableStateOf(true) }
+            AbSurface(
+                Modifier.align(Alignment.BottomStart).padding(start = Ab.space.gutter, end = Ab.space.gutter, bottom = chipRoom).fillMaxWidth()
+                    .onGloballyPositioned { keyTop = it.positionInParent().y },
+                color = Ab.colors.ground.copy(alpha = 0.92f), shape = Ab.shapes.medium,
+            ) {
+                Column(Modifier.padding(Ab.space.m), verticalArrangement = Arrangement.spacedBy(Ab.space.s)) {
+                    Row(Modifier.fillMaxWidth().clickable { open = !open }, verticalAlignment = Alignment.CenterVertically) {
+                        Overline(COLOUR_MODES.first { it.first == colourMode }.third, Modifier.weight(1f))
+                        AbText(if (open) "Hide" else "Key", style = Ab.type.caption, color = Ab.colors.textFaint)
+                    }
+                    if (open) when (key) {
+                        is Legend.Categories -> FlowRow(horizontalArrangement = Arrangement.spacedBy(Ab.space.m), verticalArrangement = Arrangement.spacedBy(Ab.space.xs)) {
+                            key.items.forEach { (name, colour) ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Dot(Color(colour), size = 9.dp)
+                                    Spacer(Modifier.width(Ab.space.xs + 2.dp))
+                                    AbText(name, style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 1)
+                                }
+                            }
+                        }
+                        is Legend.Ramp -> Column(verticalArrangement = Arrangement.spacedBy(Ab.space.xs)) {
+                            Box(Modifier.fillMaxWidth().height(8.dp).clip(Ab.shapes.pill).background(Brush.horizontalGradient(RAMP)))
+                            Row(Modifier.fillMaxWidth()) {
+                                AbText(key.low, style = Ab.type.number, color = Ab.colors.textMuted)
+                                Spacer(Modifier.weight(1f))
+                                AbText(key.mid, style = Ab.type.number, color = Ab.colors.textMuted)
+                                Spacer(Modifier.weight(1f))
+                                AbText(key.high, style = Ab.type.number, color = Ab.colors.textMuted)
+                            }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s), verticalAlignment = Alignment.CenterVertically) {
+                        AbChip("Lists", selected = showLists) { showLists = !showLists }
+                        AbChip("New and faded", selected = showDiscovery) { showDiscovery = !showDiscovery }
+                        Spacer(Modifier.weight(1f))
+                        Dot(DarkColors.textFaint.copy(alpha = 0.55f), size = 7.dp)
+                        Spacer(Modifier.width(Ab.space.xs))
+                        AbText("unknown", style = Ab.type.caption, color = Ab.colors.textFaint)
+                    }
+                }
             }
         }
         if (data == null) Box(Modifier.align(Alignment.Center)) { AbText("Loading the map…", style = Ab.type.caption, color = Ab.colors.textMuted) }
@@ -369,7 +472,7 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, onMenu: (ListItem, String) -> Un
         // the tapped track
         selected?.let { i ->
             val p2 = prepared ?: return@let
-            AbSurface(Modifier.align(Alignment.BottomCenter).padding(start = Ab.space.s, end = Ab.space.s, bottom = 76.dp).fillMaxWidth(), color = Ab.colors.surface, shape = Ab.shapes.medium, border = Ab.colors.line) {
+            AbSurface(Modifier.align(Alignment.BottomCenter).padding(start = Ab.space.s, end = Ab.space.s, bottom = chipRoom).fillMaxWidth(), color = Ab.colors.surface, shape = Ab.shapes.medium, border = Ab.colors.line) {
                 Column(Modifier.padding(Ab.space.m), verticalArrangement = Arrangement.spacedBy(Ab.space.s)) {
                     val d = detail
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -401,6 +504,15 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, onMenu: (ListItem, String) -> Un
         }
     }
 }
+
+/** Colour modes: key, tab label, and the key's heading. */
+private val COLOUR_MODES = listOf(
+    Triple("context", "Context", "Colour · your contexts, by family"),
+    Triple("country", "Country", "Colour · artist's country"),
+    Triple("language", "Language", "Colour · language sung in"),
+    Triple("era", "Era", "Colour · year released"),
+    Triple("energy", "Energy", "Colour · energy"),
+)
 
 /** A context's colour lifted for text: the same hue, lighter, so it reads over the points it labels. */
 private fun labelColour(hue: Float) = Color.hsl(((hue % 360f) + 360f) % 360f, 0.62f, 0.76f)

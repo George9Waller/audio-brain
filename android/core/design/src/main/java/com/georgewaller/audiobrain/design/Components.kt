@@ -222,8 +222,10 @@ fun AbTextField(
     keyboardType: KeyboardType = KeyboardType.Text,
 ) {
     Column(modifier) {
-        Overline(label)
-        Spacer(Modifier.height(Ab.space.xs))
+        if (label.isNotEmpty()) {  // an empty label leaves just the field, where the placeholder says enough
+            Overline(label)
+            Spacer(Modifier.height(Ab.space.xs))
+        }
         AbSurface(Modifier.fillMaxWidth(), color = Ab.colors.raised, shape = Ab.shapes.small) {
             Box(Modifier.padding(horizontal = Ab.space.m, vertical = Ab.space.m)) {
                 if (value.isEmpty()) AbText(placeholder, color = Ab.colors.textFaint, maxLines = 1)
