@@ -119,10 +119,12 @@ def extend(request, key: str):
 
 class SyncIn(Schema):
     on: bool
+    pinned: bool = False
 
 
 class Synced(Schema):
     sync: bool
+    pinned: bool = False
     tidal_url: str | None  # the list's own Tidal playlist, once pushed
 
 
@@ -130,7 +132,7 @@ class Synced(Schema):
 def sync(request, key: str, body: SyncIn):
     """Keep a list in Tidal as its own playlist, updated whenever the list is rebuilt; or stop updating it."""
     mix = get_object_or_404(Mix, key=key, section=Mix.LISTS)
-    return {"sync": body.on, "tidal_url": sync_list(mix, body.on)}
+    return {"sync": body.on, "pinned": body.on and body.pinned, "tidal_url": sync_list(mix, body.on, body.pinned)}
 
 
 class EditIn(Schema):

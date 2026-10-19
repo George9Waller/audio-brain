@@ -52,7 +52,7 @@ class ApiClient(private val settings: SettingsStore) {
     suspend fun play(key: String): Played = post("/mixes/${enc(key)}/play", "{}")
     suspend fun editList(key: String, add: List<Long>, remove: List<Long>): MixList = post("/mixes/${enc(key)}/edit", ApiJson.encodeToString(EditRequest(add, remove)))
     suspend fun suggestions(key: String): List<ListItem> = get("/mixes/${enc(key)}/suggestions")
-    suspend fun sync(key: String, on: Boolean): Synced = post("/mixes/${enc(key)}/sync", ApiJson.encodeToString(SyncRequest2(on)))
+    suspend fun sync(key: String, on: Boolean, pinned: Boolean = false): Synced = post("/mixes/${enc(key)}/sync", ApiJson.encodeToString(SyncRequest2(on, pinned)))
     suspend fun radio(request: RadioRequest): RadioResponse = post("/radio", ApiJson.encodeToString(request))
     suspend fun explore(request: ExploreRequest): RadioResponse = post("/explore", ApiJson.encodeToString(request))
     suspend fun extendRadio(key: String): RadioResponse = post("/radio/${enc(key)}/extend", "{}")

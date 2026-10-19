@@ -34,6 +34,7 @@ class ListOut(Schema):
     context: ListContext | None
     playlist: dict | None
     sync: bool = False  # kept in Tidal as its own playlist
+    pinned: bool = False  # retain this exact list rather than refreshing it
     items: list[dict[str, Any]]
 
 
@@ -77,17 +78,18 @@ def decorate(items):
 def lists(request):
     """Every list in one go, so the app can cache them all for offline."""
     playlists = {p.key: p for p in Playlist.objects.all()}
-    synced = set(ListSync.objects.values_list("key", flat=True))
+    synced = {row.key: row for row in ListSync.objects.all()}
     return {"lists": [list_out(mix, playlists, synced) for mix in Mix.objects.exclude(section=Mix.DRAFTS).select_related("context")]}
 
 
 def list_out(mix, playlists=None, synced=None):
     playlist = playlists.get(mix.key) if playlists is not None else Playlist.objects.filter(key=mix.key).first()
-    sync = mix.key in synced if synced is not None else ListSync.objects.filter(key=mix.key).exists()
+    sync_row = synced.get(mix.key) if synced is not None else ListSync.objects.filter(key=mix.key).first()
+    sync = bool(sync_row)
     return {
         "key": mix.key, "kind": mix.kind, "section": mix.section, "title": mix.title, "subtitle": mix.subtitle, "built_at": mix.built_at,
         "context": {"id": mix.context_id, "name": mix.context.name, "hue": hue(mix.context_id), "family": mix.context.family} if mix.context else None,
-        "playlist": playlist_out(playlist), "sync": sync, "items": decorate(mix.items),
+        "playlist": playlist_out(playlist), "sync": sync, "pinned": bool(sync_row and sync_row.pinned), "items": decorate(mix.items),
     }
 
 

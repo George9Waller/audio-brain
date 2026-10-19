@@ -265,6 +265,7 @@ data class MixList(
     val context: ListContext? = null,
     val playlist: PlaylistDto? = null,
     val sync: Boolean = false,
+    val pinned: Boolean = false,
     val items: List<ListItem> = emptyList(),
 ) {
     val tracks get() = items.filter { it.isTrack }
@@ -289,10 +290,10 @@ data class DraftResponse(val mix: MixList? = null, val understood: String = "")
 data class KeepRequest(val title: String? = null, val remove: List<Long> = emptyList())
 
 @Serializable
-data class SyncRequest2(val on: Boolean)
+data class SyncRequest2(val on: Boolean, val pinned: Boolean = false)
 
 @Serializable
-data class Synced(val sync: Boolean, @SerialName("tidal_url") val tidalUrl: String? = null)
+data class Synced(val sync: Boolean, val pinned: Boolean = false, @SerialName("tidal_url") val tidalUrl: String? = null)
 
 @Serializable
 data class EditRequest(val add: List<Long> = emptyList(), val remove: List<Long> = emptyList())

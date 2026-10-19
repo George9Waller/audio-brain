@@ -223,8 +223,8 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
         graph.lists.upsert(list.copy(sync = on))
         viewModelScope.launch {
             try {
-                val r = graph.api.sync(list.key, on)
-                graph.lists.upsert(list.copy(sync = r.sync, playlist = r.tidalUrl?.let { com.georgewaller.audiobrain.data.PlaylistDto(list.key, list.title, it, list.builtAt) } ?: list.playlist))
+                val r = graph.api.sync(list.key, on, list.pinned)
+                graph.lists.upsert(list.copy(sync = r.sync, pinned = r.pinned, playlist = r.tidalUrl?.let { com.georgewaller.audiobrain.data.PlaylistDto(list.key, list.title, it, list.builtAt) } ?: list.playlist))
                 message(
                     when {
                         !on -> "Stopped syncing; the playlist stays in Tidal"
@@ -237,6 +237,15 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
                 message(e.message ?: "Couldn't change sync")
             }
         }
+    }
+
+    fun setPinned(list: MixList, pinned: Boolean) = viewModelScope.launch {
+        if (!list.sync) return@launch message("Sync this list to Tidal before pinning it")
+        try {
+            val r = graph.api.sync(list.key, true, pinned)
+            graph.lists.upsert(list.copy(pinned = r.pinned))
+            message(if (pinned) "Pinned: it will no longer refresh" else "This list will refresh again")
+        } catch (e: ApiException) { message(e.message ?: "Couldn't change pin") }
     }
 
     /** Take a track out of a list, or put one in. Kept through rebuilds; removing isn't a No. */

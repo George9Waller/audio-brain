@@ -75,7 +75,7 @@ fun ListDetail(vm: AppViewModel, key: String, padding: PaddingValues, onMenu: (L
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
         val canSync = list.section == "lists" && list.tracks.isNotEmpty()
-        item(key = "head") { ListHeader(list, onSync = if (canSync) { on -> vm.setSync(list, on) } else null) {
+        item(key = "head") { ListHeader(list, onSync = if (canSync) { on -> vm.setSync(list, on) } else null, onPin = if (canSync) { on -> vm.setPinned(list, on) } else null) {
             val context = LocalContext.current
             Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
                 if (list.tracks.isNotEmpty()) AbButton("Play now", { vm.play(list.key) })
@@ -148,7 +148,7 @@ private fun Suggestions(vm: AppViewModel, list: MixList, onMenu: (ListItem, Stri
 
 /** A list's title block: kind, colour, counts, the energy arc and key path, and [actions]. Shared by lists and drafts. */
 @Composable
-fun ListHeader(list: MixList, onSync: ((Boolean) -> Unit)? = null, actions: @Composable () -> Unit) {
+fun ListHeader(list: MixList, onSync: ((Boolean) -> Unit)? = null, onPin: ((Boolean) -> Unit)? = null, actions: @Composable () -> Unit) {
     Column(Modifier.padding(top = Ab.space.s, bottom = Ab.space.m), verticalArrangement = Arrangement.spacedBy(Ab.space.s)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             list.context?.let { Dot(contextColor(it.hue), size = 8.dp); Spacer(Modifier.width(Ab.space.s)) }
@@ -159,6 +159,7 @@ fun ListHeader(list: MixList, onSync: ((Boolean) -> Unit)? = null, actions: @Com
                 AbIcons.Sync, if (list.sync) "Stop syncing with Tidal" else "Sync to Tidal", { onSync(!list.sync) },
                 tint = if (list.sync) Ab.colors.keep else Ab.colors.textFaint, size = 40.dp,
             )
+            if (onPin != null && list.sync) AbButton(if (list.pinned) "Pinned" else "Pin", { onPin(!list.pinned) }, kind = ButtonKind.Ghost)
         }
         AbText(list.title, style = Ab.type.title, maxLines = 3)
         if (list.subtitle.isNotBlank()) AbText(list.subtitle, style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 3)

@@ -250,7 +250,7 @@ def playlist_url(playlist):
     return f"https://tidal.com/browse/playlist/{playlist.external_id}" if playlist and playlist.external_id else None
 
 
-def sync_list(mix, on):
+def sync_list(mix, on, pinned=False):
     """Keep a list in Tidal as its own playlist (pushed now and on every rebuild), or stop. Stopping leaves the
     playlist in Tidal as it is. Returns its Tidal URL when on."""
     from recommend.models import ListSync
@@ -258,7 +258,10 @@ def sync_list(mix, on):
     if not on:
         ListSync.objects.filter(key=mix.key).delete()
         return None
-    ListSync.objects.get_or_create(key=mix.key)
+    sync, _ = ListSync.objects.get_or_create(key=mix.key)
+    if sync.pinned != pinned:
+        sync.pinned = pinned
+        sync.save(update_fields=["pinned"])
     if not tidal_ready():
         return None
     tracks = {t.pk: t for t in Track.objects.filter(pk__in=[i["track_id"] for i in mix.items if i.get("kind") == "track"])}
