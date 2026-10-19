@@ -121,7 +121,13 @@ def build_lists(mixes=12, push=None):
     for year in years:
         track_mix(f"year:{year}", "year", f"Your {year}", f"What you played most in {year}, compared with every other year", sources[f"year:{year}"].result(), exclusive=False)
 
-    built.append(save("releases", "releases", Mix.DISCOVER, "New releases", "Your queue: releases from artists, remixers and labels you play, closest to your taste first", release_items()))
+    built.append(save("releases", "releases", Mix.DISCOVER, "New releases", "Your queue, grouped below by artist, remixer and label", release_items()))
+    for source, title, subtitle in [
+        (Release.ARTIST, "New from artists", "New releases from artists you play, closest to your taste first"),
+        (Release.REMIXER, "New from remixers", "New releases from remixers on tracks you like"),
+        (Release.LABEL, "New from labels", "New releases on labels you play"),
+    ]:
+        built.append(save(f"releases:{source}", "releases", Mix.DISCOVER, title, subtitle, release_items(source=source)))
     found = discover.result()
     built.append(save("artists", "artists", Mix.DISCOVER, "Artists to try", "Close to several artists you play, by Last.fm's similar-artist links; ones you haven't played yourself",
                       [{"kind": "artist", "title": name, "artist_id": None, "detail": "", "reason": reason, "score": round(score, 3), "url": SEARCH + name.replace(" ", "+")}
@@ -484,10 +490,13 @@ def sound(audio):
     }
 
 
-def release_items(count=100):
+def release_items(count=100, source=None):
     """The queue's new releases from the last four months: scored ones best first, then ones not analysed yet."""
     from django.db.models import F
-    ranked = Release.objects.filter(discovered_at__gte=timezone.now() - timedelta(days=120), state=Release.NEW).order_by(F("score").desc(nulls_last=True), "-release_date").prefetch_related("artists").select_related("label")
+    ranked = Release.objects.filter(discovered_at__gte=timezone.now() - timedelta(days=120), state=Release.NEW)
+    if source:
+        ranked = ranked.filter(source=source)
+    ranked = ranked.order_by(F("score").desc(nulls_last=True), "-release_date").prefetch_related("artists").select_related("label")
     per_artist, items = {}, []
     for r in ranked:  # at most two per artist, so one album's worth of singles doesn't fill the list
         artists = ",".join(sorted(str(a.pk) for a in r.artists.all()))
@@ -499,5 +508,6 @@ def release_items(count=100):
             "kind": "release", "release_id": r.pk, "title": r.title, "artist": ", ".join(a.name for a in r.artists.all()),
             "detail": f"{r.kind.title()} · {r.release_date:%d %b %Y} · {why}", "reason": r.reason or "Not analysed yet", "score": round(r.score, 3) if r.score is not None else None,
             "state": r.state, "url": f"https://tidal.com/browse/album/{r.tidal_id}",
+            "source": r.source, "label": r.label.name if r.label else "",
         })
     return items
