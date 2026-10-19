@@ -147,6 +147,11 @@ class BacktestScoreTests(TestCase):
 
 
 class ModelHelperTests(TestCase):
+    def test_transformer_experiment_and_rl_guard(self):
+        from recommend.sequence_experiment import policy_value, train
+        seq = [[1, 2, 3, 4, 5, 1, 2, 3] for _ in range(8)]
+        self.assertIn("recall@10", train(seq, epochs=1))
+        self.assertIn("error", policy_value([{ "reward": 1.0 }]))
     def test_edges_excludes_any_track_already_in_a_context(self):
         from recommend import edges
         context = Context.objects.create(name="A", centroid=[0.0] * 1280)
