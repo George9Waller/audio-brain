@@ -22,6 +22,14 @@ Plays after the cutoff weren't caused by these lists, so this measures whether t
 want, not whether they'd have been played. It's the measure that's possible without exposure; the Recommendation log
 gives exposure-based outcomes from now on (see recommend.labels).
 
+One window is noisy, so `run_many` repeats this at several cutoffs (six, twelve, eighteen and 24 weeks back, say),
+one clone each (`audio_brain_backtest_<yyyymmdd>`), scoring every cutoff on the same horizon of six weeks so the
+windows are alike. It reports each variant's mean and spread across cutoffs, and compares each variant with the default
+by a paired bootstrap over tracks: the same resampled tracks score both variants, so what the two lists share cancels
+out, and a difference whose 95% interval clears zero across the cutoffs is called real. The bootstrap treats tracks as
+independent, which they aren't quite (plays come in sessions), so the spread across cutoffs is the other check: a real
+difference should point the same way at most of them.
+
 Not backtested: Explore and new-interest lists (they fetch from Tidal), the Discover section, and the Tidal lookups
 for missing IDs (an unlooked-up track counts as playable). Not removed from the clone, because they carry no dates:
 Tidal and Last.fm similarity, tags, artist profiles, and the session-intent model's calibration.
@@ -30,9 +38,11 @@ Tidal and Last.fm similarity, tags, artist profiles, and the session-intent mode
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -42,13 +52,17 @@ from django.conf import settings
 from django.db import connection
 from django.db.models import Min
 
+import numpy as np
+
 from recommend.retrieve import SIGNAL_WEIGHTS as WEIGHTS  # the live weights, which variants start from
 
 logger = logging.getLogger(__name__)
 
 CLONE_SUFFIX = "_backtest"
+CLONE_NAME = re.compile(r"_backtest(_\d{8})?$")  # the one shared clone of old, or one per cutoff
 OUT = Path(settings.BASE_DIR) / "models" / "backtests"
 RECENT = timedelta(days=42)  # "recently played" before the cutoff, for the harder baseline
+HORIZON = 42  # days after each cutoff that are scored, the same for every cutoff
 
 
 # Variants change how lists are built, so one prepared clone can compare several. Each is a list of (target, value)
@@ -70,32 +84,96 @@ def cutoff(days):
     return datetime(day.year, day.month, day.day, tzinfo=UTC)
 
 
-def run(days=42, variants=("default",), reuse=False, keep=False, suggestions=False, label=""):
-    """Prepare a clone as of `days` ago (or reuse a prepared one), build the lists for each variant, score them.
-    Returns {variant: report}; each report is also saved next to the clone's lists."""
+def run(days=42, variants=("default",), reuse=False, keep=False, suggestions=False, label="", horizon=HORIZON):
+    """Prepare a clone as of `days` ago (or reuse a prepared one), build the lists for each variant, score them on the
+    `horizon` days after the cutoff. Returns {variant: report}; each report is also saved next to the clone's lists."""
     as_of = cutoff(days)
     folder = OUT / as_of.date().isoformat()
     folder.mkdir(parents=True, exist_ok=True)
-    marker = folder / "prepared.json"
-    clone = settings.DATABASES["default"]["NAME"] + CLONE_SUFFIX
-    if not (reuse and marker.exists() and database_exists(clone)):
-        marker.unlink(missing_ok=True)
-        make_clone(clone)
-        step("prepare", clone, as_of, folder)
-        marker.write_text(json.dumps({"as_of": as_of.isoformat(), "prepared_at": datetime.now(UTC).isoformat(timespec="seconds")}))
-    reports = {}
+    clone = clone_name(as_of)
     try:
-        for variant in variants:
-            lists_file = folder / f"lists-{variant}.json"
-            step("build", clone, as_of, folder, variant=variant, suggestions=suggestions)
-            report = score(json.loads(lists_file.read_text()), as_of)
-            report.update(variant=variant, label=label, commit=commit())
-            (folder / f"report-{variant}.json").write_text(json.dumps(report, indent=1))
-            reports[variant] = report
+        ensure_prepared(clone, as_of, folder, reuse)
+        return build_and_score(clone, as_of, folder, variants, suggestions, label, horizon)
     finally:
         if not (keep or reuse):
             drop_database(clone)
-            marker.unlink(missing_ok=True)
+            (folder / "prepared.json").unlink(missing_ok=True)
+
+
+def run_many(cutoffs=(42, 84, 126, 168), variants=("default",), reuse=False, keep=False, suggestions=False, label="", horizon=HORIZON, jobs=1):
+    """`run` at several cutoffs (days ago), each scored on the same horizon, then summarised across them: each
+    variant's mean and spread, and each variant against the default. `jobs` cutoffs are prepared and built at once.
+    Returns the summary, which is also saved under models/backtests/multi/."""
+    variants = list(dict.fromkeys(["default", *variants]))
+    dates = [cutoff(days) for days in cutoffs]
+    folders = [OUT / d.date().isoformat() for d in dates]
+    clones = [clone_name(d) for d in dates]
+    for folder in folders:
+        folder.mkdir(parents=True, exist_ok=True)
+    # Clones are made one at a time: copying from the live database as a template needs it to themselves.
+    fresh = []
+    for clone, folder in zip(clones, folders):
+        if not is_prepared(clone, folder, reuse):
+            (folder / "prepared.json").unlink(missing_ok=True)
+            make_clone(clone)
+            fresh.append((clone, folder))
+
+    def one(i):
+        clone, as_of, folder = clones[i], dates[i], folders[i]
+        if (clone, folder) in fresh:
+            ensure_prepared(clone, as_of, folder, reuse=False, cloned=True)
+        return build_and_score(clone, as_of, folder, variants, suggestions, label, horizon)
+
+    try:
+        with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+            reports = list(pool.map(one, range(len(dates))))
+    finally:
+        if not (keep or reuse):
+            for clone, folder in zip(clones, folders):
+                drop_database(clone)
+                (folder / "prepared.json").unlink(missing_ok=True)
+    result = summarise(reports, variants, folders, dates, horizon)
+    result.update(label=label, commit=commit(), cutoffs=list(cutoffs))
+    out = OUT / "multi"
+    out.mkdir(parents=True, exist_ok=True)
+    name = f"{datetime.now(UTC):%Y-%m-%d}-{'-'.join(map(str, cutoffs))}-{'+'.join(variants)}.json"
+    (out / name).write_text(json.dumps(result, indent=1))
+    result["saved to"] = str(out / name)
+    return result
+
+
+def clone_name(as_of):
+    return f"{settings.DATABASES['default']['NAME']}{CLONE_SUFFIX}_{as_of:%Y%m%d}"
+
+
+def is_prepared(clone, folder, reuse):
+    """Whether `folder`'s marker says `clone` was prepared for it, and the clone is still there."""
+    marker = folder / "prepared.json"
+    if not (reuse and marker.exists() and database_exists(clone)):
+        return False
+    return json.loads(marker.read_text()).get("clone") == clone
+
+
+def ensure_prepared(clone, as_of, folder, reuse, cloned=False):
+    marker = folder / "prepared.json"
+    if not cloned and is_prepared(clone, folder, reuse):
+        return
+    marker.unlink(missing_ok=True)
+    if not cloned:
+        make_clone(clone)
+    step("prepare", clone, as_of, folder)
+    marker.write_text(json.dumps({"as_of": as_of.isoformat(), "clone": clone, "prepared_at": datetime.now(UTC).isoformat(timespec="seconds")}))
+
+
+def build_and_score(clone, as_of, folder, variants, suggestions, label, horizon):
+    end = min(as_of + timedelta(days=horizon), datetime.now(UTC))
+    reports = {}
+    for variant in variants:
+        step("build", clone, as_of, folder, variant=variant, suggestions=suggestions)
+        report = score(json.loads((folder / f"lists-{variant}.json").read_text()), as_of, end=end)
+        report.update(variant=variant, label=label, commit=commit())
+        (folder / f"report-{variant}.json").write_text(json.dumps(report, indent=1))
+        reports[variant] = report
     return reports
 
 
@@ -118,7 +196,7 @@ def database_exists(name):
 
 
 def drop_database(name):
-    assert name.endswith(CLONE_SUFFIX)
+    assert CLONE_NAME.search(name), name
     subprocess.run(["dropdb", "--if-exists", "--force", name], env=pg_env(), check=True)
 
 
@@ -149,7 +227,7 @@ def step(name, clone, as_of, folder, variant="default", suggestions=False):
 def assert_clone():
     """Refuse to run a destructive step anywhere but a backtest clone."""
     name = connection.settings_dict["NAME"]
-    if not name.endswith(CLONE_SUFFIX):
+    if not CLONE_NAME.search(name):
         raise RuntimeError(f"Backtest steps only run against a clone, not {name}")
 
 
@@ -302,9 +380,7 @@ def score(data, as_of, end=None):
     from history.models import Listen
 
     end = end or datetime.now(UTC)
-    days = defaultdict(set)
-    for track_id, played_at in Listen.objects.filter(played_at__gte=as_of, played_at__lt=end).values_list("track_id", "played_at"):
-        days[track_id].add(played_at.date())
+    days = play_days(as_of, end)
     played = set(days)
     came_back = {t for t, d in days.items() if len(d) >= 2}
     familiar, recent, analysed = set(data["familiar"]), set(data["recent"]), set(data["analysed"])
@@ -352,6 +428,146 @@ def score(data, as_of, end=None):
     if any(l["suggestions"] for l in data["lists"]):
         report["suggestions"] = measure([t for l in data["lists"] for t in l["suggestions"]])
     return report
+
+
+def play_days(as_of, end):
+    """{track id: the days it was played} for plays from the cutoff to `end`."""
+    from history.models import Listen
+
+    days = defaultdict(set)
+    for track_id, played_at in Listen.objects.filter(played_at__gte=as_of, played_at__lt=end).values_list("track_id", "played_at"):
+        days[track_id].add(played_at.date())
+    return days
+
+
+# --- across cutoffs ----------------------------------------------------------------------------------------------
+
+# What the summary reports for each variant, and where it sits in a report.
+HEADLINE = {
+    "played %": ("all lists", "played %"),
+    "came back %": ("all lists", "came back %"),
+    "new played %": ("all lists", "new played %"),
+    "new in mixes %": ("by kind", "mix", "new played %"),
+    "lift": ("all lists", "lift"),
+    "lift vs recent": ("all lists", "lift vs recent"),
+    "discoveries in a list %": ("discoveries in a list %",),
+    "plays covered %": ("plays covered by a list %",),
+}
+COMPARED = ["played %", "came back %", "new played %", "new in mixes %", "lift vs recent", "discoveries in a list %", "plays covered %"]
+RESAMPLES = 2000
+
+
+def headline(report, name):
+    value = report
+    for key in HEADLINE[name]:
+        value = (value or {}).get(key)
+    return value
+
+
+def summarise(reports, variants, folders, dates, horizon, resamples=RESAMPLES, seed=0):
+    """Each variant's mean and spread across cutoffs, and each against the default (see `compare`)."""
+    from history.models import Listen
+
+    cutoffs = [r["default"]["as of"] for r in reports]
+    summary = {"horizon days": horizon, "as of": cutoffs, "plays scored": [r["default"]["window"]["plays"] for r in reports], "variants": {}}
+    for variant in variants:
+        rows = {}
+        for name in HEADLINE:
+            values = [headline(r[variant], name) for r in reports]
+            known = [v for v in values if v is not None]
+            rows[name] = {"by cutoff": values, "mean": round(float(np.mean(known)), 2) if known else None,
+                          "sd": round(float(np.std(known, ddof=1)), 2) if len(known) > 1 else None,
+                          "min": min(known, default=None), "max": max(known, default=None)}
+        summary["variants"][variant] = rows
+
+    rng = np.random.default_rng(seed)
+    tables = []
+    for folder, as_of, report in zip(folders, dates, reports):
+        end = min(as_of + timedelta(days=horizon), datetime.now(UTC))
+        lists = {v: json.loads((folder / f"lists-{v}.json").read_text()) for v in variants}
+        days = play_days(as_of, end)
+        plays = defaultdict(int)
+        for track_id in Listen.objects.filter(played_at__gte=as_of, played_at__lt=end).values_list("track_id", flat=True):
+            plays[track_id] += 1
+        first = dict(Listen.objects.filter(track__in=list(days)).values("track").annotate(first=Min("played_at")).values_list("track", "first"))
+        tables.append(track_table(lists, days, plays, first, as_of, report["default"]["chance rates %"]))
+    summary["against default"] = {v: compare(tables, v, rng, resamples) for v in variants if v != "default"}
+    return summary
+
+
+def track_table(lists, days, plays, first, as_of, chance):
+    """One row per track that's in any variant's lists or was played in the window, with what the bootstrap needs:
+    its outcome columns, and per variant whether it was listed, listed in a context mix, or shown at all."""
+    some = next(iter(lists.values()))
+    familiar, recent, analysed = set(some["familiar"]), set(some["recent"]), set(some["analysed"])
+    universe = set(days)
+    for data in lists.values():
+        universe |= {t for l in data["lists"] for t in l["tracks"] + l["suggestions"]}
+    ids = sorted(universe)
+    col = lambda pick: np.array([pick(t) for t in ids], dtype=float)
+    played = col(lambda t: t in days)
+    table = {
+        "played": played, "came back": col(lambda t: len(days.get(t, ())) >= 2), "new": col(lambda t: t not in familiar),
+        "plays": col(lambda t: plays.get(t, 0)),
+        "discovered": col(lambda t: t in days and t in analysed and first[t] >= as_of),
+        "expected": col(lambda t: (chance["recent"] if t in familiar else chance["new"]) / 100),
+        "variants": {},
+    }
+    for variant, data in lists.items():
+        listed = {t for l in data["lists"] for t in l["tracks"]}
+        mixed = {t for l in data["lists"] if l["kind"] == "mix" for t in l["tracks"]}
+        shown = listed | {t for l in data["lists"] for t in l["suggestions"]}
+        table["variants"][variant] = {"listed": col(lambda t: t in listed), "mixed": col(lambda t: t in mixed), "shown": col(lambda t: t in shown)}
+    return table
+
+
+def metrics(table, variant, weights):
+    """The compared measures for one variant, under each row of bootstrap weights (one weight per track)."""
+    v = table["variants"][variant]
+    listed, mixed, shown, new = v["listed"], v["mixed"], v["shown"], table["new"]
+    played, back = table["played"], table["came back"]
+    sums = lambda column: weights @ column
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return {
+            "played %": 100 * sums(listed * played) / sums(listed),
+            "came back %": 100 * sums(listed * back) / sums(listed),
+            "new played %": 100 * sums(listed * new * played) / sums(listed * new),
+            "new in mixes %": 100 * sums(mixed * new * played) / sums(mixed * new),
+            "lift vs recent": sums(listed * played) / sums(listed * table["expected"]),
+            "discoveries in a list %": 100 * sums(shown * table["discovered"]) / sums(table["discovered"]),
+            "plays covered %": 100 * sums(shown * table["plays"]) / sums(table["plays"]),
+        }
+
+
+def compare(tables, variant, rng, resamples=RESAMPLES):
+    """A paired bootstrap of `variant` minus the default over tracks, at each cutoff and averaged across them.
+
+    Each resample draws every track a Poisson(1) number of times (the usual stand-in for drawing tracks with
+    replacement) and scores both variants on that same draw, so tracks the two share move together. Cutoffs are
+    resampled independently, and the averaged difference is real when its 95% interval leaves out zero."""
+    diffs = defaultdict(list)
+    for table in tables:
+        n = len(table["played"])
+        weights = np.vstack([np.ones(n), rng.poisson(1.0, size=(resamples, n))])  # row 0: the data as it is
+        ours, theirs = metrics(table, variant, weights), metrics(table, "default", weights)
+        for name in COMPARED:
+            diffs[name].append(ours[name] - theirs[name])
+    result = {}
+    for name in COMPARED:
+        each = np.vstack(diffs[name])  # cutoffs x (1 + resamples)
+        if np.isnan(each[:, 0]).any():
+            result[name] = {"difference": None, "verdict": "no data"}
+            continue
+        pooled = each.mean(axis=0)
+        low, high = np.nanpercentile(pooled[1:], [2.5, 97.5])
+        point = float(pooled[0])
+        agree = int((np.sign(each[:, 0]) == np.sign(point)).sum()) if point else 0
+        verdict = "better" if low > 0 else "worse" if high < 0 else "noise"
+        result[name] = {
+            "difference": round(point, 2), "95% interval": [round(float(low), 2), round(float(high), 2)], "verdict": verdict,
+            "by cutoff": [round(float(d), 2) for d in each[:, 0]], "cutoffs agreeing": f"{agree}/{len(tables)}",
+        }
+    return result
 
 
 def pct(part, whole):

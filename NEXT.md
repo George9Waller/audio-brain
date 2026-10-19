@@ -47,6 +47,25 @@ round") is in a14b5c2.
   - The new scorer helps new tracks and costs familiar hits.
   - The taste signal does the opposite.
   - One window is too noisy to choose on: played rates are about ±0.8 points and new-track rates about ±1.6. So the taste weight in `retrieve.SIGNAL_WEIGHTS` stays 0.
+- **Multi-cutoff backtest (B1):** `manage.py backtest --cutoffs 42,84,126,168 --variant taste --reuse [--jobs 2]`.
+  - One clone per cutoff (`audio_brain_backtest_<yyyymmdd>`, about 1.2 GB each; `--reuse` keeps them, `dropdb` frees them), every cutoff scored on the 42 days after it (`--horizon`).
+  - Reports each variant's mean and spread across cutoffs, and a paired bootstrap over tracks against `default` (95% interval of the mean difference; "real" when it leaves out zero, with how many cutoffs agree). Saved to `server/models/backtests/multi/`.
+  - A cold run of four cutoffs of two variants took about 32 minutes with `--jobs 2` (cloning by dump and restore is about 3.5 minutes each, as the live database is usually in use); with `--reuse`, each further variant is a few minutes per cutoff.
+  - First result, `taste` (weight 1.0) against `default`, cutoffs 6 Sep, 26 Jul, 14 Jun and 3 May (mean ± sd across cutoffs):
+
+    | Measure | default | taste | taste − default (95% interval) | Verdict |
+    |---|---|---|---|---|
+    | Played % | 9.65 ± 2.63 | 9.68 ± 2.53 | +0.03 (−0.50 to 0.57) | noise |
+    | Came back % | 4.17 ± 1.00 | 4.12 ± 1.11 | −0.02 (−0.34 to 0.31) | noise |
+    | New played % | 13.6 ± 10.5 | 10.2 ± 6.9 | −3.36 (−5.39 to −1.44), 3/4 cutoffs | **worse** |
+    | New in mixes % | 17.0 ± 13.3 | 12.0 ± 8.2 | −5.05 (−7.59 to −2.65), 3/4 cutoffs | **worse** |
+    | Lift vs recent | 0.68 ± 0.27 | 0.67 ± 0.23 | +0.00 (−0.04 to 0.04) | noise |
+    | Discoveries in a list % | 13.1 ± 3.8 | 12.6 ± 5.8 | −0.52 (−2.99 to 2.01) | noise |
+    | Plays covered % | 21.4 ± 2.6 | 20.3 ± 2.8 | −1.14 (−2.80 to 0.47) | noise |
+
+    - The taste signal buys nothing on familiar tracks and costs new-to-you hits, so its weight stays 0.
+    - **The scorer wasn't in use at any of the four cutoffs:** its test AUC (0.667–0.694) didn't beat "artist only" (0.665–0.693) by `scorer.MIN_GAIN` (0.02), so `default` here is the hand-weighted score. The 6 Sep clone of the first round passed (0.715). Whether the new scorer stays in lists is still open, and close: C1 should look at it.
+    - The 3 May window is unusual (new played 28.7% against 6–13% elsewhere, with 2,311 plays), which is most of the spread in the new-track measures.
 
 ### Tidal's own recommendations (B3, 18 Oct)
 

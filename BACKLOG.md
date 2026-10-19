@@ -286,7 +286,7 @@ follow-up agent task implements whichever route works.
 | Task | Wave | State |
 |---|---|---|
 | A0 commit | 0 | done (a14b5c2) |
-| B1 multi-cutoff backtest | 1 | open |
+| B1 multi-cutoff backtest | 1 | done (branch b1-multi-cutoff-backtest): taste is noise on played, worse on new tracks; see NEXT.md |
 | B2 set tracklists you provide | 1 | open |
 | B3 Tidal recommendations | 1 | built: readable via official API; daily `tidal_recommendations` job into `ExternalMix`; first snapshot OK on scratch DB; a week of snapshots accrues after merge + migrate (see NEXT.md) |
 | B4 ListenBrainz baseline | 1 | skipped for now |
