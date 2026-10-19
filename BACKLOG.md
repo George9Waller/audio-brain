@@ -290,7 +290,7 @@ follow-up agent task implements whichever route works.
 | B2 set tracklists you provide | 1 | open |
 | B3 Tidal recommendations | 1 | open |
 | B4 ListenBrainz baseline | 1 | skipped for now |
-| B5 production settings and fast rebuild | 1 | open |
+| B5 production settings and fast rebuild | 1 | done (branch b5-prod-fast-rebuild): rebuild 612–705 s → 245–260 s; deploy/ ready to install (you) |
 | B6 MusicBrainz 503s and backfill | 1 | open |
 | C1 new versus familiar ranking | 2 | open |
 | C2 taste vectors beyond retrieval | 2 | open |

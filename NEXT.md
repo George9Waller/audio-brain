@@ -99,6 +99,9 @@ Built in this round:
 - **Emulator:** AVD `Pixel_10_Pro`. Set the app up with the link `audiobrain://connect?url=http://10.0.2.2:8000&token=devtest123`.
 - **Build:** `cd android && JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:assembleDebug`
 - **Tests:** `cd server && uv run python manage.py test api` (7 tests) and `uv run python manage.py eval_prompts`.
+- **Settings (B5):** `DEBUG` is now off unless `.env` or the command line says `DEBUG=1`; add it to the dev server command above if you want Django's debug pages. `SECRET_KEY` comes from `.env`, or is generated into `server/.secret_key` (gitignored) on first start. Every key is in `server/.env.example`.
+- **On the home box (B5):** gunicorn and the `run_jobs` worker (schedules on) under launchd; install steps, `api_token` and Tailscale are in `deploy/README.md`. Not installed yet **(you)**.
+- **Mixes rebuild (B5):** builds on `MIXES_THREADS` threads (default 6). Its log now has a line per list (tracks, Tidal lookups, time) and suggestion progress.
 
 ## Known issues
 
@@ -106,8 +109,9 @@ Built in this round:
 - **The context ranker** was down to 24.6% top-3 after contexts became sound-led; the pairwise rewrite brings it to 34.6% (see Modelling round).
 - **Fresh has only 15 tracks:** just 30 of 93 releases have analysed tracks so far. The enrichment backfill is still running.
 - **List edits, sync, Explore, Ask and suggestions are online-only.** Only verdicts and release decisions queue offline.
-- **The full Mixes rebuild takes about 25 minutes:** suggestions and Tidal lookups run one at a time.
-- **Settings aren't production-ready:** `SECRET_KEY` is hard-coded, `DEBUG=True`, and it runs on `runserver`.
+- ~~**The full Mixes rebuild takes about 25 minutes**~~ (B5): on a copy of the live database it now takes about 4–4.5 minutes (245–260 s), down from 11–12 minutes (612–705 s), with the same lists. What's left is Tidal: lookups for tracks without a Tidal ID are held to the client's 2 requests a second, and the lists have to be shaped one after another.
+- ~~**Settings aren't production-ready**~~ (B5): `SECRET_KEY` and `DEBUG` come from `.env`, and `deploy/` has gunicorn and launchd. Installing it on the home box is still to do **(you)**.
+- **Context mixes vary a little from build to build, even on the same data** (found in B5): `retrieve.add_graph_neighbours` takes 400 of 1,000–2,800 graph neighbours with no `ORDER BY`, so which 400 depends on Postgres's plan and the rows a build's Tidal lookups add; the scorer's recency features also move with the clock. An `order_by` there would make builds repeatable, but it changes the lists, so it needs a backtest.
 - **On the app side, not yet tested:** Explore entry points on screen, the JM21 and M23 themselves (phase 0 device check), map performance on the DAPs, pinch-zoom feel.
 - **Synced playlists are created UNLISTED in Tidal.** Check they show up in your Tidal library.
 
