@@ -25,15 +25,21 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         if (!graph.settings.current().configured) return Result.success()
         val dao = graph.db.feedback()
         val queue = graph.db.queue()
+        val ratings = graph.db.ratings()
+        val comparisons = graph.db.comparisons()
         repeat(MAX_BATCHES) {
             val batch = dao.pending(BATCH)
             val decisions = queue.pending(BATCH)
-            if (batch.isEmpty() && decisions.isEmpty()) return Result.success()
+            val ratingBatch = ratings.pending(BATCH)
+            val comparisonBatch = comparisons.pending(BATCH)
+            if (batch.isEmpty() && decisions.isEmpty() && ratingBatch.isEmpty() && comparisonBatch.isEmpty()) return Result.success()
             val request = SyncRequest(
                 feedback = batch.map {
                     FeedbackItem(it.clientId, it.verdict, it.ref, where = it.where, contextId = it.contextId, givenAt = Instant.ofEpochMilli(it.givenAt).toString())
                 },
                 queue = decisions.map { QueueItem(it.clientId, it.releaseId, it.state, Instant.ofEpochMilli(it.givenAt).toString()) },
+                ratings = ratingBatch.map { MixRatingItem(it.clientId, it.key, it.rating, it.note, Instant.ofEpochMilli(it.givenAt).toString()) },
+                comparisons = comparisonBatch.map { ComparisonItem(it.clientId, TrackRef(id = it.leftId), TrackRef(id = it.rightId), it.preferred, it.key, Instant.ofEpochMilli(it.givenAt).toString()) },
             )
             val response = try {
                 graph.api.sync(request)
@@ -46,8 +52,15 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 }
             }
             val queued = decisions.map { it.clientId }.toSet()
-            response.accepted.forEach { if (it.clientId in queued) queue.markSent(it.clientId) else dao.markSent(it.clientId, it.trackId) }
-            response.rejected.forEach { if (it.clientId in queued) queue.delete(it.clientId) else dao.markRejected(it.clientId, it.reason) }
+            val rated = ratingBatch.map { it.clientId }.toSet()
+            val compared = comparisonBatch.map { it.clientId }.toSet()
+            response.accepted.forEach { when {
+                it.clientId in queued -> queue.markSent(it.clientId)
+                it.clientId in rated -> ratings.markSent(it.clientId)
+                it.clientId in compared -> comparisons.markSent(it.clientId)
+                else -> dao.markSent(it.clientId, it.trackId)
+            } }
+            response.rejected.forEach { if (it.clientId in queued) queue.delete(it.clientId) else if (it.clientId !in rated && it.clientId !in compared) dao.markRejected(it.clientId, it.reason) }
         }
         return Result.success()
     }
