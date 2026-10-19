@@ -97,9 +97,6 @@ def evaluate_sessions(sequences, epochs=8, history=12, batch_size=512):
         encoded = [vocab[t] for t in sequence if t in vocab]
         for i in range(1, len(encoded)):
             test_x.append([0] * max(0, history - i) + encoded[max(0, i-history):i])
-    with torch.no_grad():
-        predicted = model(torch.tensor(test_x)).argsort(descending=True)[:, :10]
-    transformer_hits = sum(target in {inverse.get(int(x)) for x in row.tolist()} for target, row in zip(targets, predicted))
     transitions = {}
     for sequence in train_sequences:
         encoded = [vocab[t] for t in sequence if t in vocab]
@@ -110,8 +107,30 @@ def evaluate_sessions(sequences, epochs=8, history=12, batch_size=512):
         last = next((token for token in reversed(row) if token), 0)
         choices = [token for token, _ in transitions.get(last, Counter()).most_common(10)]
         markov_hits += target in choices
+    # Blend the neural logits with empirical transition evidence.  This tests
+    # whether the Transformer adds information beyond the very strong local
+    # transition baseline, rather than merely beating popularity.
+    hybrid_hits = {0.1: 0, 0.3: 0, 1.0: 0, 3.0: 0}
+    transformer_hits = 0
+    model.eval()
+    with torch.no_grad():
+        for start in range(0, len(test_x), batch_size):
+            rows = test_x[start:start + batch_size]
+            logits = model(torch.tensor(rows))
+            for offset, (row, target) in enumerate(zip(rows, holdout_rows[start:start + batch_size])):
+                top = logits[offset].topk(10).indices.tolist()
+                transformer_hits += target in top
+                last = next((token for token in reversed(row) if token), 0)
+                transition = transitions.get(last, Counter())
+                if not transition:
+                    continue
+                boost = torch.zeros_like(logits[offset])
+                for token, count in transition.items(): boost[token] = np.log1p(count)
+                for alpha in hybrid_hits:
+                    hybrid_hits[alpha] += target in (logits[offset] + alpha * boost).topk(10).indices.tolist()
     report["holdout transitions"] = len(targets)
     report["holdout transformer recall@10"] = round(transformer_hits / len(targets), 3)
     report["Markov recall@10"] = round(markov_hits / len(targets), 3)
+    report["hybrid recall@10"] = {str(alpha): round(hits / len(targets), 3) for alpha, hits in hybrid_hits.items()}
     report["popularity recall@10"] = round(sum(t in popular for t in targets) / len(targets), 3)
     return report
