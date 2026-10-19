@@ -83,6 +83,22 @@ fun ListDetail(vm: AppViewModel, key: String, padding: PaddingValues, onMenu: (L
                 if (list.sync && url != null) AbButton("Open in Tidal", { openUrl(context, url) }, kind = ButtonKind.Ghost, icon = AbIcons.Open)
                 if (list.kind in setOf("radio", "explore", "interest")) AbButton("Add 20 more", { vm.extendRadio(list.key) }, kind = ButtonKind.Ghost)
             }
+            if (list.tracks.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(Ab.space.xs)) {
+                    AbText("How was this list?", style = Ab.type.caption, color = Ab.colors.textMuted)
+                    Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.xs)) {
+                        (1..5).forEach { rating -> AbButton("$rating", { vm.rateMix(list.key, rating) }, kind = ButtonKind.Ghost) }
+                    }
+                    if (list.tracks.size >= 2) {
+                        val left = list.tracks[0]; val right = list.tracks[1]
+                        AbText("Which fits better?", style = Ab.type.caption, color = Ab.colors.textMuted)
+                        Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.xs)) {
+                            AbButton(left.title, { vm.compareInMix(list.key, left, right, "left") }, kind = ButtonKind.Quiet)
+                            AbButton(right.title, { vm.compareInMix(list.key, left, right, "right") }, kind = ButtonKind.Quiet)
+                        }
+                    }
+                }
+            }
         } }
         // in a playlist, swiping left takes the track out of the list (it isn't a No: long-press for that)
         val editable = list.section == "lists"

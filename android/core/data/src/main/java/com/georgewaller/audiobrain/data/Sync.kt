@@ -60,7 +60,14 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 it.clientId in compared -> comparisons.markSent(it.clientId)
                 else -> dao.markSent(it.clientId, it.trackId)
             } }
-            response.rejected.forEach { if (it.clientId in queued) queue.delete(it.clientId) else if (it.clientId !in rated && it.clientId !in compared) dao.markRejected(it.clientId, it.reason) }
+            response.rejected.forEach {
+                when {
+                    it.clientId in queued -> queue.delete(it.clientId)
+                    it.clientId in rated -> ratings.delete(it.clientId)
+                    it.clientId in compared -> comparisons.delete(it.clientId)
+                    else -> dao.markRejected(it.clientId, it.reason)
+                }
+            }
         }
         return Result.success()
     }

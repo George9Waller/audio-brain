@@ -254,6 +254,19 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
         }
     }
 
+    /** Small, high-signal judgements for the list ranker.  The repository queues these first, so this is safe offline. */
+    fun rateMix(key: String, rating: Int) = viewModelScope.launch {
+        graph.feedback.rateMix(key, rating)
+        message("Rated $rating out of 5; it will help shape future lists")
+    }
+
+    fun compareInMix(key: String, left: ListItem, right: ListItem, preferred: String) = viewModelScope.launch {
+        val a = left.trackId ?: return@launch
+        val b = right.trackId ?: return@launch
+        graph.feedback.compare(key, a, b, preferred)
+        message("Saved your preference for this mix")
+    }
+
     suspend fun suggestionsFor(key: String): List<ListItem> = graph.api.suggestions(key)
 
     // Radio

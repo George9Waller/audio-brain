@@ -127,6 +127,7 @@ interface RatingDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(item: MixRatingEntity)
     @Query("SELECT * FROM mix_rating WHERE sent = 0 ORDER BY givenAt LIMIT :limit") suspend fun pending(limit: Int): List<MixRatingEntity>
     @Query("UPDATE mix_rating SET sent = 1 WHERE clientId = :clientId") suspend fun markSent(clientId: String)
+    @Query("DELETE FROM mix_rating WHERE clientId = :clientId") suspend fun delete(clientId: String)
 }
 
 @Dao
@@ -134,6 +135,7 @@ interface ComparisonDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(item: ComparisonEntity)
     @Query("SELECT * FROM comparison WHERE sent = 0 ORDER BY givenAt LIMIT :limit") suspend fun pending(limit: Int): List<ComparisonEntity>
     @Query("UPDATE comparison SET sent = 1 WHERE clientId = :clientId") suspend fun markSent(clientId: String)
+    @Query("DELETE FROM comparison WHERE clientId = :clientId") suspend fun delete(clientId: String)
 }
 
 /** The latest verdict per track key, for colouring rows anywhere in the app. */
