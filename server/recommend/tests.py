@@ -147,6 +147,19 @@ class BacktestScoreTests(TestCase):
 
 
 class ModelHelperTests(TestCase):
+    def test_edges_excludes_any_track_already_in_a_context(self):
+        from recommend import edges
+        context = Context.objects.create(name="A", centroid=[0.0] * 1280)
+        assigned, outside = make_tracks(2)
+        from recommend.models import ContextTrack
+        ContextTrack.objects.create(context=context, track=assigned, distance=0)
+        picks = [
+            __import__("recommend.retrieve", fromlist=["Pick"]).Pick(audio=None, score=1, signals={}, novel=True, track=assigned),
+            __import__("recommend.retrieve", fromlist=["Pick"]).Pick(audio=None, score=1, signals={}, novel=True, track=outside),
+        ]
+        with mock.patch("recommend.edges.recommend", return_value=picks):
+            self.assertEqual([p.track for p in edges.edges([context])], [outside])
+
     def test_familiar_ranking_keeps_new_tracks_in_model_order(self):
         from recommend.retrieve import Pick, rank_familiar
 

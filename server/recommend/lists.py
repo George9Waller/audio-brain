@@ -101,7 +101,8 @@ def build_lists(mixes=12, push=None):
     # Every list's picks are worked out at once, on the pool's threads. They're shaped below in the same order as
     # before, since which tracks a context mix may use depends on the mixes before it; that part waits on Tidal.
     sources = {f"context:{c.pk}": pool.submit(context_mix, c, OVERFETCH) for c in contexts}
-    sources.update(fresh=pool.submit(fresh_picks, OVERFETCH), rediscovery=pool.submit(rediscovery, OVERFETCH), new=pool.submit(new_to_you, active), repeat=pool.submit(on_repeat))
+    from recommend.edges import edges
+    sources.update(fresh=pool.submit(fresh_picks, OVERFETCH), rediscovery=pool.submit(rediscovery, OVERFETCH), new=pool.submit(new_to_you, active), edges=pool.submit(edges, active), repeat=pool.submit(on_repeat))
     # What used to come after those lists still comes after their picks, as it changes what they'd see: a new
     # interest's list can bring the artist in from Tidal (new tracks and albums), and the Discover lists and the
     # suggestions follow it. They no longer wait for the lists to be shaped, so they overlap the Tidal lookups.
@@ -114,6 +115,7 @@ def build_lists(mixes=12, push=None):
     track_mix("fresh", "fresh", "Fresh", "New releases from artists, remixers and labels you play, best fit first", sources["fresh"].result(), exclusive=False)
     track_mix("rediscovery", "rediscovery", "Rediscovery", "Tracks you were really into once and haven't played for six months or more", sources["rediscovery"].result(), exclusive=False)
     track_mix("new", "new", "New to you", "Tracks you've never played that fit the contexts you're into now, a few from each", sources["new"].result(), exclusive=False)
+    track_mix("edges", "edges", "Edges", "Tracks just outside your current taste contexts: nearby in sound and listening, but not yet part of a cluster", sources["edges"].result(), exclusive=False)
     track_mix("repeat", "repeat", "On repeat", "What you've come back to most in the last six weeks", sources["repeat"].result(), exclusive=False)
     for mix in interests.result():  # each new interest gets an Explore list of its own
         built.append(mix)
@@ -166,7 +168,7 @@ def build_lists(mixes=12, push=None):
     return f"{sum(m.section == Mix.LISTS for m in built)} mixes ({tracks} tracks, {pushed} synced to Tidal), {sum(m.section == Mix.DISCOVER for m in built)} discovery lists"
 
 
-ORDER = ["summary", "interest", "explore", "set", "mix", "fresh", "new", "repeat", "rediscovery", "era", "year", "releases", "artists", "albums", "sets", "revisit"]
+ORDER = ["summary", "interest", "explore", "set", "mix", "fresh", "new", "edges", "repeat", "rediscovery", "era", "year", "releases", "artists", "albums", "sets", "revisit"]
 LIST_LENGTH = 50
 OVERFETCH = 90  # picks asked for, so a list still fills after dropping tracks Tidal can't play or other mixes have
 
