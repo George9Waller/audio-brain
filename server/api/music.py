@@ -221,6 +221,15 @@ class ContextMoveIn(Schema):
     context_id: int
 
 
+class ContextMergeIn(Schema):
+    source_id: int
+
+
+class ContextSplitIn(Schema):
+    track_ids: list[int]
+    name: str
+
+
 @router.post("/contexts/{int:context_id}/rename", response=ContextOut)
 def rename_context(request, context_id: int, body: ContextRenameIn):
     context = get_object_or_404(Context, pk=context_id, active=True)
@@ -240,6 +249,45 @@ def move_to_context(request, body: ContextMoveIn):
     ContextMembershipOverride.objects.update_or_create(track=track, defaults={"context": context})
     ContextTrack.objects.update_or_create(track=track, defaults={"context": context, "distance": 0})
     return context_out(context, context_playlists())
+
+
+@router.post("/contexts/{int:context_id}/merge", response=ContextOut)
+def merge_context(request, context_id: int, body: ContextMergeIn):
+    """Fold one context into another, preserving every moved member as an intent."""
+    target = get_object_or_404(Context, pk=context_id, active=True)
+    source = get_object_or_404(Context, pk=body.source_id, active=True)
+    if target == source:
+        raise HttpError(400, "Choose two different contexts")
+    tracks = list(ContextTrack.objects.filter(context=source).values_list("track_id", flat=True))
+    ContextMembershipOverride.objects.filter(context=source).update(context=target)
+    for track_id in tracks:
+        ContextMembershipOverride.objects.update_or_create(track_id=track_id, defaults={"context": target})
+    ContextTrack.objects.filter(context=source).update(context=target, distance=0)
+    source.active = False
+    source.save(update_fields=["active", "updated_at"])
+    return context_out(target, context_playlists())
+
+
+@router.post("/contexts/{int:context_id}/split", response=ContextOut)
+def split_context(request, context_id: int, body: ContextSplitIn):
+    """Make a named child context from selected tracks; its membership survives reclustering."""
+    source = get_object_or_404(Context, pk=context_id, active=True)
+    ids = list(Track.objects.filter(pk__in=body.track_ids).values_list("pk", flat=True))
+    if not ids:
+        raise HttpError(400, "Choose at least one track")
+    name = body.name.strip()
+    if not name:
+        raise HttpError(400, "Give the new context a name")
+    child = Context.objects.create(
+        name=name[:100], description=source.description, named_by_user=True, family=source.family,
+        centroid=source.centroid, novelty_share=source.novelty_share,
+    )
+    for track_id in ids:
+        ContextMembershipOverride.objects.update_or_create(track_id=track_id, defaults={"context": child})
+        ContextTrack.objects.update_or_create(track_id=track_id, defaults={"context": child, "distance": 0})
+    child.size = ContextTrack.objects.filter(context=child).count()
+    child.save(update_fields=["size", "updated_at"])
+    return context_out(child, context_playlists())
 
 
 @router.get("/tracks/{int:track_id}", response=TrackOut)
