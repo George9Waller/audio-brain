@@ -148,5 +148,7 @@ def picks(contexts):
         score = probabilities.get(row.track_id, fit)
         row.score = round(float(score), 5)
         row.save(update_fields=["score"])
-        out.append(Pick(audio=audio, score=float(score), signals={"llm": 1.0, "context": fit}, novel=True, reason=f"Discovery lead: {row.rationale}"))
+        pick = Pick(audio=audio, score=float(score), signals={"llm": 1.0, "context": fit}, novel=True, reason=f"Discovery lead: {row.rationale}")
+        pick.source = "llm"
+        out.append(pick)
     return sorted(out, key=lambda p: -p.score)

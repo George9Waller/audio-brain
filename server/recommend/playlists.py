@@ -68,7 +68,10 @@ def log_recommendations(picks, source, playlist=None, context=None, request=""):
                 track=pick.track,
                 context=context,
                 playlist=playlist,
-                source=source,
+                # A mixed list can carry a small number of verified research
+                # leads. Preserve that provenance so their outcomes can be
+                # compared with ordinary retrieval in future backtests.
+                source=getattr(pick, "source", source),
                 request=request[:500],
                 rank=rank,
                 score=pick.score,
