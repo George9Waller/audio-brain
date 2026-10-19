@@ -292,14 +292,14 @@ follow-up agent task implements whichever route works.
 | B4 ListenBrainz baseline | 1 | skipped for now |
 | B5 production settings and fast rebuild | 1 | done (branch b5-prod-fast-rebuild): rebuild 612–705 s → 245–260 s; deploy/ ready to install (you) |
 | B6 MusicBrainz 503s and backfill | 1 | fixed on b6-musicbrainz-backfill; backfill at 67% profiled (49% found), still running |
-| C1 new versus familiar ranking | 2 | open |
-| C2 taste vectors beyond retrieval | 2 | open |
-| C3 score outside recommendations | 2 | open |
-| C4 blind interleaved playlist | 2 | open |
+| C1 new versus familiar ranking | 2 | done: `familiar-slots` wins across all B1 cutoffs; enabled |
+| C2 taste vectors beyond retrieval | 2 | variants implemented (`taste-contexts`, `taste-explore`, `taste-sequence`); awaiting B1 verdict |
+| C3 score outside recommendations | 2 | blocked on B3 ExternalMix snapshots |
+| C4 blind interleaved playlist | 2 | blocked on B3 ExternalMix snapshots |
 | C5 taste model variants | 2 | open |
 | C6 newer audio embeddings | 2 | open |
 | C7 train on labels | 2 | waiting for labels |
-| C8 list-shaping sweeps | 2 | open |
+| C8 list-shaping sweeps | 2 | sweep variants implemented; awaiting B1 multi-cutoff verdict |
 | D1 LLM discovery | 3 | open |
 | D2 Explore by genre or place, and Edges | 3 | open |
 | D3 ratings and comparisons | 3 | open |

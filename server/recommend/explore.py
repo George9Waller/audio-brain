@@ -30,6 +30,7 @@ EXPLORES_KEPT = 8
 NEW_INTEREST_PLAYS = 10
 NEW_INTEREST_DAYS = 14
 NEW_INTEREST_BEFORE = 5  # plays in the year before the fortnight, at most, for it to count as new
+TASTE_SEEDS = False  # experimental: Explore can be retrieved in learned taste space
 
 
 def find_artist(name):
@@ -100,12 +101,13 @@ def explore_picks(artist, length=LENGTH):
         return []
     picks = [Pick(audio=a, score=1.0, signals={}, novel=not a.track.intent_plays, reason=f"By {artist.name}") for a in own[:OWN]]
     seeds = own[:OWN]
-    near = recommend(length=length, seeds=seeds, novelty_share=0.3)
+    taste_weight = 1.0 if TASTE_SEEDS else None
+    near = recommend(length=length, seeds=seeds, novelty_share=0.3, taste_weight=taste_weight)
     for p in near:
         p.reason = f"Sounds like {artist.name}"
     similar_names = list(SimilarArtist.objects.filter(artist=artist).order_by("-match").values_list("name", flat=True)[:25])
     similar_seeds = list(AudioFeatures.objects.filter(track__artist__name__in=similar_names).select_related("track__artist")[:40])
-    further = recommend(length=length, seeds=similar_seeds, filters=Filters(familiarity="new"), novelty_share=1.0) if similar_seeds else []
+    further = recommend(length=length, seeds=similar_seeds, filters=Filters(familiarity="new"), novelty_share=1.0, taste_weight=taste_weight) if similar_seeds else []
     for p in further:
         p.reason = f"Further out: near {artist.name}'s similar artists"
     seen = {p.track.pk for p in picks}

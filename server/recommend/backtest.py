@@ -75,6 +75,21 @@ VARIANTS = {
     "taste": [("recommend.retrieve.SIGNAL_WEIGHTS", {**WEIGHTS, "taste": 1.0})],
     "taste-strong": [("recommend.retrieve.SIGNAL_WEIGHTS", {**WEIGHTS, "taste": 2.0})],
     "taste-replaces-session": [("recommend.retrieve.SIGNAL_WEIGHTS", {**WEIGHTS, "taste": 1.0, "session": 0.0, "together": 0.0})],
+    # Wave 2 experiments.  None changes live defaults; each is deliberately
+    # isolated so the multi-cutoff report can attribute an outcome.
+    "familiar-slots": [("recommend.retrieve.FAMILIAR_RANKING", True)],
+    "taste-contexts": [("recommend.contexts.SESSION_COMPONENTS_SOURCE", "taste")],
+    "taste-explore": [("recommend.explore.TASTE_SEEDS", True)],
+    "taste-sequence": [("recommend.editorial.TASTE_FOLLOWS", True)],
+    "novelty-20": [("recommend.mixes.NOVELTY_SHARE", 0.2)],
+    "novelty-40": [("recommend.mixes.NOVELTY_SHARE", 0.4)],
+    "coherence-tight": [("recommend.editorial.COHERENCE", -0.25)],
+    "coherence-loose": [("recommend.editorial.COHERENCE", -0.75)],
+    "artist-cap-3": [("recommend.retrieve.MAX_PER_ARTIST", 3)],
+    "artist-cap-5": [("recommend.retrieve.MAX_PER_ARTIST", 5)],
+    "resurface-10": [("recommend.mixes.RESURFACE_SHARE", 0.1)],
+    "dormant-2": [("recommend.mixes.DORMANT_MIXES", 2)],
+    "dormant-6": [("recommend.mixes.DORMANT_MIXES", 6)],
 }
 
 
@@ -355,6 +370,11 @@ def build(as_of, folder, variant="default", suggestions=False):
             patches.append(("recommend.actions.suggestions", lambda *a, **k: []))
         for target, value in patches + VARIANTS[variant]:
             stack.enter_context(mock.patch(target, value))
+        # Contexts are normally prepared once per cutoff.  This variant changes
+        # their inputs, so rebuild them inside its isolated build instead.
+        from recommend import contexts
+        if contexts.SESSION_COMPONENTS_SOURCE != "session":
+            contexts.build_contexts()
         summary = build_lists(push=False)
 
     lists = [{"key": m.key, "kind": m.kind, "title": m.title,

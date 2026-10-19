@@ -49,6 +49,7 @@ ACTIVITY_HALF_LIFE_DAYS = 365  # a play a year ago counts half as much towards a
 DISTINCT = 0.95  # siblings whose centroids are more similar than this are merged
 ERA_YEARS = 4  # years apart that weigh as much as 20 BPM apart in clustering: when you played it matters, but less than how it sounds
 SESSION_WEIGHT = 0.15  # how much playing tracks together pulls them into one context, against sound
+SESSION_COMPONENTS_SOURCE = "session"  # a backtest variant can use the learned taste space instead
 ARTIST_WEIGHT = 0.5  # how much who made it (language, country, decade, genres) counts, against sound
 PAST_ERA = 18  # months: a context whose tracks all peaked longer ago than this is from a past era
 MIN_CONTEXTS = 8
@@ -115,7 +116,7 @@ def cluster(audio, weights, activity, peaks):
         np.array([(p.year + p.month / 12 - 2020) / ERA_YEARS for p in peaks]),
     ]) * scale
     # Where each track sits in your sessions, so tracks you play together tend to share a context.
-    together = session_components([a.track_id for a in audio]) * scale * SESSION_WEIGHT
+    together = session_components([a.track_id for a in audio], source=SESSION_COMPONENTS_SOURCE) * scale * SESSION_WEIGHT
     # Who made it: language, country, decade and genres, so French chanson groups by being French chanson.
     artist = artist_components([a.track.artist_id for a in audio]) * scale * ARTIST_WEIGHT
     points, weights, activity = np.hstack([reduced, extra, together, artist]), np.log1p(weights), np.asarray(activity, dtype=float)
@@ -198,9 +199,13 @@ def artist_components(artist_ids, components=6):
     return reduced / (reduced.std() or 1)
 
 
-def session_components(track_ids, components=8):
-    """The main directions of each track's session vector (zeros, the average, for tracks without one)."""
-    vectors = dict(TrackVector.objects.filter(track__in=track_ids).values_list("track_id", "vector"))
+def session_components(track_ids, components=8, source="session"):
+    """Principal directions in session or learned taste space, with zeros for missing tracks."""
+    if source == "taste":
+        from recommend.models import TasteVector
+        vectors = dict(TasteVector.objects.filter(track__in=track_ids).values_list("track_id", "vector"))
+    else:
+        vectors = dict(TrackVector.objects.filter(track__in=track_ids).values_list("track_id", "vector"))
     out = np.zeros((len(track_ids), components))
     have = [i for i, t in enumerate(track_ids) if t in vectors]
     if len(have) > components:

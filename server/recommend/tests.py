@@ -117,6 +117,21 @@ class BacktestScoreTests(TestCase):
 
 
 class ModelHelperTests(TestCase):
+    def test_familiar_ranking_keeps_new_tracks_in_model_order(self):
+        from recommend.retrieve import Pick, rank_familiar
+
+        old, recent, novel = make_tracks(3)
+        Listen.objects.create(track=recent, played_at=AS_OF)
+        picks = [
+            Pick(audio=None, score=3, signals={}, novel=False, track=old),
+            Pick(audio=None, score=2, signals={}, novel=True, track=novel),
+            Pick(audio=None, score=1, signals={}, novel=False, track=recent),
+        ]
+        for pick in picks:
+            pick.canon = False
+        ranked = rank_familiar(picks)
+        self.assertEqual([p.track for p in ranked], [recent, novel, old])
+
     def test_taste_pairs_stay_in_window_and_carry_intent(self):
         from types import SimpleNamespace
         from recommend import taste

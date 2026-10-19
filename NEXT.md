@@ -6,6 +6,15 @@ Handoff notes, 18 Oct 2026. Start a new session by reading this, then `spec.md`,
 **Everything left to do is in [BACKLOG.md](BACKLOG.md)**, as self-contained tasks in waves for parallel agents. The
 next-steps sections below are the history behind it.
 
+Wave 2 groundwork: the new-vs-familiar ranking and taste/list-shaping experiments are available as off-by-default
+backtest variants (`familiar-slots`, `taste-contexts`, `taste-explore`, `taste-sequence`, `novelty-*`,
+`coherence-*`, `artist-cap-*`, `resurface-10`, `dormant-*`). They must not be enabled until B1 supplies the multi-cutoff verdict.
+
+**C1 result (19 Oct):** `familiar-slots` is enabled. Across B1's four cutoffs it improved played rate by **3.24
+points** (95% CI 2.56–3.93), came-back rate by **1.55 points** (1.13–1.98), lift versus recent by **0.25**
+(0.20–0.30), and plays covered by **3.26 points** (1.54–5.14); all four cutoffs agreed. New played rate changed
+−0.50 points (−1.81 to 0.78), so there is no reliable new-track cost.
+
 ## State
 
 Everything up to the first session is in the initial commit; the second session (18 Oct, below under "Modelling

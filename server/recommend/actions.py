@@ -333,6 +333,7 @@ def suggestions(mix, count=20):
     seeds = list(AudioFeatures.objects.select_related("track").filter(track_id__in=in_list[:25]))
     if not seeds:
         return []
-    picks = recommend(length=count * 3, seeds=seeds, context=mix.context, novelty_share=0.4)
+    from recommend.explore import TASTE_SEEDS
+    picks = recommend(length=count * 3, seeds=seeds, context=mix.context, novelty_share=0.4, taste_weight=1.0 if TASTE_SEEDS else None)
     picks = [p for p in picks if p.track.pk not in set(in_list) and p.track.pk not in removed]
     return playable(picks, count)

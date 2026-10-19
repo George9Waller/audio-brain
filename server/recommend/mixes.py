@@ -22,10 +22,11 @@ logger = logging.getLogger(__name__)
 
 
 DORMANT_MIXES = 4  # quiet-lately contexts that get a mix each week, in rotation
+NOVELTY_SHARE = None  # a backtest can sweep one shared context-mix share
 
 
 def context_mix(context, length=MIX_LENGTH):
-    return recommend(length=length, context=context, novelty_share=context.novelty_share, resurface_share=RESURFACE_SHARE)
+    return recommend(length=length, context=context, novelty_share=NOVELTY_SHARE if NOVELTY_SHARE is not None else context.novelty_share, resurface_share=RESURFACE_SHARE)
 
 
 def dormant_contexts(count=DORMANT_MIXES):

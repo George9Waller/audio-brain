@@ -30,6 +30,7 @@ NOT_NOW = timedelta(days=30)
 COHERENCE = -0.5  # z-score of fit to the mix's intent below which a candidate is dropped
 MAX_STYLE_RUN = 3
 MAX_PER_ALBUM = 3
+TASTE_FOLLOWS = False  # measured through the backtest before it changes live sequencing
 
 # Camelot wheel position (number, letter) for each key, so adjacent keys mix.
 CAMELOT = {
@@ -94,6 +95,10 @@ def sequence(picks):
     if len(analysed) < 3:
         return picks
     vectors = fused_matrix([p.track.pk for p in analysed])
+    taste_vectors = {}
+    if TASTE_FOLLOWS:
+        from recommend.taste import taste_matrix
+        taste_vectors = taste_matrix([p.track.pk for p in analysed])
     levels = sorted(energy(p.audio) for p in analysed)
     n = len(analysed)
     cut = n * 2 // 3
@@ -102,6 +107,9 @@ def sequence(picks):
     def follows(a, b):
         va, vb = vectors.get(a.track.pk), vectors.get(b.track.pk)
         similarity = float(va @ vb) if va is not None and vb is not None else 0.5
+        ta, tb = taste_vectors.get(a.track.pk), taste_vectors.get(b.track.pk)
+        if ta is not None and tb is not None:
+            similarity = float(ta @ tb)
         tempo = max(0.0, 1 - abs(a.audio.bpm - b.audio.bpm) / 12)
         return similarity + 0.3 * keys_compatible(a.audio, b.audio) + 0.3 * tempo
 

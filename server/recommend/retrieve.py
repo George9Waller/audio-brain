@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 import numpy as np
-from django.db.models import Q
+from django.db.models import Count, Max, Q
 from django.utils import timezone
 from pgvector.django import CosineDistance
 
@@ -30,6 +30,10 @@ CLOSE = 0.85  # embedding similarity to a context centroid that reads as "sounds
 
 SIGNAL_WEIGHTS = {"text": 1.0, "context": 0.8, "seed": 0.8, "session": 0.6, "together": 0.4, "graph": 0.3, "artist": 0.2, "stick": 0.8, "taste": 0.0}
 CANON_BONUS = 0.5
+# Familiar tracks answer a different question from discovery: what do I want to
+# hear again right now?  The four-cutoff backtest found this improves familiar
+# listening without a real loss in new-track plays.
+FAMILIAR_RANKING = True
 
 
 @dataclass
@@ -65,7 +69,7 @@ class Pick:
 RESURFACE_SHARE = 0.0
 
 
-def recommend(length=30, text_vector=None, context=None, seeds=(), filters=None, novelty_share=0.3, resurface_share=0.0):
+def recommend(length=30, text_vector=None, context=None, seeds=(), filters=None, novelty_share=0.3, resurface_share=0.0, taste_weight=None):
     filters = filters or Filters()
     analysed = AudioFeatures.objects.select_related("track__artist").exclude(track__set__isnull=False)
     if filters.countries or filters.languages or filters.decades:
@@ -85,7 +89,8 @@ def recommend(length=30, text_vector=None, context=None, seeds=(), filters=None,
     # tracks you've never played. Off while its weight is 0, until the backtest says it helps.
     from recommend.taste import centroid as taste_centroid
     taste_vector = taste_centroid(list(context._member_ids) if context is not None else [s.track_id for s in seeds])
-    if taste_vector is not None and SIGNAL_WEIGHTS["taste"]:
+    taste_weight = SIGNAL_WEIGHTS["taste"] if taste_weight is None else taste_weight
+    if taste_vector is not None and taste_weight:
         add_taste_neighbours(pool, analysed, taste_vector)
     seed_vector = None
     if seeds:
@@ -121,7 +126,7 @@ def recommend(length=30, text_vector=None, context=None, seeds=(), filters=None,
             session = np.zeros(len(candidates))  # tracks you've never played sit at the average
             session[have] = zscore(similarities([vectors[candidates[i].track_id] for i in have], session_vector))
             signals["session"] = session
-    if taste_vector is not None and SIGNAL_WEIGHTS["taste"]:
+    if taste_vector is not None and taste_weight:
         from recommend.taste import taste_matrix
         vectors = taste_matrix([a.track_id for a in candidates])
         signals["taste"] = np.array([float(vectors[a.track_id] @ taste_vector) if a.track_id in vectors else 0.0 for a in candidates])
@@ -142,7 +147,8 @@ def recommend(length=30, text_vector=None, context=None, seeds=(), filters=None,
         plays_by_artist = artist_affinity()
         signals["artist"] = np.array([np.log1p(max((plays_by_artist.get(n, 0) for n in names(a)), default=0)) for a in candidates])
 
-    total = sum(SIGNAL_WEIGHTS[name] * zscore(values) for name, values in signals.items())
+    weights = {**SIGNAL_WEIGHTS, "taste": taste_weight}
+    total = sum(weights[name] * zscore(values) for name, values in signals.items())
     total += penalties(candidates, stats)
     total += np.array([adjustments.get(a.track_id, 0.0) for a in candidates])
     canon = editorial.canon()
@@ -162,6 +168,8 @@ def recommend(length=30, text_vector=None, context=None, seeds=(), filters=None,
     picks.sort(key=lambda p: -p.score)
     for pick in picks:
         pick.canon = pick.track.pk in canon
+    if FAMILIAR_RANKING:
+        picks = rank_familiar(picks)
     picks = editorial.vary(picks, len(picks))
     if resurface_share and filters.familiarity != "new":
         from recommend.rediscovery import resurfacing
@@ -173,6 +181,35 @@ def recommend(length=30, text_vector=None, context=None, seeds=(), filters=None,
     for pick in chosen:
         pick.reason = explain(pick, context, seeds)
     return editorial.sequence(chosen)
+
+
+def rank_familiar(picks):
+    """Put familiar slots in the order you are most likely to want them again.
+
+    The scorer is useful for unknown tracks, while repeat listening is better
+    represented by a durable canon and what has been in rotation recently.
+    Novel picks retain their model order because ``shape`` selects the two pools
+    separately.
+    """
+    since = timezone.now() - timedelta(days=180)
+    history = {
+        row["pk"]: (row["recent_plays"], row["last_played"])
+        for row in
+        Track.objects.filter(pk__in=[p.track.pk for p in picks]).annotate(
+            recent_plays=Count("listens", filter=Q(listens__played_at__gte=since)), last_played=Max("listens__played_at")
+        ).values("pk", "recent_plays", "last_played")
+    }
+    now = timezone.now()
+
+    def score(pick):
+        recent_plays, last = history.get(pick.track.pk, (0, None))
+        days = (now - last).total_seconds() / 86400 if last else 3650
+        rotation = np.exp(-days / 45)
+        return (4.0 if getattr(pick, "canon", False) else 0.0) + np.log1p(recent_plays) + rotation
+
+    familiar = sorted((p for p in picks if not p.novel), key=lambda p: (-score(p), -p.score))
+    familiar_iter = iter(familiar)
+    return [next(familiar_iter) if not p.novel else p for p in picks]
 
 
 def add_nearest(pool, queryset, field_name, vector):
