@@ -100,18 +100,21 @@ def busiest_year_this_month(now):
     return top["year"] if top and top["n"] >= 20 else None
 
 
-def run_recipe(recipe, length=30):
+def run_recipe(recipe, length=30, exploration=None):
     """(picks, title, subtitle) for a quick action's recipe."""
     kind = recipe.get("type")
     if kind == "seed":
         seed = AudioFeatures.objects.select_related("track__artist").get(track_id=recipe["track_id"])
-        picks = recommend(length=length, seeds=[seed], novelty_share=0.35)
+        picks = recommend(length=length, seeds=[seed], **mood_options(exploration, 0.35))
         return picks, f"More like {seed.track.name}", f"Seeded from {seed.track.artist.name} – {seed.track.name}: close in sound and in what you play with it"
     if kind == "context":
         context = Context.objects.get(pk=recipe["context_id"])
         if recipe.get("new"):
             picks = recommend(length=length, context=context, filters=Filters(familiarity="new"), novelty_share=1.0)
             return picks, f"New in {short(context.name)}", f"Tracks you haven't played that fit {context.name}"
+        if exploration is not None:
+            picks = recommend(length=length, context=context, **mood_options(exploration, context.novelty_share))
+            return picks, short(context.name), context.description or ", ".join(context.top_styles[:3])
         return context_mix(context, length), short(context.name), context.description or ", ".join(context.top_styles[:3])
     if kind == "era":
         year, month = recipe["year"], recipe.get("month")
@@ -126,19 +129,35 @@ def run_recipe(recipe, length=30):
     raise ValueError(f"Unknown recipe {kind!r}")
 
 
-def make(prompt="", recipe=None, length=None):
+def mood_options(exploration, default):
+    """Translate the UI's continuous mood control into safe candidate quotas.
+
+    At either endpoint the candidate pool is deliberately pure.  In between,
+    `shape` reserves the requested new-track share while both experts still
+    rank within their own pools.
+    """
+    if exploration is None:
+        return {"novelty_share": default}
+    if exploration <= 0:
+        return {"filters": Filters(familiarity="familiar"), "novelty_share": 0.0}
+    if exploration >= 1:
+        return {"filters": Filters(familiarity="new"), "novelty_share": 1.0}
+    return {"filters": Filters(familiarity="mixed"), "novelty_share": exploration}
+
+
+def make(prompt="", recipe=None, length=None, exploration=None):
     """Build a draft mix from a prompt or a recipe, for review. Nothing is saved to Lists or logged as a
     recommendation until it's kept or played. Returns (draft Mix or None, what the request was read as)."""
     from recommend.lists import playable
 
     if recipe:
         wanted = length or 30
-        picks, title, subtitle = run_recipe(recipe, round(wanted * 1.6))
+        picks, title, subtitle = run_recipe(recipe, round(wanted * 1.6), exploration=exploration)
         understood = subtitle
     else:
         from recommend.query import ask
         # no length given: whatever the words say ("two hours of..."), else 30
-        picks, request = ask(prompt, length=length, overfetch=1.6)
+        picks, request = ask(prompt, length=length, overfetch=1.6, exploration=exploration)
         wanted = request.length
         title, understood = prompt.strip()[:120], describe(request)
         subtitle = understood
@@ -149,8 +168,9 @@ def make(prompt="", recipe=None, length=None):
     if not picks:
         return None, understood
     draft = save(f"draft:{uuid.uuid4().hex[:8]}", "draft", Mix.DRAFTS, title, subtitle, track_items(picks))
-    Mix.objects.filter(pk=draft.pk).update(request=prompt[:500], logged=False)
-    draft.request, draft.logged = prompt[:500], False
+    logged_request = (prompt[:470] + f"\nexploration={exploration:.2f}") if exploration is not None else prompt[:500]
+    Mix.objects.filter(pk=draft.pk).update(request=logged_request, logged=False)
+    draft.request, draft.logged = logged_request, False
     return draft, understood
 
 

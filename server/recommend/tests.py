@@ -147,11 +147,31 @@ class BacktestScoreTests(TestCase):
 
 
 class ModelHelperTests(TestCase):
+    def test_exploration_mood_maps_to_explicit_candidate_quotas(self):
+        from recommend.actions import mood_options
+
+        self.assertEqual(mood_options(0, 0.35)["filters"].familiarity, "familiar")
+        self.assertEqual(mood_options(1, 0.35)["filters"].familiarity, "new")
+        balanced = mood_options(0.6, 0.35)
+        self.assertEqual((balanced["filters"].familiarity, balanced["novelty_share"]), ("mixed", 0.6))
+
     def test_transformer_experiment_and_rl_guard(self):
         from recommend.sequence_experiment import policy_value, train
         seq = [[1, 2, 3, 4, 5, 1, 2, 3] for _ in range(8)]
         self.assertIn("recall@10", train(seq, epochs=1))
         self.assertIn("error", policy_value([{ "reward": 1.0 }]))
+
+    def test_variable_order_markov_prefers_the_two_track_state_and_backs_off(self):
+        from recommend.sequence_experiment import context_backoff_choices, context_models, recency_transition_model, transition_models, variable_order_choices
+
+        first, second = transition_models([[1, 2, 3]] * 4 + [[4, 2, 5]] * 4)
+        self.assertEqual(variable_order_choices([1, 2], first, second, alpha=2)[0], 3)
+        self.assertEqual(variable_order_choices([9, 2], first, second, alpha=2)[:2], [3, 5])
+        contexts = context_models([[1, 2, 3]] * 4 + [[4, 2, 5]] * 4)
+        self.assertEqual(context_backoff_choices([1, 2], first, contexts, order=2)[0], 3)
+        self.assertEqual(context_backoff_choices([9, 2], first, contexts, order=2), [3, 5])
+        recency = recency_transition_model([[1, 2]] * 10 + [[1, 3]], half_life=1)
+        self.assertEqual(recency[1].most_common(1)[0][0], 3)
     def test_edges_excludes_any_track_already_in_a_context(self):
         from recommend import edges
         context = Context.objects.create(name="A", centroid=[0.0] * 1280)

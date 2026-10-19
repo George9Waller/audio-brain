@@ -61,7 +61,7 @@ Styles in the library:
 {styles}"""
 
 
-def ask(text, length=None, overfetch=1.0):
+def ask(text, length=None, overfetch=1.0, exploration=None):
     """(picks, structured request). `length` overrides any length in the words; `overfetch` asks for that many times
     more picks than wanted, for callers that then drop some (tracks Tidal can't play)."""
     request = parse_request(text)
@@ -85,12 +85,15 @@ def ask(text, length=None, overfetch=1.0):
         energy=request.energy,
         styles=request.styles,
         exclude_styles=request.exclude_styles,
-        familiarity=request.familiarity,
+        familiarity=("familiar" if exploration == 0 else "new" if exploration == 1 else "mixed" if exploration is not None else request.familiarity),
         countries=[c.upper() for c in request.countries],
         languages=[l.lower() for l in request.languages],
         decades=request.decades,
     )
-    novelty = context.novelty_share if context else 0.3
+    # The explicit mood control takes precedence over inferred wording.  It
+    # changes the familiar/new candidate quota, while the sound request still
+    # determines what is a good fit within each pool.
+    novelty = exploration if exploration is not None else (context.novelty_share if context else 0.3)
     picks = recommend(length=request.length, text_vector=text_vector, context=context, seeds=seeds, filters=filters, novelty_share=novelty)
     return picks, request.model_copy(update={"length": wanted})
 

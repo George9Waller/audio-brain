@@ -29,6 +29,9 @@ class MakeIn(Schema):
     prompt: str = ""
     recipe: dict[str, Any] | None = None
     length: int | None = None  # none: what the prompt says ("two hours of..."), else 30
+    # 0 is dependable rediscovery; 1 is unfamiliar but context-fitting music.
+    # Kept optional so existing clients retain their present recommendation mix.
+    exploration: float | None = None
 
 
 class Draft(Schema):
@@ -67,8 +70,10 @@ def make_draft(request, body: MakeIn):
     """A draft for review: not in Lists and not logged until it's kept or played."""
     if not body.prompt.strip() and not body.recipe:
         raise HttpError(400, "Say what you want, or pick a quick action")
+    if body.exploration is not None and not 0 <= body.exploration <= 1:
+        raise HttpError(400, "Exploration must be between 0 and 1")
     try:
-        draft, understood = make(body.prompt, body.recipe, max(5, min(body.length, 80)) if body.length else None)
+        draft, understood = make(body.prompt, body.recipe, max(5, min(body.length, 80)) if body.length else None, body.exploration)
     except (ValueError, KeyError, LookupError) as error:
         raise HttpError(400, f"Couldn't make that: {error}")
     return {"mix": list_out(draft) if draft else None, "understood": understood}

@@ -292,7 +292,7 @@ follow-up agent task implements whichever route works.
 | B4 ListenBrainz baseline | 1 | skipped for now |
 | B5 production settings and fast rebuild | 1 | done (branch b5-prod-fast-rebuild): rebuild 612–705 s → 245–260 s; deploy/ ready to install (you) |
 | B6 MusicBrainz 503s and backfill | 1 | fixed on b6-musicbrainz-backfill; backfill at 67% profiled (49% found), still running |
-| C1 new versus familiar ranking | 2 | done: `familiar-slots` wins across all B1 cutoffs; enabled |
+| C1 new versus familiar ranking | 2 | done: `familiar-slots` wins across all B1 cutoffs; enabled. Ask now exposes a Familiar ↔ Exploratory slider that selects the two expert pools and their quota; outcomes retain the selected setting |
 | C2 taste vectors beyond retrieval | 2 | variants implemented (`taste-contexts`, `taste-explore`, `taste-sequence`); awaiting B1 verdict |
 | C3 score outside recommendations | 2 | blocked on B3 ExternalMix snapshots |
 | C4 blind interleaved playlist | 2 | blocked on B3 ExternalMix snapshots |
@@ -304,7 +304,7 @@ follow-up agent task implements whichever route works.
 | D2 Explore by genre or place, and Edges | 3 | Edges implemented and test-covered; genre/place Explore entry points remain |
 | D3 ratings and comparisons | 3 | done: API, labels, offline outbox, rating row and comparison controls |
 | D4 context controls | 3 | server rename/move/merge/split with rebuild-persistent overrides implemented; Android management UI remains |
-| D5 offline edits and requests | 3 | list edits are queued and replayed through `/sync`; Ask, Explore and sync-toggle persistence remain |
+| D5 offline edits and requests | 3 | list edits are queued and replayed through `/sync`; Ask now has an online Familiar ↔ Exploratory mood control; offline Ask, Explore and sync-toggle persistence remain |
 | D6 map improvements | 3 | implemented: modes, routes, now-playing pulse and Explore; needs DAP performance check |
 | D7 two-way Tidal sync | 3 | pin and read-back implementation complete; needs real Tidal validation |
 | D8 labels and remixers tab | 3 | done: release queue split by artist, remixer and label |

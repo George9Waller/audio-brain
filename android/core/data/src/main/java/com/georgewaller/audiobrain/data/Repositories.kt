@@ -173,8 +173,8 @@ class ListsRepository(context: Context, private val api: ApiClient) {
 class MakeRepository(private val api: ApiClient) {
     suspend fun actions(playing: Long?) = api.actions(playing)
     /** No length: whatever the prompt says ("two hours of..."), else 30. */
-    suspend fun fromPrompt(prompt: String, length: Int? = null) = api.make(MakeRequest(prompt = prompt, length = length))
-    suspend fun fromAction(recipe: JsonObject, length: Int? = null) = api.make(MakeRequest(recipe = recipe, length = length))
+    suspend fun fromPrompt(prompt: String, length: Int? = null, exploration: Double? = null) = api.make(MakeRequest(prompt = prompt, length = length, exploration = exploration))
+    suspend fun fromAction(recipe: JsonObject, length: Int? = null, exploration: Double? = null) = api.make(MakeRequest(recipe = recipe, length = length, exploration = exploration))
     suspend fun keep(key: String, title: String? = null, remove: List<Long> = emptyList()) = api.keepDraft(key, KeepRequest(title, remove))
     suspend fun discard(key: String) = api.discardDraft(key)
     suspend fun play(key: String) = api.play(key)

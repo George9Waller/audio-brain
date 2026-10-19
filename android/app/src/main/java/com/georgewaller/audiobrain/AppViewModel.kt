@@ -137,7 +137,9 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
 
     // Making mixes
 
-    fun makeFromPrompt(prompt: String, length: Int?) = build(prompt.trim(), stagesFor(prompt)) { graph.make.fromPrompt(prompt.trim(), length) }
+    fun makeFromPrompt(prompt: String, length: Int?, exploration: Float? = null) = build(prompt.trim(), stagesFor(prompt)) {
+        graph.make.fromPrompt(prompt.trim(), length, exploration?.toDouble())
+    }
 
     fun makeFromAction(action: QuickAction) {
         val ready = action.listKey?.takeIf { graph.lists.find(it) != null }

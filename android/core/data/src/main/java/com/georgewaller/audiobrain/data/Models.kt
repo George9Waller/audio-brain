@@ -287,7 +287,13 @@ data class ListsResponse(val lists: List<MixList>)
 data class QuickAction(val label: String, val detail: String, val recipe: kotlinx.serialization.json.JsonObject, @SerialName("list_key") val listKey: String? = null)
 
 @Serializable
-data class MakeRequest(val prompt: String = "", val recipe: kotlinx.serialization.json.JsonObject? = null, val length: Int? = null)
+data class MakeRequest(
+    val prompt: String = "",
+    val recipe: kotlinx.serialization.json.JsonObject? = null,
+    val length: Int? = null,
+    /** 0: familiar rediscovery; 1: discovery, with a deliberate anchor mix between. */
+    val exploration: Double? = null,
+)
 
 @Serializable
 data class DraftResponse(val mix: MixList? = null, val understood: String = "")

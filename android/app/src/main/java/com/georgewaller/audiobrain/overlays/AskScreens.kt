@@ -17,10 +17,12 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Slider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -53,6 +55,9 @@ private val LENGTHS = listOf<Pair<String, Int?>>("Auto" to null, "1 h" to 15, "2
 fun AskScreen(vm: AppViewModel, prefill: String, padding: PaddingValues, onOpenList: (String) -> Unit) {
     var text by rememberSaveable { mutableStateOf(prefill) }
     var length by rememberSaveable { mutableIntStateOf(0) }
+    // The current mixed-list default: discovery remains intentional rather
+    // than being an accidental side effect of a prompt.
+    var exploration by rememberSaveable { mutableFloatStateOf(0.35f) }
     val actions by vm.actions.collectAsStateWithLifecycle()
     val lists by vm.lists.collectAsStateWithLifecycle()
     val focus = remember { FocusRequester() }
@@ -70,6 +75,22 @@ fun AskScreen(vm: AppViewModel, prefill: String, padding: PaddingValues, onOpenL
                 )
             }
         }
+        Column(verticalArrangement = Arrangement.spacedBy(Ab.space.xs)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                AbText("Familiar", style = Ab.type.number, color = Ab.colors.textFaint)
+                AbText(
+                    when {
+                        exploration < 0.15f -> "Reliable rediscovery"
+                        exploration > 0.85f -> "Exploratory"
+                        else -> "Balanced"
+                    },
+                    style = Ab.type.number,
+                    color = Ab.colors.textMuted,
+                )
+                AbText("Exploratory", style = Ab.type.number, color = Ab.colors.textFaint)
+            }
+            Slider(value = exploration, onValueChange = { exploration = it })
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s), verticalAlignment = Alignment.CenterVertically) {
             AbText("Length", style = Ab.type.number, color = Ab.colors.textFaint)
             LENGTHS.forEachIndexed { i, (label, _) -> AbChip(label, selected = i == length) { length = i } }
@@ -77,7 +98,7 @@ fun AskScreen(vm: AppViewModel, prefill: String, padding: PaddingValues, onOpenL
             AbButton("Make it", {
                 // "explore Ólafur Arnalds" builds an Explore list; anything else is a prompt
                 val artist = Regex("^\\s*explore\\s+(.+)$", RegexOption.IGNORE_CASE).find(text)?.groupValues?.get(1)?.trim()
-                if (artist != null) vm.explore(name = artist) else vm.makeFromPrompt(text, LENGTHS[length].second)
+                if (artist != null) vm.explore(name = artist) else vm.makeFromPrompt(text, LENGTHS[length].second, exploration)
             }, enabled = text.isNotBlank())
         }
         if (actions.isNotEmpty()) {
