@@ -42,7 +42,7 @@ api:
       memory: 1Gi
 
 worker:
-  replicas: 0  # 1 after the cut-over from the Mac; never more, or jobs run twice
+  replicas: 1  # 1 after the cut-over from the Mac; never more, or jobs run twice
   resources:
     requests:
       cpu: 250m
