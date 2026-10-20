@@ -21,7 +21,7 @@ awsSecretsKey: audio-brain
 config:
   DEBUG: "0"
   DJANGO_LOG_LEVEL: INFO
-  ALLOWED_HOSTS: localhost,127.0.0.1,.ts.net
+  ALLOWED_HOSTS: localhost,127.0.0.1,.ts.net,100.122.82.67  # the node's Tailscale IP, for the emulator (no MagicDNS there)
   GUNICORN_WORKERS: "1"  # each process loads its own models; threads are cheaper on 8 GB
   GUNICORN_THREADS: "8"
   GUNICORN_TIMEOUT: "300"
