@@ -17,6 +17,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from functools import cache
+from itertools import batched
 from pathlib import Path
 
 import joblib
@@ -74,12 +75,18 @@ class Catalogue:
     """Everything the features need, loaded once into arrays: plays, sound vectors, styles, artists."""
 
     def __init__(self):
-        audio = list(AudioFeatures.objects.values_list("track_id", "embedding", "bpm", "danceability", "instrumental", "happy", "sad", "aggressive", "relaxed", "party", "loudness"))
-        self.track_ids = np.array([a[0] for a in audio])
+        # Streamed in chunks into arrays: as one list, the embeddings' text from Postgres took about 3 GB for 33k tracks
+        ids, vector_chunks, audio_chunks = [], [], []
+        rows = AudioFeatures.objects.order_by("track_id").values_list("track_id", "embedding", "bpm", "danceability", "instrumental", "happy", "sad", "aggressive", "relaxed", "party", "loudness")
+        for chunk in batched(rows.iterator(chunk_size=2000), 2000):
+            ids.extend(a[0] for a in chunk)
+            vector_chunks.append(np.array([np.asarray(a[1], dtype=np.float32) for a in chunk]))
+            audio_chunks.append(np.array([a[2:] for a in chunk], dtype=np.float32))
+        self.track_ids = np.array(ids)
         self.row = {track_id: i for i, track_id in enumerate(self.track_ids)}
-        vectors = np.array([np.asarray(a[1], dtype=np.float32) for a in audio])
+        vectors = np.concatenate(vector_chunks) if vector_chunks else np.zeros((0, 1), dtype=np.float32)
         self.vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
-        self.audio = np.array([a[2:] for a in audio], dtype=np.float32)
+        self.audio = np.concatenate(audio_chunks) if audio_chunks else np.zeros((0, 9), dtype=np.float32)
         loud = np.clip((self.audio[:, 8] + 20) / 14, 0, 1)
         self.energy = (self.audio[:, 1] + self.audio[:, 5] + self.audio[:, 7] + loud) / 4
 
@@ -96,7 +103,7 @@ class Catalogue:
 
         tags = defaultdict(dict)
         counts = defaultdict(int)
-        for track_id, name, weight in TrackTag.objects.filter(track__in=self.track_ids, source__in=["audio", "discogs_style"]).values_list("track_id", "tag__name", "weight"):
+        for track_id, name, weight in TrackTag.objects.filter(track__in=self.track_ids, source__in=["audio", "discogs_style"]).values_list("track_id", "tag__name", "weight").iterator(chunk_size=5000):
             tags[track_id][name.lower()] = max(weight, tags[track_id].get(name.lower(), 0))
             counts[name.lower()] += 1
         vocabulary = {name: i for i, (name, _) in enumerate(sorted(counts.items(), key=lambda kv: -kv[1])[:STYLE_VOCABULARY])}
@@ -110,7 +117,7 @@ class Catalogue:
 
         plays = Listen.objects.filter(track__in=self.track_ids).order_by("played_at").values_list("track_id", "played_at", "session__intent")
         rows, times, weights = [], [], []
-        for track_id, played_at, intent in plays:
+        for track_id, played_at, intent in plays.iterator(chunk_size=5000):
             rows.append(self.row[track_id])
             times.append(played_at.timestamp())
             weights.append(play_weight(intent))

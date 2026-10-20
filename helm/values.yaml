@@ -34,12 +34,13 @@ config:
 
 api:
   nodePort: 30800  # reached over Tailscale at http://<node>.<tailnet>.ts.net:30800
+  # A playlist build (Ask, radio) loads the scorer's catalogue and CLAP and keeps them: about 1.9 GB, measured 20 Oct
   resources:
     requests:
       cpu: 100m
-      memory: 384Mi
-    limits:
       memory: 1Gi
+    limits:
+      memory: 2560Mi
 
 worker:
   replicas: 1  # 1 after the cut-over from the Mac; never more, or jobs run twice
