@@ -19,7 +19,7 @@ Progress is tracked with the checkboxes. Tick them as you go.
     a CronJob in the helm repo refreshes every 6 hours;
   - CI (`.github/workflows/deploy.yaml`) assumes `arn:aws:iam::810574566145:role/GHActionsECRRole` over OIDC, builds
     and pushes `<app>:<sha>`, then commits `IMAGE_TAG: '<sha>'` into `helm/values.yaml` with a `PERSONAL_TOKEN`
-    secret; Argo syncs that;
+    secret; Argo syncs that (audio-brain uses the built-in `GITHUB_TOKEN` instead, so it needs no token secret);
   - secrets come from AWS Secrets Manager through External Secrets: an `ExternalSecret` against the
     `aws-secrets-store` `SecretStore` (namespace `default`) makes `<app>-aws-secrets`;
   - Postgres is a plain StatefulSet + PVC + Service in the chart;
@@ -64,7 +64,7 @@ setting its limit. If it goes past ~3.5 GB, trim the jobs rather than overcommit
 - Image on **ECR**, CI on GitHub Actions, the same as daily-planner.
 - Chart at **`helm/`** in the audio-brain repo; one line added to `charts/apps/values.yaml` in the helm repo.
 - Secrets in **AWS Secrets Manager**, key `audio-brain`, through an `ExternalSecret`.
-- **Reuse the Mac's existing `API_TOKEN` and `SECRET_KEY`**, so the app only needs its URL changed.
+- **A new `API_TOKEN` and `SECRET_KEY` for the cluster.** The Mac runs with the dev token `devtest123`, which is in the public docs, so the cluster gets a real one. The app is set up again with the connect link (Phase 4).
 - Postgres as a StatefulSet in the chart (no operator: one node, no HA to gain). Nightly `pg_dump` CronJob to a
   backup PVC, keeping 7.
 - One RWO data PVC mounted by both API and worker at `/app/server/models` (fine on one node: RWO is per node). That
@@ -77,12 +77,11 @@ setting its limit. If it goes past ~3.5 GB, trim the jobs rather than overcommit
 
 ## Phase 0: prerequisites (mostly clicks, ~20 min)
 
-- [ ] Create a GitHub repo `George9Waller/audio-brain` and push (no remote exists yet). `.env`, `models/`,
+- [x] Create a GitHub repo `George9Waller/audio-brain` and push (no remote exists yet). `.env`, `models/`,
       `imports/` and `.secret_key` are already gitignored; check `git ls-files` shows no secrets first.
 - [ ] **Public**, like the other app repos, so Argo needs no credentials. Checked 20 Oct: no keys, tokens or personal
       data in the tracked files or the history (the only token in it is the dev placeholder `devtest123`).
       `.claude/` and `__pycache__/` are now ignored, and a stray `.pyc` is untracked.
-- [ ] Repo secret `PERSONAL_TOKEN` (contents: write), used by CI to commit the image tag.
 - [ ] ECR repository `audio-brain` in eu-west-2.
 - [ ] Allow the repo in `GHActionsECRRole`'s trust policy (`token.actions.githubusercontent.com:sub` =
       `repo:George9Waller/audio-brain:*`).
@@ -203,7 +202,7 @@ phone loading lists from it over Tailscale. The worker stays at 0 and the Mac st
 
 The image, the workflow and the chart are already written and tested locally, so tonight is mostly wiring:
 
-1. **Phase 0** (~30 min): GitHub repo and push, `PERSONAL_TOKEN`, the ECR repo, the IAM trust policy, the AWS secret,
+1. **Phase 0** (~30 min): GitHub repo and push, the ECR repo, the IAM trust policy, the AWS secret,
    and Tailscale on the Lenovo. Leave out Android and Obtainium.
 2. **The first CI run** (~15 min, mostly the build): check the image lands in ECR and the bot commits `IMAGE_TAG`.
 3. **Argo** (~15 min): add the entry to the helm repo's `charts/apps/values.yaml` and watch it sync. Postgres and the

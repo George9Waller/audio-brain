@@ -1,7 +1,8 @@
 name: Deploy to argocd
 
 # Builds the server image, pushes it to ECR and points helm/values.yaml at it; Argo CD syncs from there.
-# Needs: the ECR repository audio-brain, this repo in GHActionsECRRole's trust policy, and the PERSONAL_TOKEN secret.
+# Needs: the ECR repository audio-brain and this repo in GHActionsECRRole's trust policy. The tag commit is pushed with
+# the built-in GITHUB_TOKEN; its pushes start no workflows, and Argo CD reads the change from git.
 
 on:
   push:
@@ -56,6 +57,8 @@ jobs:
   update-image-tag:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
     - name: Checkout
@@ -65,10 +68,6 @@ jobs:
       run: |
         git config --global user.email "github-actions@github.com"
         git config --global user.name "GitHub Actions"
-
-    - name: Authenticate with GitHub
-      run: |
-        git remote set-url origin https://x-access-token:${{ secrets.PERSONAL_TOKEN }}@github.com/${{ github.repository }}.git
 
     - name: Update image tag in Helm values
       run: |
