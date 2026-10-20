@@ -11,7 +11,6 @@ import os
 import tempfile
 from contextlib import contextmanager
 from functools import cached_property
-from pathlib import Path
 
 import numpy as np
 import requests
@@ -51,7 +50,7 @@ class AudioClients:
 
     @cached_property
     def analyser(self):
-        return Analyser(Path(settings.BASE_DIR) / "models")
+        return Analyser(settings.ESSENTIA_MODELS_DIR)
 
 
 @contextmanager

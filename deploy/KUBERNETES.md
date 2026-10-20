@@ -35,7 +35,7 @@ Progress is tracked with the checkboxes. Tick them as you go.
 | API | Django + Django Ninja under gunicorn ([gunicorn.conf.py](gunicorn.conf.py)), bearer token auth. Idle RSS about 260 MB. |
 | Worker | `manage.py run_jobs`: Last.fm every 15 min; enrichment, models and mixes nightly. **Exactly one** may run, or jobs start twice. Heavy: torch, CLAP (`laion/larger_clap_general`, from Hugging Face), Essentia, UMAP, yt-dlp + ffmpeg. Peak memory not yet measured. |
 | Database | Postgres 18 + pgvector, about 1.2 GB (Postgres.app on the Mac). The Tidal OAuth token lives in it, so it moves with the dump. |
-| Files in `server/models/` | 57 MB. The Essentia `.pb`/`.json` files (read-only, **gitignored**, so CI can't bake them into the image) and `scorer.joblib` + `context_ranker.joblib` (rewritten nightly by the worker, read by the API). |
+| Files in `server/models/` | The Essentia `.pb`/`.json` graphs (23 MB, gitignored) are **baked into the image** at `/app/essentia` (`ESSENTIA_MODELS_DIR`): the build downloads them from essentia.upf.edu and checks them against `server/enrichment/essentia_models.sha256`. `scorer.joblib` + `context_ranker.joblib` are rewritten nightly by the worker and read by the API, on the data volume. |
 | Other on-disk state | Hugging Face cache (CLAP weights, ~1 GB), `RATE_LIMIT_DIR` (default `/tmp`; API and worker should share it), `server/imports/` (Spotify/Tidal exports, gitignored, only needed for re-imports). |
 | Settings | All from environment variables (`server/server/settings.py`, every key in `server/.env.example`). `SECRET_KEY` from env avoids `.secret_key` being written. |
 | **Python 3.13** | The image runs 3.13 (the newest Python with wheels for everything: gensim has none for 3.14). The Mac's `.python-version` is still 3.12; both resolve from the same `uv.lock`. |
@@ -79,17 +79,18 @@ setting its limit. If it goes past ~3.5 GB, trim the jobs rather than overcommit
 
 - [x] Create a GitHub repo `George9Waller/audio-brain` and push (no remote exists yet). `.env`, `models/`,
       `imports/` and `.secret_key` are already gitignored; check `git ls-files` shows no secrets first.
-- [ ] **Public**, like the other app repos, so Argo needs no credentials. Checked 20 Oct: no keys, tokens or personal
+- [x] **Public**, like the other app repos, so Argo needs no credentials. Checked 20 Oct: no keys, tokens or personal
       data in the tracked files or the history (the only token in it is the dev placeholder `devtest123`).
       `.claude/` and `__pycache__/` are now ignored, and a stray `.pyc` is untracked.
-- [ ] ECR repository `audio-brain` in eu-west-2.
-- [ ] Allow the repo in `GHActionsECRRole`'s trust policy (`token.actions.githubusercontent.com:sub` =
-      `repo:George9Waller/audio-brain:*`).
-- [ ] AWS Secrets Manager secret `audio-brain` with every key the app needs: `POSTGRES_PASSWORD` (new), plus from the
+- [x] ECR repository `audio-brain` in eu-west-2.
+- [x] Allow the repo in `GHActionsECRRole`'s trust policy. New repos use GitHub's immutable OIDC subject, so the
+      pattern is `repo:George9Waller@54817483/audio-brain@1427544714:*`, not `repo:George9Waller/audio-brain:*`
+      (`gh api repos/George9Waller/audio-brain/actions/oidc/customization/sub` shows it).
+- [x] AWS Secrets Manager secret `audio-brain` with every key the app needs: `POSTGRES_PASSWORD` (new), plus from the
       Mac's `server/.env`: `SECRET_KEY`, `API_TOKEN`, `LASTFM_API_KEY`, `LASTFM_USER`, `TIDAL_CLIENT_ID`,
       `TIDAL_CLIENT_SECRET`, `DISCOGS_CONSUMER_KEY`, `DISCOGS_CONSUMER_SECRET`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
       `API_CONTACT`.
-- [ ] Tailscale on the Lenovo host (`tailscale up`), MagicDNS on. Note its name.
+- [x] Tailscale on the Lenovo host (`tailscale up`), MagicDNS on. Note its name.
 - [ ] Check free memory and the default StorageClass (`kubectl get sc`).
 
 ## Phase 1: the image (written 20 Oct)
@@ -111,7 +112,7 @@ setting its limit. If it goes past ~3.5 GB, trim the jobs rather than overcommit
       `docker/build-push-action` and the GHA layer cache, triggered by changes under `server/`,
       `deploy/gunicorn.conf.py` or the workflow itself (or by hand), then committing `IMAGE_TAG` into
       `helm/values.yaml`.
-- [ ] First green run in GitHub Actions (needs Phase 0).
+- [x] First green run in GitHub Actions (needs Phase 0).
 
 ## Phase 2: the chart (written 20 Oct)
 
@@ -133,7 +134,7 @@ main Deployment's labels, so its Service would also send traffic to the worker. 
 `fsGroup: 1000`, so the volumes are writable. `config.ALLOWED_HOSTS` needs extending if you reach the API by IP rather
 than the `ts.net` name.
 
-- [ ] In the **helm repo**, add to `charts/apps/values.yaml` (not done: it's a different repo):
+- [x] In the **helm repo**, add to `charts/apps/values.yaml` (not done: it's a different repo):
   ```yaml
     - name: audio-brain
       repoURL: https://github.com/George9Waller/audio-brain.git
@@ -144,7 +145,7 @@ than the `ts.net` name.
 
 Mac stays the primary until the cut-over at the end. Do a dry run first with the worker at `replicas: 0`.
 
-- [ ] Restore a copy:
+- [x] Restore a copy:
   ```sh
   pg_dump -Fc audio_brain > /tmp/audio_brain.dump      # on the Mac
   kubectl cp /tmp/audio_brain.dump default/audio-brain-postgres-0:/tmp/audio_brain.dump
@@ -153,13 +154,14 @@ Mac stays the primary until the cut-over at the end. Do a dry run first with the
   If the API's migrate initContainer already created the schema, `--clean` replaces it. Check the pgvector version
   in the image is at least the Mac's (`select extversion from pg_extension where extname='vector'`), and compare a
   few row counts.
-- [ ] Seed the data volume (skip `backtests/`), then restart:
+- [x] Seed the data volume (skip `backtests/`), then restart. Since the Essentia graphs moved into the image, only
+      `scorer.joblib` and `context_ranker.joblib` need copying, and the nightly models job rebuilds both anyway:
   ```sh
   pod=$(kubectl get pod -l app=audio-brain-api -o name | head -1)
   for f in server/models/*.pb server/models/*.json server/models/*.joblib; do kubectl cp "$f" "${pod#pod/}:/app/server/models/"; done
   kubectl rollout restart deploy/audio-brain-api
   ```
-- [ ] From the phone over Tailscale:
+- [x] From the phone over Tailscale:
       `curl -H "Authorization: Bearer <token>" http://<lenovo>.<tailnet>.ts.net:30800/api/v1/health`.
 - [ ] **Cut-over** (another evening): stop the Mac worker (`launchctl bootout gui/$(id -u)/com.audiobrain.worker`) and
       server, take a fresh dump and restore it, set `worker.replicas: 1`, watch `kubectl logs -f deploy/audio-brain-worker`
@@ -194,6 +196,12 @@ Mac stays the primary until the cut-over at the end. Do a dry run first with the
       cluster has run a couple of weeks.
 - [ ] Later: yt-dlp may need a JavaScript runtime (deno) for YouTube. Check the sets and audio jobs' logs after the
       cut-over.
+
+## Status, 20 Oct (evening)
+
+The API and Postgres run on the cluster with a copy of the Mac's data, and `/api/v1/health` answers over Tailscale. The
+worker is at 0 and the Mac is still the primary. Next: point the app at the cluster (Phase 4, connect link), then the
+cut-over.
 
 ## Tonight (about two hours)
 
