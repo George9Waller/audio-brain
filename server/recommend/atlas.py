@@ -11,19 +11,20 @@ import logging
 import numpy as np
 from django.db import transaction
 
+from catalogue.vectors import rows_with_arrays
 from recommend.models import FusedVector, MapPoint
 
 logger = logging.getLogger(__name__)
 
 
 def build_map():
-    rows = list(FusedVector.objects.values_list("track_id", "vector"))
+    rows = list(rows_with_arrays(FusedVector.objects.values_list("track_id", "vector"), 1))
     if len(rows) < 50:
         return "too few tracks to lay out"
     import umap
 
     ids = [t for t, _ in rows]
-    X = fill_listening(np.array([np.asarray(v, dtype=np.float32) for _, v in rows]), [t in placed_by_sound() for t in ids])
+    X = fill_listening(np.array([v for _, v in rows]), [t in placed_by_sound() for t in ids])
     Y = umap.UMAP(n_neighbors=20, min_dist=0.12, metric="cosine", random_state=7).fit_transform(X)
     previous = dict((t, (x, y)) for t, x, y in MapPoint.objects.values_list("track_id", "x", "y"))
     Y = align(ids, Y, previous)
@@ -47,17 +48,22 @@ def placed_by_sound():
 
 
 def fill_listening(X, missing, k=10):
-    """Give rows without a listening half the average listening half of their k nearest neighbours by sound."""
-    from sklearn.neighbors import NearestNeighbors
+    """Give rows without a listening half the average listening half of their k nearest neighbours by sound.
 
+    Nearest by cosine, so a dot product of unit rows, taken 2,000 rows at a time: scikit-learn's NearestNeighbors
+    built the whole distance matrix in blocks of a gigabyte or more, too much for the worker's memory limit."""
     half = X.shape[1] // 2
     missing = np.array(missing)
     if missing.all() or not missing.any():
         return X
     sound = X[:, :half] / np.maximum(np.linalg.norm(X[:, :half], axis=1, keepdims=True), 1e-9)
     known = np.where(~missing)[0]
-    nn = NearestNeighbors(n_neighbors=k, metric="cosine").fit(sound[known])
-    _, neighbours = nn.kneighbors(sound[missing])
+    k = min(k, len(known))
+    known_sound, rows = sound[known], np.where(missing)[0]
+    neighbours = np.empty((len(rows), k), dtype=np.int64)
+    for start in range(0, len(rows), 2000):
+        similarity = sound[rows[start : start + 2000]] @ known_sound.T
+        neighbours[start : start + 2000] = np.argpartition(-similarity, k - 1, axis=1)[:, :k]
     X = X.copy()
     X[missing, half:] = X[known][neighbours][:, :, half:].mean(axis=1)
     return X / np.maximum(np.linalg.norm(X, axis=1, keepdims=True), 1e-9)
