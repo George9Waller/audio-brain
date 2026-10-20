@@ -1,0 +1,23 @@
+{{- $claims := list (dict "name" "data" "storage" .Values.data.storage) (dict "name" "postgres" "storage" .Values.postgresql.storage) }}
+{{- if .Values.backup.enabled }}
+{{- $claims = append $claims (dict "name" "backups" "storage" .Values.backup.storage) }}
+{{- end }}
+{{- range $claims }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $.Values.appName }}-{{ .name }}
+  labels:
+    {{- include "audio-brain.labels" $ | nindent 4 }}
+  annotations:
+    # never deleted by a sync or an uninstall: this is the database and the trained models
+    argocd.argoproj.io/sync-options: Delete=false
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .storage }}
+{{- end }}

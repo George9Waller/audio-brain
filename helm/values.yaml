@@ -1,0 +1,75 @@
+# audio-brain on the home cluster. The plan and the reasons are in deploy/KUBERNETES.md.
+
+appName: audio-brain
+
+image:
+  repository: 810574566145.dkr.ecr.eu-west-2.amazonaws.com/audio-brain
+  pullPolicy: IfNotPresent  # tags are commit SHAs, and the image is large
+
+imagePullSecrets:
+  - name: ecr-registry-secret
+
+# CI rewrites this line on every build (.github/workflows/deploy.yaml)
+env:
+  IMAGE_TAG: 'replace-me'
+
+# Every property of this AWS Secrets Manager secret becomes an environment variable: POSTGRES_PASSWORD, SECRET_KEY,
+# API_TOKEN and the API keys (the list is in deploy/KUBERNETES.md, Phase 0)
+awsSecretsKey: audio-brain
+
+# Non-secret settings, as environment variables (every key is in server/.env.example)
+config:
+  DEBUG: "0"
+  DJANGO_LOG_LEVEL: INFO
+  ALLOWED_HOSTS: localhost,127.0.0.1,.ts.net
+  GUNICORN_WORKERS: "1"  # each process loads its own models; threads are cheaper on 8 GB
+  GUNICORN_THREADS: "8"
+  GUNICORN_TIMEOUT: "300"
+  MIXES_THREADS: "2"
+  TIDAL_COUNTRY: GB
+  LISTENING_TIME_ZONE: Europe/London
+  HF_HOME: /app/server/models/hf
+  RATE_LIMIT_DIR: /app/server/models/ratelimit
+  OPENAI_MODEL: gpt-4.1-mini
+
+api:
+  nodePort: 30800  # reached over Tailscale at http://<node>.<tailnet>.ts.net:30800
+  resources:
+    requests:
+      cpu: 100m
+      memory: 384Mi
+    limits:
+      memory: 1Gi
+
+worker:
+  replicas: 0  # 1 after the cut-over from the Mac; never more, or jobs run twice
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      memory: 3584Mi
+
+postgresql:
+  image: pgvector/pgvector:pg18
+  database: audio_brain
+  username: audio_brain
+  storage: 10Gi
+  sharedBuffers: 256MB
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+# Essentia graphs, the trained scorer and context ranker, the Hugging Face cache and rate-limit state; shared by the
+# API and the worker (RWO is fine on one node)
+data:
+  storage: 5Gi
+
+backup:
+  enabled: true
+  schedule: "15 0 * * *"  # before the nightly jobs (enrichment 01:00, models 03:00)
+  keepDays: 7
+  storage: 10Gi

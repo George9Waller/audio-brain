@@ -1,0 +1,2 @@
+audio-brain {{ .Values.env.IMAGE_TAG }}: API on NodePort {{ .Values.api.nodePort }}, worker replicas {{ .Values.worker.replicas }}.
+Check: curl -H "Authorization: Bearer $API_TOKEN" http://<node>.<tailnet>.ts.net:{{ .Values.api.nodePort }}/api/v1/health

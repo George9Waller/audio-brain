@@ -1,0 +1,47 @@
+{{- if .Values.backup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Values.appName }}-backup
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  timeZone: {{ .Values.config.LISTENING_TIME_ZONE }}  # the same clock as the job schedules
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 86400
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: pg-dump
+              image: {{ .Values.postgresql.image }}  # the same Postgres version as the server
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  file=/backups/{{ .Values.postgresql.database }}-$(date +%Y%m%d-%H%M).dump
+                  pg_dump -Fc -h {{ .Values.appName }}-postgres -U {{ .Values.postgresql.username }} {{ .Values.postgresql.database }} > "$file.partial"
+                  mv "$file.partial" "$file"
+                  find /backups -name '*.dump' -mtime +{{ .Values.backup.keepDays }} -delete
+                  ls -lh /backups
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.appName }}-aws-secrets
+                      key: POSTGRES_PASSWORD
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ .Values.appName }}-backups
+{{- end }}

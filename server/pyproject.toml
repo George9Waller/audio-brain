@@ -27,3 +27,12 @@ dependencies = [
     "umap-learn>=0.5.12",
     "yt-dlp>=2026.8.19",
 ]
+
+# CPU-only torch on Linux (the cluster image), so the lock doesn't pull in CUDA; macOS keeps PyPI's wheel
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]

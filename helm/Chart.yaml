@@ -1,0 +1,6 @@
+apiVersion: v2
+name: audio-brain
+description: audio-brain's API, job worker and Postgres, deployed by Argo CD from George9Waller/helm
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

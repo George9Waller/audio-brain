@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.appName }}-worker
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  strategy:
+    type: Recreate  # the old worker stops before the new one starts, so no job runs twice
+  selector:
+    matchLabels:
+      app: {{ .Values.appName }}-worker
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.appName }}-worker
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      {{- include "audio-brain.podSpec" . | nindent 6 }}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: {{ include "audio-brain.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "manage.py", "run_jobs"]
+          {{- include "audio-brain.env" . | nindent 10 }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /app/server/models

@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.appName }}-postgres
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app: {{ .Values.appName }}-postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Values.appName }}-postgres
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ .Values.appName }}-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Values.appName }}-postgres
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.appName }}-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.postgresql.image }}
+          args: ["-c", "shared_buffers={{ .Values.postgresql.sharedBuffers }}"]
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.postgresql.database }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgresql.username }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appName }}-aws-secrets
+                  key: POSTGRES_PASSWORD
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.postgresql.resources | nindent 12 }}
+          volumeMounts:
+            # from Postgres 18 the image keeps its data in /var/lib/postgresql/18/docker, so mount the parent
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: {{ .Values.appName }}-postgres
