@@ -11,7 +11,7 @@ imagePullSecrets:
 
 # CI rewrites this line on every build (.github/workflows/deploy.yaml)
 env:
-  IMAGE_TAG: 'f889694317bc634413cc8d4a8c206690e246d7e7'
+  IMAGE_TAG: 'e42b482b61bee9332d24ed3e8c49ac7185b1fe4c'
 
 # Every property of this AWS Secrets Manager secret becomes an environment variable: POSTGRES_PASSWORD, SECRET_KEY,
 # API_TOKEN and the API keys (the list is in deploy/KUBERNETES.md, Phase 0)
