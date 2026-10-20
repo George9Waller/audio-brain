@@ -24,6 +24,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from catalogue.models import ArtistTag, AudioFeatures, Track, TrackTag
+from catalogue.vectors import rows_with_arrays
 from history.intent import play_weight
 from history.sessions import session_sequences
 
@@ -45,12 +46,12 @@ class Inputs:
     """Feature matrices for every analysed track (sets excluded), row-aligned with `track_ids`."""
 
     def __init__(self):
-        rows = list(AudioFeatures.objects.exclude(track__set__isnull=False).values_list(
-            "track_id", "track__artist_id", "embedding", "clap_embedding", "bpm", "danceability", "instrumental", "happy", "sad", "aggressive", "relaxed", "party", "loudness"))
+        rows = list(rows_with_arrays(AudioFeatures.objects.exclude(track__set__isnull=False).values_list(
+            "track_id", "track__artist_id", "embedding", "clap_embedding", "bpm", "danceability", "instrumental", "happy", "sad", "aggressive", "relaxed", "party", "loudness"), 2, 3))
         self.track_ids = np.array([r[0] for r in rows])
         self.row = {t: i for i, t in enumerate(self.track_ids)}
-        self.sound = unit_rows(np.array([np.asarray(r[2], dtype=np.float32) for r in rows]))
-        self.clap = unit_rows(np.array([np.asarray(r[3], dtype=np.float32) if r[3] is not None else np.zeros(512, dtype=np.float32) for r in rows]))
+        self.sound = unit_rows(np.array([r[2] for r in rows]))
+        self.clap = unit_rows(np.array([r[3] if r[3] is not None else np.zeros(512, dtype=np.float32) for r in rows]))
         scalars = np.array([r[4:] for r in rows], dtype=np.float32)
         scalars[:, 0] = (scalars[:, 0] - 120) / 30
         scalars[:, 8] = (scalars[:, 8] + 14) / 6

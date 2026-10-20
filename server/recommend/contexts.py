@@ -30,6 +30,7 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 
 from catalogue.models import AudioFeatures, TrackTag
+from catalogue.vectors import objects_with_arrays
 from django.db.models import Count, Q
 from discovery.affinity import liked_tracks
 from recommend.rediscovery import track_history
@@ -60,7 +61,7 @@ logger = logging.getLogger(__name__)
 
 
 def build_contexts():
-    audio = list(AudioFeatures.objects.filter(track__in=liked_tracks().values("pk")).select_related("track__artist").prefetch_related("track__credits__artist"))
+    audio = list(objects_with_arrays(AudioFeatures.objects.filter(track__in=liked_tracks().values("pk")).select_related("track__artist").prefetch_related("track__credits__artist"), "embedding", "clap_embedding"))
     if len(audio) < MIN_CONTEXTS * 5:
         logger.warning("Only %d liked tracks are analysed; contexts need more", len(audio))
         return 0

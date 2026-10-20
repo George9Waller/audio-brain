@@ -85,10 +85,12 @@ def time_travel(start, end, mode="then", length=30, text_vector=None, filters=No
     tracks before they've been analysed; CLAP alone is unreliable on a bare genre name."""
     window = Q(listens__played_at__date__gte=start, listens__played_at__date__lte=end)
     after = Q(listens__played_at__date__gt=end)
+    # Over a phase, twice marks what was on repeat; over a day or an evening, most tracks were only played once
+    least = 1 if (end - start).days < 7 else 2
     tracks = list(
         Track.objects.exclude(set__isnull=False)
         .annotate(then=Count("listens", filter=window), total=Count("listens"), since=Count("listens", filter=after))
-        .filter(then__gte=2)
+        .filter(then__gte=least)
         .select_related("artist")
     )
     if mode == "then_not_since":

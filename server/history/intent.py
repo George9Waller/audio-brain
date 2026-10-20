@@ -25,6 +25,7 @@ from django.db.models import Count
 
 from enrichment.identity import normalise, primary_artist
 from catalogue.models import AudioFeatures
+from catalogue.vectors import rows_with_arrays
 from history.models import Listen, Session
 
 MIN_WEIGHT = 0.3
@@ -39,7 +40,7 @@ logger = logging.getLogger(__name__)
 def session_features():
     """{session id: feature vector} from scrobble-visible patterns only."""
     plays = Listen.objects.exclude(session=None).order_by("played_at").values_list("session_id", "track_id", "track__artist__name", "played_at", "track__album_id")
-    vectors = {t: np.asarray(v, dtype=float) / (np.linalg.norm(v) or 1) for t, v in AudioFeatures.objects.values_list("track_id", "embedding")}
+    vectors = {t: np.asarray(v, dtype=float) / (np.linalg.norm(v) or 1) for t, v in rows_with_arrays(AudioFeatures.objects.values_list("track_id", "embedding"), 1)}
     totals = dict(Listen.objects.values("track").annotate(n=Count("id")).values_list("track", "n"))
     by_session = defaultdict(list)
     for session_id, track_id, artist, played_at, album in plays:

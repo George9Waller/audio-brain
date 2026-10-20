@@ -17,7 +17,6 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from functools import cache
-from itertools import batched
 from pathlib import Path
 
 import joblib
@@ -26,6 +25,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from catalogue.models import AudioFeatures, PlatformTrack, SimilarArtist, Track, TrackCredit, TrackTag
+from catalogue.vectors import rows_with_arrays
 from sets.models import SetTrack
 from enrichment.identity import normalise, primary_artist
 from enrichment.models import EnrichmentAttempt
@@ -75,18 +75,12 @@ class Catalogue:
     """Everything the features need, loaded once into arrays: plays, sound vectors, styles, artists."""
 
     def __init__(self):
-        # Streamed in chunks into arrays: as one list, the embeddings' text from Postgres took about 3 GB for 33k tracks
-        ids, vector_chunks, audio_chunks = [], [], []
-        rows = AudioFeatures.objects.order_by("track_id").values_list("track_id", "embedding", "bpm", "danceability", "instrumental", "happy", "sad", "aggressive", "relaxed", "party", "loudness")
-        for chunk in batched(rows.iterator(chunk_size=2000), 2000):
-            ids.extend(a[0] for a in chunk)
-            vector_chunks.append(np.array([np.asarray(a[1], dtype=np.float32) for a in chunk]))
-            audio_chunks.append(np.array([a[2:] for a in chunk], dtype=np.float32))
-        self.track_ids = np.array(ids)
+        audio = list(rows_with_arrays(AudioFeatures.objects.values_list("track_id", "embedding", "bpm", "danceability", "instrumental", "happy", "sad", "aggressive", "relaxed", "party", "loudness"), 1))
+        self.track_ids = np.array([a[0] for a in audio])
         self.row = {track_id: i for i, track_id in enumerate(self.track_ids)}
-        vectors = np.concatenate(vector_chunks) if vector_chunks else np.zeros((0, 1), dtype=np.float32)
+        vectors = np.array([a[1] for a in audio])
         self.vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
-        self.audio = np.concatenate(audio_chunks) if audio_chunks else np.zeros((0, 9), dtype=np.float32)
+        self.audio = np.array([a[2:] for a in audio], dtype=np.float32)
         loud = np.clip((self.audio[:, 8] + 20) / 14, 0, 1)
         self.energy = (self.audio[:, 1] + self.audio[:, 5] + self.audio[:, 7] + loud) / 4
 
@@ -131,7 +125,8 @@ class Catalogue:
         window = STICK_WINDOW.total_seconds()
         later = (self.play_time > first[self.play_row]) & (self.play_time <= first[self.play_row] + window)
         month = (self.play_time // (30.44 * 86400)).astype(np.int64)
-        first_month = np.where(np.isfinite(first), first // (30.44 * 86400), -1).astype(np.int64)
+        played = np.isfinite(first)  # unplayed tracks have no first month (and inf // x would warn)
+        first_month = np.where(played, np.where(played, first, 0) // (30.44 * 86400), -1).astype(np.int64)
         month_weight = defaultdict(float)
         for row, m, w in zip(self.play_row[later], month[later], self.play_weight[later]):
             if m != first_month[row]:
@@ -169,7 +164,7 @@ class Catalogue:
         for name, index in artist_keys.items():
             self.artist_names[index] = name
         self.graph = defaultdict(set)
-        for source, target in SimilarArtist.objects.values_list("artist__name", "name"):
+        for source, target in SimilarArtist.objects.values_list("artist__name", "name").iterator(chunk_size=5000):
             a, b = normalise(primary_artist(source)), normalise(target)
             if a and b and a != b:
                 self.graph[a].add(b)
