@@ -1,0 +1,51 @@
+name: Android release
+
+# Builds the signed release APK for a v* tag (git tag v0.2.0 && git push origin v0.2.0) and attaches it to a GitHub
+# Release, which Obtainium on each device watches. The tag sets the version (android/app/build.gradle.kts).
+# Needs these repository secrets: ANDROID_KEYSTORE_BASE64 (base64 of the .jks), ANDROID_KEYSTORE_PASSWORD,
+# ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD.
+
+on:
+  push:
+    tags:
+      - v*
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Set up JDK
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: 21
+
+    - name: Set up Gradle
+      uses: gradle/actions/setup-gradle@v4
+
+    - name: Decode the keystore
+      run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/audiobrain-release.jks"
+
+    - name: Build the release APK
+      working-directory: android
+      env:
+        VERSION_NAME: ${{ github.ref_name }}
+        ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/audiobrain-release.jks
+        ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      run: ./gradlew :app:assembleRelease
+
+    - name: Publish the release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        apk="audio-brain-${GITHUB_REF_NAME}.apk"
+        cp android/app/build/outputs/apk/release/app-release.apk "$apk"
+        gh release create "$GITHUB_REF_NAME" "$apk" --title "$GITHUB_REF_NAME" --generate-notes

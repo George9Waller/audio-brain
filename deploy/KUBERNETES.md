@@ -172,20 +172,47 @@ Mac stays the primary until the cut-over at the end. Do a dry run first with the
 
 ## Phase 4: the app on every device
 
+Built and tested 21 Oct: a release build (R8 on, signed with a test key) installed on the emulator, connected to the
+cluster, and loaded lists, a list and the map with nothing in logcat. Debug builds are now
+`com.georgewaller.audiobrain.debug`, labelled "Audio Brain dev", so a dev build and the release sit side by side.
+
 - [ ] Tailscale on the phone and the DAPs (the F-Droid build has no Google dependency), same tailnet.
-- [ ] Point the app at the cluster: on the Mac, `uv run python manage.py api_token --url http://<lenovo>.<tailnet>.ts.net:30800`
-      prints the `audiobrain://connect?...` link and QR code for the existing token. Scan it on each device.
-- [ ] Release signing: make a keystore (`keytool -genkeypair -v -keystore audiobrain-release.jks -alias audiobrain -keyalg RSA -keysize 4096 -validity 10000`),
-      keep it **out of the repo** with a backup somewhere safe (losing it means uninstalling to update). Add a
-      `release` `signingConfig` in `android/app/build.gradle.kts` reading `keystore.properties` or env vars,
-      replacing today's debug signing.
-- [ ] Turn on R8 for release (`isMinifyEnabled = true`) and check Room, Retrofit or Ktor, and the serialization keep rules
-      with a release build on a device.
-- [ ] `versionCode` and `versionName` from the git tag.
-- [ ] `.github/workflows/android-release.yaml`: on tags `v*`, decode the keystore from a base64 secret,
-      `./gradlew :app:assembleRelease`, attach the APK to a GitHub Release. (With a private repo, Obtainium needs a
-      GitHub token to see releases.)
-- [ ] Obtainium on each device, tracking the repo's releases. First install by `adb install` is fine too.
+- [x] Release signing: `android/app/build.gradle.kts` reads the keystore from env vars (`ANDROID_KEYSTORE_FILE`,
+      `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`) or from `android/keystore.properties`
+      (gitignored; keys `storeFile`, `storePassword`, `keyAlias`, `keyPassword`). Without one, a local release build
+      falls back to the debug key; in CI it fails.
+- [ ] **(you)** Make the keystore, outside the repo, and back it up somewhere safe (losing it means uninstalling to
+      update):
+  ```sh
+  keytool -genkeypair -v -keystore ~/keys/audiobrain-release.jks -alias audiobrain -keyalg RSA -keysize 4096 -validity 10000
+  ```
+- [ ] **(you)** Add it to the repo's Actions secrets:
+  ```sh
+  base64 -i ~/keys/audiobrain-release.jks | gh secret set ANDROID_KEYSTORE_BASE64
+  gh secret set ANDROID_KEYSTORE_PASSWORD
+  gh secret set ANDROID_KEY_ALIAS --body audiobrain
+  gh secret set ANDROID_KEY_PASSWORD          # the store password again, unless you gave the key its own
+  ```
+- [x] R8 for release: it was already on (`isMinifyEnabled`, `isShrinkResources`). No keep rules needed: serialization
+      uses the compiler plugin's serializers, and Room, WorkManager and OkHttp ship their own rules.
+- [x] Version from the tag: `v1.2.3` gives versionName `1.2.3` (what Obtainium compares) and versionCode `1002003`.
+      CI passes the tag as `VERSION_NAME`; locally it's the latest `v*` tag, or `0.1.0`.
+- [x] [.github/workflows/android-release.yaml](../.github/workflows/android-release.yaml): on a `v*` tag, decodes the
+      keystore, builds `:app:assembleRelease` on JDK 21 and attaches `audio-brain-<tag>.apk` to a GitHub Release.
+      Not run yet: it needs the secrets above.
+- [ ] **(you)** First release: `git tag v0.1.0 && git push origin main v0.1.0`, then check the Release has the APK.
+- [ ] **(you)** On each device, **uninstall any older Audio Brain first**: older debug builds used the release's package
+      name with the debug key, and Android refuses to update across keys (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`).
+      Anything still in its outbox is lost, so check Settings › Outbox says "all sent" first.
+- [ ] **(you)** Obtainium on each device, adding `https://github.com/George9Waller/audio-brain` (the repo is public, so
+      no token). The first install by `adb install` is fine too.
+- [ ] **(you)** Point each device at the cluster with the connect link. The cluster's token is in its own environment, so
+      print the link from the API pod:
+  ```sh
+  kubectl exec deploy/audio-brain-api -c api -- python manage.py api_token --url http://ubuntuserver.tail1604aa.ts.net:30800
+  ```
+      Paste the link into a note on the device and tap it, or use the `adb shell am start` line it prints. (The emulator
+      has no MagicDNS: use `http://100.122.82.67:30800`.)
 
 ## Phase 5: tidying
 
@@ -196,6 +223,12 @@ Mac stays the primary until the cut-over at the end. Do a dry run first with the
       cluster has run a couple of weeks.
 - [ ] Later: yt-dlp may need a JavaScript runtime (deno) for YouTube. Check the sets and audio jobs' logs after the
       cut-over.
+
+## Status, 21 Oct
+
+The server runs on the cluster. The app side of Phase 4 is built: release signing, versions from tags and the release
+workflow, with the R8 build tested against the cluster on the emulator. Next **(you)**: the keystore and its secrets,
+tag `v0.1.0`, then uninstall the old builds and install from the Release on each device.
 
 ## Status, 20 Oct (evening)
 
