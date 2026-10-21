@@ -156,7 +156,7 @@ Built in this round:
 - **Emulator:** AVD `Pixel_10_Pro`. Set the app up with the link `audiobrain://connect?url=http://10.0.2.2:8000&token=devtest123`.
 - **Build:** `cd android && JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:assembleDebug`
 - **Tests:** `cd server && uv run python manage.py test api` (7 tests) and `uv run python manage.py eval_prompts`.
-- **Settings (B5):** `DEBUG` is now off unless `.env` or the command line says `DEBUG=1`; add it to the dev server command above if you want Django's debug pages. `SECRET_KEY` comes from `.env`, or is generated into `server/.secret_key` (gitignored) on first start. Every key is in `server/.env.example`.
+- **Settings (B5):** `DEBUG` is now off unless `.env` or the command line says `DEBUG=1`; add it to the dev server command above if you want Django's debug pages. `SECRET_KEY` is required from the environment (`.env` on the Mac, the AWS secret on the cluster). Every key is in `server/.env.example`.
 - **On the home box (B5):** gunicorn and the `run_jobs` worker (schedules on) under launchd; install steps, `api_token` and Tailscale are in `deploy/README.md`. Not installed yet **(you)**.
 - **Mixes rebuild (B5):** builds on `MIXES_THREADS` threads (default 6). Its log now has a line per list (tracks, Tidal lookups, time) and suggestion progress.
 

@@ -25,8 +25,8 @@ assume `~/code/audio-brain`).
    SECRET_KEY=...        # uv run python -c "import secrets; print(secrets.token_urlsafe(50))"
    ALLOWED_HOSTS=localhost,127.0.0.1,.ts.net
    ```
-   `DEBUG` is off unless `.env` says `DEBUG=1`; leave it off here. Without `SECRET_KEY`, one is generated into
-   `server/.secret_key` on first start, which also works. See `server/.env.example` for every key.
+   `DEBUG` is off unless `.env` says `DEBUG=1`; leave it off here. `SECRET_KEY` is required: the server won't
+   start without it. See `server/.env.example` for every key.
 3. **The app's token:**
    ```sh
    uv run python manage.py api_token --url http://<this machine>.<tailnet>.ts.net:8000

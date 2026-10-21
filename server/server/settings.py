@@ -27,20 +27,15 @@ def env_flag(name, default=False):
     return default if value is None else value.strip().lower() in ('1', 'true', 'yes', 'on')
 
 
-def secret_key():
-    """SECRET_KEY from .env; failing that, one generated on first run and kept in `.secret_key` (gitignored), so a
-    fresh install is never left on a key that's published in the repo."""
-    if os.environ.get('SECRET_KEY'):
-        return os.environ['SECRET_KEY']
-    path = BASE_DIR / '.secret_key'
-    if not path.exists():
-        import secrets
-        path.write_text(secrets.token_urlsafe(50))
-        path.chmod(0o600)
-    return path.read_text().strip()
-
-
-SECRET_KEY = secret_key()
+# From the environment only: .env on the Mac, the audio-brain AWS secret on the cluster. Never a default, so no
+# install runs on a key that's published in the repo.
+SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured(
+        'SECRET_KEY is not set. Add it to server/.env (on the cluster, to the audio-brain AWS secret); make one with: '
+        'uv run python -c "import secrets; print(secrets.token_urlsafe(50))"'
+    )
 
 # Off unless asked for: `DEBUG=1` in .env or on the command line, for development.
 DEBUG = env_flag('DEBUG')

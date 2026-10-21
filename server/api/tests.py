@@ -96,16 +96,14 @@ class SettingsTests(TestCase):
             with mock.patch.dict("os.environ", {"DEBUG": value}):
                 self.assertEqual(env_flag("DEBUG"), expected)
 
-    def test_secret_key_from_env_else_generated_once_and_kept(self):
-        import tempfile
-        from pathlib import Path
+    def test_secret_key_only_from_env(self):
+        import importlib
         from unittest import mock
+        from django.core.exceptions import ImproperlyConfigured
         from server import settings as module
-        with tempfile.TemporaryDirectory() as folder, mock.patch.object(module, "BASE_DIR", Path(folder)):
-            with mock.patch.dict("os.environ", {"SECRET_KEY": "from-env"}):
-                self.assertEqual(module.secret_key(), "from-env")
-            with mock.patch.dict("os.environ", {"SECRET_KEY": ""}):
-                first = module.secret_key()
-                self.assertGreater(len(first), 40)
-                self.assertEqual(module.secret_key(), first)
-                self.assertEqual((Path(folder) / ".secret_key").stat().st_mode & 0o777, 0o600)
+        # present but empty, so load_dotenv (which never overrides) can't fill it in from .env
+        with mock.patch.dict("os.environ", {"SECRET_KEY": ""}), self.assertRaises(ImproperlyConfigured):
+            importlib.reload(module)
+        with mock.patch.dict("os.environ", {"SECRET_KEY": "from-env"}):
+            self.assertEqual(importlib.reload(module).SECRET_KEY, "from-env")
+        importlib.reload(module)
