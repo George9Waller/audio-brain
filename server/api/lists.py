@@ -13,6 +13,7 @@ from catalogue.models import Artist, Track
 from recommend.lists import track_items
 from recommend.models import Context, ContextTrack, Feedback, ListSync, Mix, Playlist
 from recommend.retrieve import Pick
+from recommend.sigil import shapes
 
 router = Router(tags=["lists"])
 
@@ -67,10 +68,13 @@ def decorate(items):
     verdicts = {}
     for track_id, verdict in Feedback.objects.filter(track__in=ids).order_by("given_at").values_list("track_id", "verdict"):
         verdicts[track_id] = verdict
+    shaped = shapes([(i["track_id"], i.get("context_id")) for i in items if i.get("kind") == "track" and i.get("sound")])
     for item in items:
         if item.get("kind") == "track":
             item["hue"] = colours.get(item["context_id"]) if item.get("context_id") else None
             item["verdict"] = verdicts.get(item["track_id"])
+            if item.get("sound") and item["track_id"] in shaped:
+                item["sound"] = {**item["sound"], "shape": shaped[item["track_id"]]}
     return items
 
 

@@ -107,3 +107,84 @@ class SettingsTests(TestCase):
         with mock.patch.dict("os.environ", {"SECRET_KEY": "from-env"}):
             self.assertEqual(importlib.reload(module).SECRET_KEY, "from-env")
         importlib.reload(module)
+
+
+@override_settings(API_TOKEN="secret")
+class ListAndSetTests(TestCase):
+    def setUp(self):
+        from recommend.models import Mix
+        self.headers = {"Authorization": "Bearer secret"}
+        self.artist = Artist.objects.create(name="Boiler Room")
+        self.mine = Mix.objects.create(key="explore:1", kind="explore", section=Mix.LISTS, title="Explore · Someone")
+        self.built = Mix.objects.create(key="fresh", kind="fresh", section=Mix.DISCOVER, title="Fresh")
+
+    def post(self, path, body=None):
+        return self.client.post(path, body or {}, content_type="application/json", headers=self.headers)
+
+    def test_only_lists_you_made_can_be_deleted(self):
+        from recommend.models import ListSync, Mix
+        ListSync.objects.create(key="explore:1")
+        self.assertEqual(self.client.delete("/api/v1/mixes/explore:1", headers=self.headers).status_code, 204)
+        self.assertFalse(Mix.objects.filter(key="explore:1").exists())
+        self.assertFalse(ListSync.objects.filter(key="explore:1").exists())
+        self.assertEqual(self.client.delete("/api/v1/mixes/fresh", headers=self.headers).status_code, 400)
+        self.assertTrue(Mix.objects.filter(key="fresh").exists())
+
+    def test_rename(self):
+        response = self.post("/api/v1/mixes/explore:1/rename", {"title": "  Late night  "})
+        self.assertEqual(response.json()["title"], "Late night")
+        self.assertEqual(self.post("/api/v1/mixes/fresh/rename", {"title": "x"}).status_code, 400)
+
+    def test_short_title_fallback(self):
+        from recommend.actions import short_title
+        self.assertEqual(short_title("dub"), "dub")
+        self.assertEqual(short_title("so basically I want something for cooking, a bit dubby, not too loud"), "so basically I want something for…")
+
+    def test_resolve_finds_a_set_by_youtube_id_then_title(self):
+        from sets.models import Set, SetTrack
+        track = Track.objects.create(name="Fred again.. Boiler Room London", artist=self.artist)
+        set_ = Set.objects.create(track=track, youtube_id="c0-hvjV2A5Y", tracklist_title="Fred again.. | Boiler Room: London")
+        SetTrack.objects.create(set=set_, position=1, cue="0:00", artist_name="Fred again..", track_name="Marea")
+        by_id = self.post("/api/v1/tracks/resolve", {"artist": "Boiler Room", "title": "something else", "media_id": "c0-hvjV2A5Y"}).json()
+        by_title = self.post("/api/v1/tracks/resolve", {"artist": "Boiler Room", "title": "Fred again.. | Boiler Room: London"}).json()
+        nothing = self.post("/api/v1/tracks/resolve", {"artist": "Nobody", "title": "Nothing"}).json()
+        self.assertEqual(by_id["set_id"], set_.pk)
+        self.assertEqual(by_title["set_id"], set_.pk)
+        self.assertIsNone(nothing["set_id"])
+
+    def test_resolve_finds_a_set_from_a_file_name(self):
+        from sets.models import Set, SetTrack
+        track = Track.objects.create(name="Gorgon City Live from Drumsheds London", artist=Artist.objects.create(name="Gorgon City"))
+        other = Track.objects.create(name="Gorgon City DJ set live at Printworks March 2022", artist=track.artist)
+        for t, seconds in [(track, 10958), (other, 10284)]:
+            s = Set.objects.create(track=t, duration=seconds)
+            SetTrack.objects.create(set=s, position=1, artist_name="Gorgon City", track_name="Ready For Your Love")
+        file = self.post("/api/v1/tracks/resolve", {"artist": "<unknown>", "title": "Gorgon City - Drumsheds London (Live).mp3", "duration_ms": 10_950_000}).json()
+        wrong_length = self.post("/api/v1/tracks/resolve", {"artist": "Gorgon City", "title": "Drumsheds London", "duration_ms": 3_000_000}).json()
+        song = self.post("/api/v1/tracks/resolve", {"artist": "Gorgon City", "title": "Ready For Your Love", "duration_ms": 200_000}).json()
+        self.assertEqual(file["set_id"], Set.objects.get(track=track).pk)
+        self.assertIsNone(wrong_length["set_id"])
+        self.assertIsNone(song["set_id"])
+
+
+class SigilTests(TestCase):
+    def test_ranks_within_the_context(self):
+        from catalogue.models import AudioFeatures
+        from recommend.models import Context, ContextTrack
+        from recommend.sigil import _columns, shapes
+        _columns.cache_clear()
+        artist = Artist.objects.create(name="Someone")
+        context = Context.objects.create(name="House", centroid=[0.0] * 1280)
+        tracks = []
+        for i in range(12):
+            t = Track.objects.create(name=f"T{i}", artist=artist)
+            AudioFeatures.objects.create(
+                track=t, preview_source="tidal", model="m", bpm=126, bpm_confidence=4, key="A", scale="minor", key_strength=0.5,
+                loudness=-8, danceability=1.0, instrumental=0.2, happy=0.4 + i * 0.01, sad=0.05, aggressive=0.2, relaxed=0.1, party=0.97,
+                embedding=[0.0] * 1280,
+            )
+            ContextTrack.objects.create(track=t, context=context, distance=0)
+            tracks.append(t)
+        got = shapes([(t.pk, context.pk) for t in tracks])
+        happiest, saddest = got[tracks[-1].pk][0], got[tracks[0].pk][0]
+        self.assertGreater(happiest - saddest, 0.8)  # 0.40 vs 0.51 raw: nearly the whole range once ranked

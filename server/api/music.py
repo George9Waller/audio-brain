@@ -1,6 +1,7 @@
 """What to play now, the contexts, and tracks as the app shows them."""
 
 import math
+import re
 from datetime import date, datetime
 from functools import lru_cache
 
@@ -17,6 +18,7 @@ from library.models import Favourite
 from recommend import context_ranker
 from recommend.editorial import CAMELOT
 from recommend.features import energy
+from recommend.sigil import MOODS, rank
 from recommend.models import Context, ContextMembershipOverride, ContextTrack, Feedback, Playlist
 
 router = Router(tags=["music"])
@@ -115,10 +117,12 @@ class TrackRef(Schema):
     album: str = ""
     duration_ms: int | None = None
     package: str = ""  # the player's Android package, e.g. com.aspiro.tidal
+    media_id: str = ""  # the player's own ID for it: YouTube Music gives the video ID
 
 
 class Resolved(Schema):
     track: TrackOut | None
+    set_id: int | None = None  # a DJ set with a tracklist, so the app can show what's playing within it
 
 
 @lru_cache(maxsize=1)
@@ -181,6 +185,7 @@ def track_out(track):
         sound = {
             "bpm": round(audio.bpm, 1), "key": audio.key, "scale": audio.scale, "camelot": f"{camelot[0]}{camelot[1]}" if camelot else None,
             "energy": energy(audio), **{f: round(getattr(audio, f), 3) for f in ["danceability", "instrumental", "happy", "sad", "aggressive", "relaxed", "party"]},
+            "shape": rank([getattr(audio, m) for m in MOODS], membership.context_id if membership and membership.context.active else None),
         }
     return {
         "id": track.pk, "name": track.name, "artist": track.artist.name, "album": track.album.name if track.album else None,
@@ -299,4 +304,61 @@ def get_track(request, track_id: int):
 def resolve_track(request, ref: TrackRef):
     """The catalogue track for what a player says is playing, or none. Doesn't add tracks; feedback does."""
     track = Track.objects.filter(pk=ref.id).first() if ref.id else match(**ref.dict())
-    return {"track": track_out(track) if track else None}
+    set_ = playing_set(ref, track)
+    return {"track": track_out(track) if track else None, "set_id": set_.pk if set_ else None}
+
+
+YOUTUBE_ID = re.compile(r"^[\w-]{11}$")
+
+
+def playing_set(ref, track):
+    """The set being played, if it has a tracklist: by YouTube video ID (YouTube Music reports it as the media ID,
+    and its titles rarely match the scrobbled names), else by the matched track, else by name (a set file in FiiO
+    Music or UAPP, say, named however it was saved)."""
+    from sets.models import Set
+
+    sets = Set.objects.exclude(status=Set.REJECTED).filter(entries__isnull=False).distinct()
+    if ref.media_id and YOUTUBE_ID.match(ref.media_id):
+        found = sets.filter(youtube_id=ref.media_id).first()
+        if found:
+            return found
+    if track is not None:
+        found = sets.filter(track=track).first()
+        if found:
+            return found
+    return set_by_name(sets.select_related("track__artist"), ref.title, ref.artist, (ref.duration_ms or 0) / 1000 or None)
+
+
+EXTENSION = re.compile(r"\.(mp3|flac|m4a|aac|wav|ogg|opus|webm|mp4|mkv)$", re.I)
+SET_WORDS = {"live", "set", "full", "official", "dj", "mix", "at", "from", "the", "in", "of", "and", "a", "show", "video",
+             "audio", "hd", "4k", "presents", "unknown", "artist", "various", "artists", "b2b", "x", "vs", "w"}
+
+
+def set_words(*texts):
+    """The words that tell sets apart: lower case, no punctuation, file extensions or filler like "live" and "full set"."""
+    words = set()
+    for text in texts:
+        words |= set(re.findall(r"[^\W_]+", EXTENSION.sub("", text or "").lower()))
+    return {w for w in words if w not in SET_WORDS and len(w) > 1}
+
+
+def set_by_name(sets, title, artist="", seconds=None, least=0.75):
+    """The set whose names best cover what the player reports, or None. Most of the reported words must be in the
+    set's title, tracklist title or artist (players add or drop the artist, the venue or the year), and a
+    reported length far from the set's own rules it out. Anything under 20 minutes isn't a set."""
+    if seconds and seconds < 20 * 60:
+        return None
+    reported = set_words(title, "" if artist.startswith("<") else artist)
+    if len(reported) < 2:
+        return None
+    best, best_score = None, 0.0
+    for s in sets:
+        names = set_words(s.track.name, s.tracklist_title, s.track.artist.name)
+        shared = len(reported & names)
+        score = shared / min(len(reported), len(names) or 1)
+        same_length = bool(s.duration and seconds) and abs(s.duration - seconds) <= max(0.1 * s.duration, 180)
+        if s.duration and seconds and not same_length:
+            continue
+        if shared >= (2 if same_length else 3) and score > best_score:  # two words only with the length to back them
+            best, best_score = s, score
+    return best if best_score >= least else None

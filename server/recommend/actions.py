@@ -159,7 +159,7 @@ def make(prompt="", recipe=None, length=None, exploration=None):
         # no length given: whatever the words say ("two hours of..."), else 30
         picks, request = ask(prompt, length=length, overfetch=1.6, exploration=exploration)
         wanted = request.length
-        title, understood = prompt.strip()[:120], describe(request)
+        title, understood = (request.title or "").strip()[:60] or short_title(prompt), describe(request)
         subtitle = understood
     picks = playable(picks, wanted)  # only tracks Tidal can play, as with lists
     for old in Mix.objects.filter(kind="draft", built_at__lt=timezone.now() - DRAFTS_LAST):
@@ -172,6 +172,23 @@ def make(prompt="", recipe=None, length=None, exploration=None):
     Mix.objects.filter(pk=draft.pk).update(request=logged_request, logged=False)
     draft.request, draft.logged = logged_request, False
     return draft, understood
+
+
+def short_title(prompt, words=6):
+    """A list name from the words alone, when no model gave one: the first few words of a long request."""
+    parts = prompt.strip().split()
+    return " ".join(parts[:words]).rstrip(",.;:") + ("…" if len(parts) > words else "")
+
+
+USER_MADE = ("asked", "radio", "explore", "set")  # lists you made; the Mixes job rebuilds the rest
+
+
+def remove_list(mix):
+    """Delete a list you made. Its Tidal playlist, if any, stays in Tidal but is no longer updated."""
+    from recommend.models import ListSync
+
+    ListSync.objects.filter(key=mix.key).delete()
+    mix.delete()
 
 
 def keep(draft, title=None, remove=()):

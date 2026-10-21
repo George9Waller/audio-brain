@@ -24,6 +24,7 @@ from recommend.timetravel import parse_period, time_travel
 
 
 class MusicRequest(BaseModel):
+    title: str = Field(default="", description="A short name for the playlist, two to five words in the request's own spirit, e.g. 'Slow Sunday dub' or 'Kitchen disco'. Never the request repeated")
     sound: str = Field(description="What it should sound like, in plain English for an audio-text model, e.g. 'dubby rolling bassline, sparse, no vocals'. Empty if the request is only about context or seeds.")
     context_id: int | None = Field(description="The listed context that best fits, or null if none clearly does")
     styles: list[str] = Field(description="Styles to require, chosen only from the listed styles; usually empty")

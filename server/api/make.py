@@ -12,7 +12,7 @@ from recommend.lists import track_items
 from api.matching import match
 from api.music import TrackRef
 from catalogue.models import AudioFeatures, Track
-from recommend.actions import discard, edit_list, extend_radio, keep, make, play, playlist_url, quick_actions, start_radio, suggestions, sync_list
+from recommend.actions import USER_MADE, discard, remove_list, edit_list, extend_radio, keep, make, play, playlist_url, quick_actions, start_radio, suggestions, sync_list
 from recommend.models import Mix, Playlist
 
 router = Router(tags=["make"])
@@ -91,6 +91,33 @@ def discard_draft(request, key: str):
     if draft:
         discard(draft)
     return 204, None
+
+
+@router.delete("/mixes/{key}", response={204: None})
+def delete_list(request, key: str):
+    """Delete a list you made (asked, radio, explore or from a set). Built lists come back on the next rebuild, so
+    they can't be deleted."""
+    mix = get_object_or_404(Mix, key=key)
+    if mix.kind not in USER_MADE:
+        raise HttpError(400, "Only lists you made can be deleted; this one is rebuilt each night")
+    remove_list(mix)
+    return 204, None
+
+
+class RenameIn(Schema):
+    title: str
+
+
+@router.post("/mixes/{key}/rename", response=ListOut)
+def rename_list(request, key: str, body: RenameIn):
+    mix = get_object_or_404(Mix, key=key)
+    if mix.kind not in USER_MADE + ("draft",):
+        raise HttpError(400, "Only lists you made can be renamed")
+    if not body.title.strip():
+        raise HttpError(400, "Give it a name")
+    mix.title = body.title.strip()[:250]
+    mix.save(update_fields=["title"])
+    return list_out(mix)
 
 
 @router.post("/mixes/{key}/play", response=Played)
