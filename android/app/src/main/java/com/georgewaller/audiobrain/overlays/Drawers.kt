@@ -26,10 +26,11 @@ import com.georgewaller.audiobrain.design.AbText
 import com.georgewaller.audiobrain.design.ButtonKind
 import com.georgewaller.audiobrain.design.SoundSigil
 import com.georgewaller.audiobrain.design.VerdictBar
+import com.georgewaller.audiobrain.data.Settings
 import com.georgewaller.audiobrain.facts
+import com.georgewaller.audiobrain.playerName
 import com.georgewaller.audiobrain.openUrl
 import com.georgewaller.audiobrain.player.Launch
-import com.georgewaller.audiobrain.player.SessionTracker
 import com.georgewaller.audiobrain.shortName
 import com.georgewaller.audiobrain.sigil
 import com.georgewaller.audiobrain.sigilFor
@@ -39,8 +40,10 @@ import kotlin.math.roundToInt
 
 /** The now-playing drawer: the track, all four verdicts, radio and more like this, playback. */
 @Composable
-fun NowDrawerContent(vm: AppViewModel, onClose: () -> Unit) {
+fun NowDrawerContent(vm: AppViewModel, onMenu: (ListItem, String) -> Unit, onTracklist: (Long) -> Unit, onClose: () -> Unit) {
     val np by vm.nowPlaying.collectAsStateWithLifecycle()
+    val setNow by vm.setNow.collectAsStateWithLifecycle()
+    val within by vm.within.collectAsStateWithLifecycle()
     val track by vm.track.collectAsStateWithLifecycle()
     val verdict by vm.nowVerdict.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -50,14 +53,15 @@ fun NowDrawerContent(vm: AppViewModel, onClose: () -> Unit) {
         AbText("Start something in Tidal or UAPP.", style = Ab.type.caption, color = Ab.colors.textMuted)
         return
     }
-    val (sigil, faint) = remember(playing.ref.key, track) { sigilFor(playing, track) }
+    val setTrack = setNow?.line?.track
+    val (sigil, faint) = remember(playing.ref.key, track, setTrack) { setTrack?.takeIf { it.sound != null }?.sigil() ?: sigilFor(playing, track) }
     Column(verticalArrangement = Arrangement.spacedBy(Ab.space.m)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SoundSigil(sigil, size = 56.dp, playing = playing.playing, faint = faint)
             Spacer(Modifier.width(Ab.space.m))
             Column(Modifier.weight(1f)) {
-                AbText(playing.title, style = Ab.type.heading, maxLines = 2)
-                AbText("${playing.artist} · ${playing.appLabel}", style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 1)
+                AbText(within?.title ?: playing.title, style = Ab.type.heading, maxLines = 2)
+                AbText("${within?.artist ?: playing.artist} · ${playing.appLabel}", style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 1)
             }
         }
         val sound = track?.sound
@@ -66,16 +70,16 @@ fun NowDrawerContent(vm: AppViewModel, onClose: () -> Unit) {
                 .joinToString(" · "),
             style = Ab.type.number, color = Ab.colors.textMuted,
         )
+        setNow?.let { now -> SetLine(now, { onClose(); onMenu(it, "set") }, { onClose(); onTracklist(now.tracklist.set.id) }) }
         VerdictBar(verdict?.style(), { vm.giveNow(it.verdict()) })
         Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
             AbButton("Start radio", { onClose(); vm.startRadio() })
             AbButton("More like this", { onClose(); vm.moreLikeNow() }, kind = ButtonKind.Quiet)
             AbButton("Explore", { onClose(); vm.explore(name = playing.artist.split(",").first().trim(), trackId = track?.id) }, kind = ButtonKind.Ghost)
         }
+        PlaybackProgress(playing)
         Row(verticalAlignment = Alignment.CenterVertically) {
-            AbIconButton(AbIcons.Previous, "Previous", { SessionTracker.previous() }, tint = Ab.colors.textMuted)
-            AbIconButton(if (playing.playing) AbIcons.Pause else AbIcons.Play, if (playing.playing) "Pause" else "Play", { SessionTracker.playPause() }, background = Ab.colors.raised)
-            AbIconButton(AbIcons.Next, "Next", { SessionTracker.next() }, tint = Ab.colors.textMuted)
+            Transport(playing.playing, size = Ab.space.touch)
             Spacer(Modifier.weight(1f))
             track?.tidalUrl?.let { url -> AbButton("Open in Tidal", { Launch.tidal(context, url) }, kind = ButtonKind.Ghost, icon = AbIcons.Open) }
         }
@@ -86,8 +90,11 @@ fun NowDrawerContent(vm: AppViewModel, onClose: () -> Unit) {
 @Composable
 fun ItemMenuContent(vm: AppViewModel, item: ListItem, where: String, onClose: () -> Unit) {
     val verdicts by vm.verdicts.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val (sigil, faint) = remember(item) { item.sigil() }
+    val playOn = settings?.playOn ?: Settings.TIDAL
+    val other = if (playOn == Settings.TIDAL) Settings.YT_MUSIC else Settings.TIDAL
     Column(verticalArrangement = Arrangement.spacedBy(Ab.space.m)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SoundSigil(sigil, size = 48.dp, faint = faint)
@@ -101,9 +108,13 @@ fun ItemMenuContent(vm: AppViewModel, item: ListItem, where: String, onClose: ()
         if (item.reason.isNotBlank()) AbText(item.reason, style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 3)
         VerdictBar((verdicts[item.ref.key] ?: Verdict.fromApi(item.verdict))?.style(), { vm.give(it.verdict(), item, where); onClose() })
         Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
-            AbButton("Start radio", { onClose(); vm.startRadio(item) })
+            AbButton("Play in ${playerName(playOn)}", { onClose(); vm.playTrack(item) }, icon = AbIcons.Play)
+            AbButton(playerName(other), { onClose(); vm.playTrack(item, other) }, kind = ButtonKind.Ghost)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
+            AbButton("Start radio", { onClose(); vm.startRadio(item) }, kind = ButtonKind.Quiet)
             AbButton("Explore artist", { onClose(); vm.explore(name = item.artist.split(",").first().trim(), trackId = item.trackId) }, kind = ButtonKind.Quiet)
-            item.tidalId?.let { id -> AbButton("Open in Tidal", { openUrl(context, "https://tidal.com/browse/track/$id") }, kind = ButtonKind.Ghost, icon = AbIcons.Open) }
+            item.tidalId?.let { id -> AbIconButton(AbIcons.Open, "Open in Tidal", { openUrl(context, "https://tidal.com/browse/track/$id") }, tint = Ab.colors.textMuted) }
         }
         Spacer(Modifier.height(Ab.space.xs))
     }

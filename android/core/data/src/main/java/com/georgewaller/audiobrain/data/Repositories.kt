@@ -103,8 +103,8 @@ class FeedbackRepository(private val context: Context, private val dao: Feedback
 /** What to play now. The last answer is kept on disk, so the screen has something to show offline. */
 class NowRepository(context: Context, private val api: ApiClient) {
     private val cache = File(context.filesDir, "now.json")
-    private val tracks = object : LinkedHashMap<String, TrackDto?>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, TrackDto?>?) = size > 64
+    private val tracks = object : LinkedHashMap<String, Resolved>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Resolved>?) = size > 64
     }
 
     suspend fun cached(): NowResponse? = withContext(Dispatchers.IO) {
@@ -118,12 +118,12 @@ class NowRepository(context: Context, private val api: ApiClient) {
         return parsed
     }
 
-    /** The catalogue track for what's playing, cached for the session; null if the server doesn't know it. */
-    suspend fun resolve(ref: TrackRef): TrackDto? {
-        synchronized(tracks) { if (tracks.containsKey(ref.key)) return tracks[ref.key] }
-        val track = api.resolve(ref).track
-        synchronized(tracks) { tracks[ref.key] = track }
-        return track
+    /** The catalogue track (and set, if it's one) for what's playing, cached for the session. */
+    suspend fun resolve(ref: TrackRef): Resolved {
+        synchronized(tracks) { tracks[ref.key]?.let { return it } }
+        val resolved = api.resolve(ref)
+        synchronized(tracks) { tracks[ref.key] = resolved }
+        return resolved
     }
 }
 
@@ -137,6 +137,11 @@ class ListsRepository(context: Context, private val api: ApiClient) {
     private val cache = File(context.filesDir, "lists.json")
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
+
+    /** The lists on disk, without asking the server: for the widget. */
+    suspend fun cached(): List<MixList> = _state.value.lists.ifEmpty {
+        withContext(Dispatchers.IO) { if (cache.exists()) runCatching { ApiJson.decodeFromString<ListsResponse>(cache.readText()).lists }.getOrNull() else null }.orEmpty()
+    }
 
     suspend fun load() {
         if (_state.value.lists.isEmpty()) {
@@ -167,6 +172,8 @@ class ListsRepository(context: Context, private val api: ApiClient) {
     }
 
     fun find(key: String) = _state.value.lists.firstOrNull { it.key == key }
+
+    fun remove(key: String) = _state.update { s -> s.copy(lists = s.lists.filterNot { it.key == key }) }
 }
 
 /** Asking for a mix, radio, and what's done with a draft. Needs the server. */

@@ -478,7 +478,7 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, onMenu: (ListItem, String) -> Un
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         val sound = d?.sound
                         SoundSigil(
-                            if (sound != null) SigilSpec(listOf(sound.happy, sound.party, sound.danceability, sound.aggressive, sound.sad, sound.relaxed), sound.energy, sound.bpm, d.context?.hue)
+                            if (sound != null) SigilSpec(sound.shape?.takeIf { it.size == 6 } ?: listOf(sound.happy, sound.party, sound.danceability, sound.aggressive, sound.sad, sound.relaxed), sound.energy, sound.bpm, d.context?.hue, sound.camelot, sound.instrumental < 0.5f)
                             else SigilSpec.fromSeed("${p2.ids[i]}"), size = 40.dp, faint = sound == null,
                         )
                         Spacer(Modifier.width(Ab.space.m))

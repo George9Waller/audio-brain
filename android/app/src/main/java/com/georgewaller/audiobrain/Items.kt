@@ -30,14 +30,15 @@ fun VerdictStyle.verdict() = Verdict.valueOf(name)
 /** A list item's sigil: from its measured sound, else a faint stand-in from its names. Second is "faint". */
 fun ListItem.sigil(): Pair<SigilSpec, Boolean> {
     val s = sound
-    return if (s != null && s.moods.size == 6) SigilSpec(s.moods, s.energy, s.bpm, hue) to false
+    return if (s != null && s.moods.size == 6) SigilSpec(s.shape?.takeIf { it.size == 6 } ?: s.moods, s.energy, s.bpm, hue, s.camelot, s.instrumental < 0.5f) to false
     else SigilSpec.fromSeed(ref.key, hue) to true
 }
 
 /** The sigil for what's playing: from the catalogue's measured sound when it has it. */
 fun sigilFor(np: NowPlaying, track: TrackDto?): Pair<SigilSpec, Boolean> {
     val sound = track?.sound ?: return SigilSpec.fromSeed(np.ref.key, track?.context?.hue) to true
-    return SigilSpec(listOf(sound.happy, sound.party, sound.danceability, sound.aggressive, sound.sad, sound.relaxed), sound.energy, sound.bpm, track.context?.hue) to false
+    val moods = sound.shape?.takeIf { it.size == 6 } ?: listOf(sound.happy, sound.party, sound.danceability, sound.aggressive, sound.sad, sound.relaxed)
+    return SigilSpec(moods, sound.energy, sound.bpm, track.context?.hue, sound.camelot, sound.instrumental < 0.5f) to false
 }
 
 fun ListItem.facts(): String? = sound?.let { "${it.bpm.roundToInt()}\n${it.camelot ?: ""}".trim() }

@@ -105,7 +105,7 @@ sealed interface Overlay {
  * for lists and asking, and the Building and Draft screens while a mix is being made.
  */
 @Composable
-fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit, shared: String? = null, onShareHandled: () -> Unit = {}) {
+fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit, shared: String? = null, onShareHandled: () -> Unit = {}, openList: String? = null, onListOpened: () -> Unit = {}) {
     val context = LocalContext.current
     val vm: AppViewModel = viewModel { AppViewModel(graph, context.applicationContext) }
     val jobs: JobsViewModel = viewModel { JobsViewModel(graph) }
@@ -126,6 +126,7 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit,
     val openTracklist: (Overlay.Tracklist) -> Unit = { o -> tracklist.start(o.prefill, o.attachTo, o.show); overlays.removeAll { it is Overlay.Tracklist }; overlays.add(o) }
     // text or a link shared from another app (a tracklist page, a video, a friend's message) opens as a tracklist
     LaunchedEffect(shared) { if (shared != null) { openTracklist(Overlay.Tracklist(prefill = shared)); onShareHandled() } }
+    LaunchedEffect(openList) { if (openList != null) { overlays.removeAll { it is Overlay.List }; overlays.add(Overlay.List(openList)); onListOpened() } }
     LaunchedEffect(Unit) {
         vm.events.collect { e ->
             when (e) {
@@ -148,32 +149,33 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit,
 
     val playing = np?.takeIf { it.hasTrack }
     val onMenu: (ListItem, String) -> Unit = { item, where -> menu = item to where }
+    val onSetTracklist: (Long) -> Unit = { id -> openTracklist(Overlay.Tracklist(show = id)) }
+    // the map suits a phone; the DAPs' small screens open on the library, and either can switch
+    val wide = LocalConfiguration.current.smallestScreenWidthDp >= 400
+    var catalogueMode by rememberSaveable { mutableStateOf(if (wide) "map" else "library") }
     val pad = PaddingValues(start = Ab.space.gutter, end = Ab.space.gutter, bottom = 96.dp)
 
     Box(Modifier.fillMaxSize().background(Ab.colors.ground)) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            // Pages change by swiping along the names here or tapping one: a sideways swipe on a track row is a
-            // verdict, and one from the screen's edge is Android's back, so the page area itself doesn't scroll sideways.
+            // Pages change by swiping anywhere, along the names, or tapping one. A track row's own swipe (a verdict)
+            // takes the gesture first, so the page only moves when the drag starts off a row; on the map a drag pans.
             PageLabels(
                 PAGES, pager.currentPage + pager.currentPageOffsetFraction, alerts = if (pending > 0) setOf(4) else emptySet(),
                 modifier = Modifier.padding(vertical = Ab.space.xs).pageSwipe { dir -> scope.launch { pager.animateScrollToPage((pager.currentPage + dir).coerceIn(0, PAGES.lastIndex)) } },
             ) { scope.launch { pager.animateScrollToPage(it) } }
             Box(Modifier.weight(1f)) {
-            HorizontalPager(pager, Modifier.fillMaxSize().navigationBarsPadding(), beyondViewportPageCount = 1, userScrollEnabled = false) { page ->
+            HorizontalPager(pager, Modifier.fillMaxSize().navigationBarsPadding(), beyondViewportPageCount = 1, userScrollEnabled = !(pager.currentPage == 3 && catalogueMode == "map")) { page ->
                 when (page) {
                     0 -> ListsPage(vm, pad, { overlays.add(Overlay.List(it)) }, onMenu)
-                    1 -> HomePage(vm, pad, onAsk = { overlays.add(Overlay.Ask()) }, onFocus = { overlays.add(Overlay.Focus) }) { overlays.add(Overlay.List(it)) }
+                    1 -> HomePage(vm, pad, onAsk = { overlays.add(Overlay.Ask()) }, onFocus = { overlays.add(Overlay.Focus) }, onMenu = onMenu, onTracklist = onSetTracklist) { overlays.add(Overlay.List(it)) }
                     2 -> DiscoverPage(vm, pad, { overlays.add(Overlay.List(it)) }, onMenu)
                     3 -> {
-                        // the map suits a phone; the DAPs' small screens open on the library, and either can switch
-                        val wide = LocalConfiguration.current.smallestScreenWidthDp >= 400
-                        var mode by rememberSaveable { mutableStateOf(if (wide) "map" else "library") }
                         Column(Modifier.fillMaxSize()) {
                             Row(Modifier.padding(horizontal = Ab.space.gutter, vertical = Ab.space.xs), horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
-                                AbChip("Map", selected = mode == "map") { mode = "map" }
-                                AbChip("Library", selected = mode == "library") { mode = "library" }
+                                AbChip("Map", selected = catalogueMode == "map") { catalogueMode = "map" }
+                                AbChip("Library", selected = catalogueMode == "library") { catalogueMode = "library" }
                             }
-                            if (mode == "map") MapPage(vm, graph, onMenu)
+                            if (catalogueMode == "map") MapPage(vm, graph, onMenu)
                             else CataloguePage(vm, library, pad, { overlays.add(Overlay.Artist(it)) }, { overlays.add(Overlay.Album(it)) }, { overlays.add(Overlay.Set(it)) }, onMenu, onPasteTracklist = { openTracklist(Overlay.Tracklist()) })
                         }
                     }
@@ -206,11 +208,11 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit,
             label = "overlay",
         ) { overlay ->
             if (overlay == null) return@AnimatedContent
-            if (overlay == Overlay.Focus) { FocusScreen(vm) { overlays.removeAt(overlays.lastIndex) }; return@AnimatedContent }
+            if (overlay == Overlay.Focus) { FocusScreen(vm, { overlays.removeAt(overlays.lastIndex) }, onMenu, onSetTracklist); return@AnimatedContent }
             OverlayFrame({ overlays.removeAt(overlays.lastIndex) }) {
                 val p = PaddingValues(start = Ab.space.gutter, end = Ab.space.gutter, bottom = 96.dp)
                 when (overlay) {
-                    is Overlay.List -> ListDetail(vm, overlay.key, p, onMenu)
+                    is Overlay.List -> ListDetail(vm, overlay.key, p, onMenu) { overlays.remove(overlay) }
                     is Overlay.Artist -> ArtistScreen(vm, graph, overlay.id, p, { overlays.add(Overlay.Album(it)) }, onMenu)
                     is Overlay.Album -> AlbumScreen(vm, graph, overlay.id, p, { overlays.add(Overlay.Artist(it)) }, onMenu)
                     is Overlay.Set -> SetScreen(vm, graph, overlay.id, p, onMenu) { provided -> openTracklist(if (provided) Overlay.Tracklist(show = overlay.id) else Overlay.Tracklist(attachTo = overlay.id)) }
@@ -238,7 +240,7 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit,
             }
         }
 
-        AbDrawer(drawer, { drawer = false }) { NowDrawerContent(vm) { drawer = false } }
+        AbDrawer(drawer, { drawer = false }) { NowDrawerContent(vm, onMenu, onSetTracklist) { drawer = false } }
         AbDrawer(menu != null, { menu = null }) { menu?.let { (item, where) -> ItemMenuContent(vm, item, where) { menu = null } } }
 
         AnimatedVisibility(message != null, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 84.dp), enter = fadeIn(), exit = fadeOut()) {

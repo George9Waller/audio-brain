@@ -49,6 +49,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -68,12 +76,20 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
- * What a sound sigil is drawn from. [moods] are 0-1 scores in a fixed order (happy, party, danceability, aggressive,
- * sad, relaxed) and become the lobes; [energy] the ring's weight; [bpm] the ticks around it; [hue] its context's
- * colour, or null for a track outside your contexts (drawn grey).
+ * What a sound sigil is drawn from. [moods] are 0-1 values in a fixed order (happy, party, danceability, aggressive,
+ * sad, relaxed) and become the lobes: ranked within the track's context where the server sends that, so one list's
+ * tracks differ. [energy] is the ring's weight; [bpm] the ticks around it; [hue] its context's colour, or null for a
+ * track outside your contexts (drawn grey). [camelot] (e.g. "8A") turns the shape 30° a step round the wheel, draws
+ * minor keys hollow and nudges the colour, so keys that mix look related; [vocal] puts a dot in the middle.
  */
 @Immutable
-data class SigilSpec(val moods: List<Float>, val energy: Float, val bpm: Float, val hue: Float?) {
+data class SigilSpec(
+    val moods: List<Float>, val energy: Float, val bpm: Float, val hue: Float?,
+    val camelot: String? = null, val vocal: Boolean = false,
+) {
+    val keyNumber: Int? get() = camelot?.dropLast(1)?.toIntOrNull()
+    val minor: Boolean get() = camelot?.endsWith("A") == true
+
     companion object {
         /** A stable stand-in for a track that hasn't been analysed: same names, same glyph. Drawn fainter. */
         fun fromSeed(seed: String, hue: Float? = null): SigilSpec {
@@ -91,38 +107,63 @@ data class SigilSpec(val moods: List<Float>, val energy: Float, val bpm: Float, 
  */
 @Composable
 fun SoundSigil(spec: SigilSpec, modifier: Modifier = Modifier, size: Dp = 44.dp, playing: Boolean = false, faint: Boolean = false) {
-    val color = contextColor(spec.hue)
+    val ground = Ab.colors.ground
     val beatMs = (60_000f / spec.bpm.coerceIn(60f, 200f)).roundToInt()
     val pulse = if (playing) {
         rememberInfiniteTransition(label = "beat").animateFloat(1f, 1.05f, infiniteRepeatable(tween(beatMs / 2, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "pulse").value
     } else 1f
     val path = remember(spec) { Path() }
-    Canvas(modifier.size(size).scale(pulse)) {
-        val c = Offset(this.size.width / 2, this.size.height / 2)
-        val outer = this.size.minDimension / 2
-        val k = (this.size.minDimension / 44.dp.toPx()).coerceAtLeast(0.7f)  // stroke scale
-        val alpha = if (faint) 0.45f else 1f
-        val ticks = (spec.bpm / 10f).roundToInt().coerceIn(6, 20)
-        rotate(-90f, c) {
-            for (i in 0 until ticks) {
-                val a = (2 * PI * i / ticks).toFloat()
-                drawLine(color.copy(alpha = 0.5f * alpha), c + polar(a, outer * 0.86f), c + polar(a, outer), 1.2.dp.toPx() * k, StrokeCap.Round)
-            }
-        }
-        drawCircle(color.copy(alpha = 0.9f * alpha), outer * 0.72f, c, style = Stroke((0.8f + spec.energy * 3.2f).dp.toPx() * k))
-        val n = spec.moods.size
-        val points = spec.moods.mapIndexed { i, m -> c + polar((2 * PI * i / n - PI / 2).toFloat(), outer * (0.17f + 0.44f * m.coerceIn(0f, 1f))) }
-        path.reset()
-        val start = (points.last() + points.first()) / 2f
-        path.moveTo(start.x, start.y)
-        for (i in points.indices) {
-            val p = points[i]
-            val m = (p + points[(i + 1) % n]) / 2f
-            path.quadraticTo(p.x, p.y, m.x, m.y)
-        }
-        path.close()
-        drawPath(path, color.copy(alpha = alpha))
+    Canvas(modifier.size(size).scale(pulse)) { drawSigil(spec, path, ground, faint) }
+}
+
+/** The sigil as a bitmap [px] square, for places Compose can't draw into: the home screen widget. */
+fun sigilBitmap(spec: SigilSpec, px: Int, density: Float, faint: Boolean = false): android.graphics.Bitmap {
+    val image = ImageBitmap(px, px)
+    CanvasDrawScope().draw(Density(density), LayoutDirection.Ltr, androidx.compose.ui.graphics.Canvas(image), Size(px.toFloat(), px.toFloat())) {
+        drawSigil(spec, Path(), DarkColors.ground, faint)
     }
+    return image.asAndroidBitmap()
+}
+
+/** The sigil's colour: its context's, shifted a little round the Camelot wheel so keys that mix look related. */
+fun sigilColor(spec: SigilSpec): Color {
+    val key = spec.keyNumber
+    return if (spec.hue != null && key != null)
+        Color.hsl(((spec.hue + (key - 6.5f) / 5.5f * 16f) % 360f + 360f) % 360f, 0.58f, if (spec.minor) 0.59f else 0.66f)
+    else contextColor(spec.hue)
+}
+
+private fun DrawScope.drawSigil(spec: SigilSpec, path: Path, ground: Color, faint: Boolean) {
+    val key = spec.keyNumber
+    val color = sigilColor(spec)
+    val c = Offset(size.width / 2, size.height / 2)
+    val outer = size.minDimension / 2
+    val k = (size.minDimension / 44.dp.toPx()).coerceAtLeast(0.7f)  // stroke scale
+    val alpha = if (faint) 0.45f else 1f
+    val ticks = (spec.bpm / 10f).roundToInt().coerceIn(6, 20)
+    rotate(-90f, c) {
+        for (i in 0 until ticks) {
+            val a = (2 * PI * i / ticks).toFloat()
+            drawLine(color.copy(alpha = 0.5f * alpha), c + polar(a, outer * 0.86f), c + polar(a, outer), 1.2.dp.toPx() * k, StrokeCap.Round)
+        }
+    }
+    drawCircle(color.copy(alpha = 0.9f * alpha), outer * 0.72f, c, style = Stroke((0.8f + spec.energy * 3.2f).dp.toPx() * k))
+    val n = spec.moods.size
+    val turn = if (key != null) ((key - 1) * PI / 6).toFloat() else 0f
+    val points = spec.moods.mapIndexed { i, m -> c + polar((2 * PI * i / n - PI / 2).toFloat() + turn, outer * (0.17f + 0.44f * m.coerceIn(0f, 1f))) }
+    path.reset()
+    val start = (points.last() + points.first()) / 2f
+    path.moveTo(start.x, start.y)
+    for (i in points.indices) {
+        val p = points[i]
+        val m = (p + points[(i + 1) % n]) / 2f
+        path.quadraticTo(p.x, p.y, m.x, m.y)
+    }
+    path.close()
+    val hollow = key != null && spec.minor
+    if (hollow) drawPath(path, color.copy(alpha = alpha), style = Stroke(1.8.dp.toPx() * k, join = StrokeJoin.Round))
+    else drawPath(path, color.copy(alpha = alpha))
+    if (spec.vocal) drawCircle(if (hollow) color.copy(alpha = alpha) else ground, maxOf(1.6.dp.toPx(), outer * 0.075f), c)
 }
 
 private fun polar(angle: Float, r: Float) = Offset(cos(angle) * r, sin(angle) * r)

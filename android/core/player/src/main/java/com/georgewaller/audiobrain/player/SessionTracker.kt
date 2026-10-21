@@ -41,7 +41,7 @@ data class NowPlaying(
     val tidalId: String?
         get() = if (packageName == Players.TIDAL) mediaId?.let { TRAILING_ID.find(it)?.groupValues?.get(1) } else null
 
-    val ref: TrackRef get() = TrackRef(null, tidalId, artist, title, album, durationMs, packageName)
+    val ref: TrackRef get() = TrackRef(null, tidalId, artist, title, album, durationMs, packageName, mediaId)
 
     val hasTrack get() = title.isNotBlank()
 
@@ -49,6 +49,12 @@ data class NowPlaying(
         private val TRAILING_ID = Regex("""(?:^|\D)(\d{3,})$""")
     }
 }
+
+/**
+ * What's actually being heard when that's narrower than the player's track: the track playing within a DJ set. Set
+ * by the app, which knows the tracklist; the notification and widget show it and rate it in place of the set.
+ */
+data class Within(val title: String, val artist: String, val detail: String, val ref: TrackRef)
 
 /**
  * Follows whichever app is playing, through Android's media sessions. Fed by [NowPlayingListener], which is what
@@ -61,6 +67,9 @@ object SessionTracker {
     private val _connected = MutableStateFlow(false)
     /** Whether the listener is bound, i.e. notification access is on and the system has started it. */
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
+
+    /** The track within what's playing (a set's current line), when the app knows it. */
+    val within = MutableStateFlow<Within?>(null)
 
     private val main = Handler(Looper.getMainLooper())
     private var manager: MediaSessionManager? = null

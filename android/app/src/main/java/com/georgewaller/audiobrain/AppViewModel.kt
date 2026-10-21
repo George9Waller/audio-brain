@@ -12,6 +12,8 @@ import com.georgewaller.audiobrain.data.QuickAction
 import com.georgewaller.audiobrain.data.TrackDto
 import com.georgewaller.audiobrain.data.TrackRef
 import com.georgewaller.audiobrain.data.Verdict
+import com.georgewaller.audiobrain.data.Settings
+import com.georgewaller.audiobrain.player.Launch
 import com.georgewaller.audiobrain.player.NowPlaying
 import com.georgewaller.audiobrain.player.SessionTracker
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -23,7 +25,10 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.drop
@@ -66,9 +71,17 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
     /** The catalogue's view of the playing track, once the server has matched it. */
     val track: StateFlow<TrackDto?> = _track.asStateFlow()
 
-    val nowVerdict: StateFlow<Verdict?> = SessionTracker.nowPlaying
-        .distinctUntilChangedBy { it?.ref?.key }
-        .flatMapLatest { np -> if (np == null) flowOf(null) else graph.feedback.latestFor(np.ref).map { Verdict.fromApi(it?.verdict) } }
+    /** Where in a DJ set playback is, when what's playing is one with a tracklist (see [NowSet]). */
+    val setNow: StateFlow<SetNow?> = NowSet.now
+    /** The set's current track, shown as the title in place of the set's own. */
+    val within: StateFlow<com.georgewaller.audiobrain.player.Within?> = SessionTracker.within
+
+    /** What a verdict on "now" lands on: the track playing within a set when known, else the player's track. */
+    private val nowRef = combine(SessionTracker.nowPlaying, SessionTracker.within) { np, within -> within?.ref ?: np?.ref }
+        .distinctUntilChangedBy { it?.key }
+
+    val nowVerdict: StateFlow<Verdict?> = nowRef
+        .flatMapLatest { ref -> if (ref == null) flowOf(null) else graph.feedback.latestFor(ref).map { Verdict.fromApi(it?.verdict) } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     private val _actions = MutableStateFlow<List<QuickAction>>(emptyList())
@@ -93,7 +106,8 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
         viewModelScope.launch {
             SessionTracker.nowPlaying.distinctUntilChangedBy { it?.ref?.key }.debounce(400).collect { np ->
                 _track.value = null
-                if (np != null && np.hasTrack) _track.value = runCatching { graph.now.resolve(np.ref) }.getOrNull()
+                val resolved = if (np != null && np.hasTrack) runCatching { graph.now.resolve(np.ref) }.getOrNull() else null
+                _track.value = resolved?.track
                 refreshActions()
                 np?.let { extendRadioIfNearEnd(it) }
             }
@@ -120,6 +134,7 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
 
     fun giveNow(verdict: Verdict) {
         val np = nowPlaying.value ?: return
+        SessionTracker.within.value?.let { within -> viewModelScope.launch { graph.feedback.give(verdict, within.ref, "now playing:set") }; return }
         val known = track.value
         viewModelScope.launch { graph.feedback.give(verdict, np.ref.copy(id = known?.id), "now playing", known?.context?.id) }
     }
@@ -192,7 +207,7 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
         val d = _making.value as? Making.Draft ?: return
         viewModelScope.launch {
             try {
-                val kept = graph.make.keep(d.mix.key, remove = d.removed.toList())
+                val kept = graph.make.keep(d.mix.key, title = d.mix.title, remove = d.removed.toList())
                 graph.lists.upsert(kept)
                 _making.value = Making.Idle
                 message("Kept in Lists")
@@ -218,6 +233,46 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
                 message(e.message ?: "Couldn't send it to Tidal")
             }
         }
+    }
+
+    /** Start a track in the chosen player (Settings): Tidal or YouTube Music. */
+    fun playTrack(item: ListItem, on: String? = null) {
+        val player = on ?: settings.value?.playOn ?: Settings.TIDAL
+        viewModelScope.launch {
+            when (Launch.play(app, player, item.artist.split(",").first().trim(), item.title, item.tidalId)) {
+                Launch.Played.Playing -> message("Playing in ${playerName(player)}")
+                Launch.Played.Opened -> message("Opened in ${playerName(player)}; press play there")
+                Launch.Played.Failed -> message("Couldn't open ${playerName(player)}")
+            }
+        }
+    }
+
+    /** Delete a list you made (an Explore, a radio, an asked mix or a set's list). */
+    fun deleteList(list: MixList) {
+        graph.lists.remove(list.key)
+        viewModelScope.launch {
+            try {
+                graph.api.deleteList(list.key)
+                message("Deleted ${shortName(list.title)}")
+            } catch (e: ApiException) {
+                graph.lists.upsert(list)
+                message(e.message ?: "Couldn't delete it")
+            }
+        }
+    }
+
+    fun renameList(list: MixList, title: String) {
+        if (title.isBlank() || title == list.title) return
+        graph.lists.upsert(list.copy(title = title))
+        viewModelScope.launch {
+            try { graph.lists.upsert(graph.api.renameList(list.key, title.trim())) }
+            catch (e: ApiException) { graph.lists.upsert(list); message(e.message ?: "Couldn't rename it") }
+        }
+    }
+
+    fun renameDraft(title: String) {
+        val d = _making.value as? Making.Draft ?: return
+        if (title.isNotBlank()) _making.value = d.copy(mix = d.mix.copy(title = title.trim()))
     }
 
     /** Keep a list in Tidal as its own playlist (to download it, say), or stop updating it there. */

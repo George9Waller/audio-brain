@@ -51,6 +51,8 @@ class ApiClient(private val settings: SettingsStore) {
     suspend fun discardDraft(key: String) { call("/drafts/${enc(key)}", null, method = "DELETE") }
     suspend fun play(key: String): Played = post("/mixes/${enc(key)}/play", "{}")
     suspend fun editList(key: String, add: List<Long>, remove: List<Long>): MixList = post("/mixes/${enc(key)}/edit", ApiJson.encodeToString(EditRequest(add, remove)))
+    suspend fun deleteList(key: String) { call("/mixes/${enc(key)}", null, method = "DELETE") }
+    suspend fun renameList(key: String, title: String): MixList = post("/mixes/${enc(key)}/rename", ApiJson.encodeToString(RenameRequest(title)))
     suspend fun suggestions(key: String): List<ListItem> = get("/mixes/${enc(key)}/suggestions")
     suspend fun sync(key: String, on: Boolean, pinned: Boolean = false): Synced = post("/mixes/${enc(key)}/sync", ApiJson.encodeToString(SyncRequest2(on, pinned)))
     suspend fun radio(request: RadioRequest): RadioResponse = post("/radio", ApiJson.encodeToString(request))

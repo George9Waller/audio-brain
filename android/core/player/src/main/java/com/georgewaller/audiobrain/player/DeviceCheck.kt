@@ -7,11 +7,14 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaMetadata
 import android.media.browse.MediaBrowser
+import android.media.session.MediaController
 import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.provider.MediaStore
 import android.service.media.MediaBrowserService
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -56,6 +59,9 @@ object DeviceCheck {
             "MEDIA_PLAY_FROM_SEARCH (any)" to Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH),
             "MEDIA_PLAY_FROM_SEARCH → Tidal" to Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).setPackage(Players.TIDAL),
             "MEDIA_PLAY_FROM_SEARCH → UAPP" to Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).setPackage(Players.UAPP),
+            "MEDIA_PLAY_FROM_SEARCH → YouTube Music" to Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH).setPackage(Launch.YT_MUSIC),
+            "tidal://search/… → Tidal" to Intent(Intent.ACTION_VIEW, Uri.parse("tidal://search/burial")).setPackage(Players.TIDAL),
+            "https://tidal.com/search?q=… → Tidal" to Intent(Intent.ACTION_VIEW, Uri.parse("https://tidal.com/search?q=burial")).setPackage(Players.TIDAL),
         ).forEach { (label, intent) -> appendLine("- $label: ${handlers(context, intent)}") }
         val browsers = context.packageManager.queryIntentServices(Intent(MediaBrowserService.SERVICE_INTERFACE), 0)
         appendLine("- media browser services: ${browsers.joinToString { "${it.serviceInfo.packageName}/${it.serviceInfo.name}" }.ifEmpty { "none visible" }}")
@@ -153,10 +159,101 @@ object DeviceCheck {
 
 /** Opening things in the players. */
 object Launch {
-    /** Open a Tidal link in the Tidal app if it's installed, else wherever Android sends it. */
+    const val YT_MUSIC = "com.google.android.apps.youtube.music"
+
+    /**
+     * Open a Tidal link in the Tidal app if it's installed, else wherever Android sends it. The app claims
+     * tidal.com/browse links but not search ones, so those (and anything else it refuses) are retried as a tidal://
+     * link and as a search inside Tidal before falling back to the browser.
+     */
     fun tidal(context: Context, url: String): Boolean {
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val inTidal = Intent(intent).setPackage(Players.TIDAL)
-        return runCatching { context.startActivity(inTidal); true }.recoverCatching { context.startActivity(intent); true }.getOrDefault(false)
+        val uri = Uri.parse(url)
+        val query = uri.getQueryParameter("q")
+        val path = uri.path.orEmpty().removePrefix("/browse").trim('/')
+        val attempts = buildList {
+            if (query == null) add(view(url).setPackage(Players.TIDAL))
+            if (query != null) add(view("tidal://search/${Uri.encode(query)}").setPackage(Players.TIDAL))
+            else if (path.isNotEmpty()) add(view("tidal://$path").setPackage(Players.TIDAL))
+            if (query != null) add(Intent(Intent.ACTION_SEARCH).putExtra(SearchManager.QUERY, query).setPackage(Players.TIDAL))
+            add(view(url))
+        }
+        return attempts.any { start(context, it) }
     }
+
+    enum class Played { Playing, Opened, Failed }
+
+    /**
+     * Start a track playing in [player] (Tidal or YouTube Music). Asks the player's own media session to play it, by
+     * Tidal link and then by search, and watches the session to see the track really changed: the intent voice
+     * assistants use only brings Tidal to the front, still on what it was playing. A player that isn't running is
+     * opened first. Failing all that, Tidal opens the track's page and YouTube Music a search for it.
+     */
+    suspend fun play(context: Context, player: String, artist: String, title: String, tidalId: String? = null): Played {
+        val query = "$artist $title".trim()
+        val controller = sessionFor(context, player)
+        if (controller != null) {
+            val actions = controller.playbackState?.actions ?: 0L
+            val controls = controller.transportControls
+            val extras = Bundle().apply {
+                putString(MediaStore.EXTRA_MEDIA_FOCUS, MediaStore.Audio.Media.ENTRY_CONTENT_TYPE)
+                putString(MediaStore.EXTRA_MEDIA_TITLE, title)
+                putString(MediaStore.EXTRA_MEDIA_ARTIST, artist)
+            }
+            val attempts = buildList<() -> Unit> {
+                if (tidalId != null && player == Players.TIDAL && actions and PlaybackState.ACTION_PLAY_FROM_URI != 0L) {
+                    add { controls.playFromUri(Uri.parse("https://tidal.com/browse/track/$tidalId"), Bundle()) }
+                    add { controls.playFromUri(Uri.parse("tidal://track/$tidalId"), Bundle()) }
+                }
+                if (actions and PlaybackState.ACTION_PLAY_FROM_SEARCH != 0L) add { controls.playFromSearch(query, extras) }
+            }
+            for (attempt in attempts) {
+                runCatching(attempt)
+                if (becomes(controller, title)) return Played.Playing
+            }
+        }
+        val search = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
+            .putExtra(SearchManager.QUERY, query).putExtra(MediaStore.EXTRA_MEDIA_TITLE, title).putExtra(MediaStore.EXTRA_MEDIA_ARTIST, artist)
+            .setPackage(player)
+        val opened = when (player) {
+            Players.TIDAL -> tidal(context, tidalId?.let { "https://tidal.com/browse/track/$it" } ?: "https://tidal.com/search?q=${Uri.encode(query)}")
+            else -> start(context, search) || start(context, view("https://music.youtube.com/search?q=${Uri.encode(query)}").setPackage(player))
+        }
+        return if (opened) Played.Opened else Played.Failed
+    }
+
+    /** The player's media session; if it has none, open the player and wait a few seconds for one. */
+    private suspend fun sessionFor(context: Context, player: String): MediaController? {
+        fun find() = SessionTracker.sessions.firstOrNull { it.packageName == player }
+        if (!SessionTracker.connected.value) return null
+        find()?.let { return it }
+        val launch = context.packageManager.getLaunchIntentForPackage(player) ?: return null
+        if (!start(context, launch)) return null
+        return withTimeoutOrNull(8_000) {
+            while (true) { SessionTracker.refresh(); find()?.let { return@withTimeoutOrNull it }; delay(400) }
+            @Suppress("UNREACHABLE_CODE") null
+        }
+    }
+
+    /** Whether [controller] moves on to a track called [title] within a few seconds. */
+    private suspend fun becomes(controller: MediaController, title: String): Boolean {
+        val want = simple(title)
+        return withTimeoutOrNull(4_000) {
+            while (true) {
+                val now = simple(controller.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty())
+                if (now.isNotEmpty() && (now.startsWith(want.take(16)) || want.startsWith(now.take(16)))) return@withTimeoutOrNull true
+                delay(250)
+            }
+            @Suppress("UNREACHABLE_CODE") false
+        } ?: false
+    }
+
+    private fun simple(title: String) = title.lowercase().replace(Regex("""[\(\[].*?[\)\]]"""), "").replace(Regex("""[^\p{L}\p{N}]+"""), " ").trim()
+
+    fun installed(context: Context, packageName: String) =
+        runCatching { context.packageManager.getPackageInfo(packageName, 0); true }.getOrDefault(false)
+
+    private fun view(url: String) = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+
+    private fun start(context: Context, intent: Intent) =
+        runCatching { context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true }.getOrDefault(false)
 }

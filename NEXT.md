@@ -136,7 +136,7 @@ Built in this round:
   - On a real 1001Tracklists page (Calvin Harris @ Head Trip, 41 lines): 34 of 40 known lines matched (85%), 19 of them the exact version.
   - Needs `migrate sets` (0005).
 
-### Android (`android/`, Kotlin + Compose, minSdk 30)
+### Android (`android/`, Kotlin + Compose, minSdk 29)
 
 - Modules: `:core:design` (design system), `:core:data` (API, Room outbox, sync), `:core:player` (media sessions, feedback notification, device check) and `:app`.
 - Five pages: Lists ← Home → Discover → Catalogue (Map or Library) → More. Pages change by swiping or tapping the page names at the top.

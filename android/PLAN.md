@@ -8,7 +8,7 @@ The phone and DAP side of audio-brain. Its job is to get you what you want to he
 
 - **Feedback works offline.** Rating what's playing, notes on mixes and verdicts on queue items all work with no network and sync when the home server is reachable again. Nothing is lost and nothing is double-counted.
 - **It works alongside your players and doesn't replace them.** Tidal and UAPP keep playing the audio. The app reads what they're playing, controls them through Android's media session interface, deep-links into them, and accepts tracks shared from them.
-- **Runs on the FiiO JM21 and M23** (and anything from Android 11 up). `minSdk 30`. DAPs have mid-range GPUs, 4–6 GB of RAM, 720p screens and often no Google Play Services. So:
+- **Runs on the FiiO JM21 and M23** (and anything from Android 10 up). `minSdk 29`. DAPs have mid-range GPUs, 4–6 GB of RAM, 720p screens and often no Google Play Services. So:
   - no dependency on Google Play Services (no Firebase or FCM, no Play-only libraries);
   - the app can be sideloaded (from GitHub releases, or via Obtainium for updates);
   - the map is drawn on demand, not every frame.
@@ -206,7 +206,7 @@ It's deterministic, so you learn to recognise a track's sound before you read it
 - ranking refresh: tiles move to their new places with animation;
 - dock → full now-playing view: the sigil and artwork move across.
 
-All of this uses `SharedTransitionLayout` and `AnimatedContent`, which work on API 30. Predictive back works where supported and falls back cleanly on Android 11.
+All of this uses `SharedTransitionLayout` and `AnimatedContent`, which work on API 29. Predictive back works where supported and falls back cleanly on Android 10.
 
 ## Architecture
 

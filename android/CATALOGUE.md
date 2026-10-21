@@ -290,7 +290,7 @@ The three device-computed layouts come from the attributes, so they cost nothing
 
 ## Rendering
 
-- OpenGL ES 3.0 (AGSL needs Android 13, and the plan supports Android 11 up).
+- OpenGL ES 3.0 (AGSL needs Android 13, and the plan supports Android 10 up).
 - One instanced draw for all points.
 - **Vertex shader:** blends two position buffers by `t` (the layout morph) and looks up colour from the lens attribute in a small palette texture, so switching lens only changes a uniform.
 - **Selection mask:** search hits, filters and lassos are a byte per point, uploaded as a buffer; dimming and glow happen in the shader.

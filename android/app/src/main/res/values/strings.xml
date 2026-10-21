@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">Audio Brain</string>
     <string name="share_tracklist">Add tracklist</string>
+    <string name="now_widget_description">What\'s playing, with Keep and No; your top lists when nothing is</string>
 </resources>

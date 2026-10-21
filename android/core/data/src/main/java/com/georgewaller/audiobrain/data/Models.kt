@@ -129,6 +129,7 @@ data class Sound(
     val aggressive: Float,
     val relaxed: Float,
     val party: Float,
+    val shape: List<Float>? = null,  // the moods ranked within its context, for the sigil (server/recommend/sigil.py)
 )
 
 @Serializable
@@ -156,7 +157,7 @@ data class TrackDto(
 )
 
 @Serializable
-data class Resolved(val track: TrackDto? = null)
+data class Resolved(val track: TrackDto? = null, @SerialName("set_id") val setId: Long? = null)
 
 /** A track as the app knows it: a catalogue ID, or what a player reported. Sent with feedback and lookups. */
 @Serializable
@@ -168,6 +169,7 @@ data class TrackRef(
     val album: String = "",
     @SerialName("duration_ms") val durationMs: Long? = null,
     @SerialName("package") val packageName: String = "",
+    @SerialName("media_id") val mediaId: String? = null,  // the player's own ID: YouTube Music's is the video ID
 ) {
     /**
      * Same track for the app's purposes: the key lookups and local verdicts are stored under. The player's own
@@ -227,7 +229,7 @@ enum class Verdict(val api: String) {
 // Lists, asking and radio
 
 @Serializable
-data class ItemSound(val bpm: Float, val camelot: String? = null, val energy: Float, val instrumental: Float = 0f, val moods: List<Float> = emptyList())
+data class ItemSound(val bpm: Float, val camelot: String? = null, val energy: Float, val instrumental: Float = 0f, val moods: List<Float> = emptyList(), val shape: List<Float>? = null)
 
 /** One entry in a list: a track, or for discovery lists a release, artist, album or set. See server/recommend/lists.py. */
 @Serializable
@@ -391,6 +393,9 @@ data class Tracklist(
     val set: SetRow, @SerialName("list_key") val listKey: String? = null, val via: String = "",
     val summary: TracklistSummary, val lines: List<TracklistLine>,
 )
+
+@Serializable
+data class RenameRequest(val title: String)
 
 @Serializable
 data class FixLineRequest(@SerialName("track_id") val trackId: Long? = null, val id: Boolean = false, val clear: Boolean = false)

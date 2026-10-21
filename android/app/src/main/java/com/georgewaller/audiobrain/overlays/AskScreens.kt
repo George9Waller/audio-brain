@@ -141,7 +141,7 @@ fun DraftScreen(vm: AppViewModel, draft: AppViewModel.Making.Draft, padding: Pad
             }
         }
         item(key = "head") {
-            ListHeader(draft.mix.copy(items = items, subtitle = "Read as: ${draft.understood}")) {
+            ListHeader(draft.mix.copy(items = items, subtitle = "Read as: ${draft.understood}"), onRename = vm::renameDraft) {
                 Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
                     AbButton("Keep", vm::keepDraft)
                     AbButton("Play", { vm.play(draft.mix.key) }, kind = ButtonKind.Quiet)

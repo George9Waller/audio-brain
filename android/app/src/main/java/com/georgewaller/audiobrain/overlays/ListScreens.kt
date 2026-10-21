@@ -44,6 +44,7 @@ import com.georgewaller.audiobrain.data.MixList
 import com.georgewaller.audiobrain.design.Ab
 import com.georgewaller.audiobrain.design.AbButton
 import com.georgewaller.audiobrain.design.AbText
+import com.georgewaller.audiobrain.design.AbTextField
 import com.georgewaller.audiobrain.design.ButtonKind
 import com.georgewaller.audiobrain.design.Dot
 import com.georgewaller.audiobrain.design.EmptyState
@@ -64,7 +65,7 @@ import androidx.compose.ui.platform.LocalContext
 
 /** One list: what it's made of (energy across it, its key path), play and sync, then every track with swipes. */
 @Composable
-fun ListDetail(vm: AppViewModel, key: String, padding: PaddingValues, onMenu: (ListItem, String) -> Unit) {
+fun ListDetail(vm: AppViewModel, key: String, padding: PaddingValues, onMenu: (ListItem, String) -> Unit, onDeleted: () -> Unit = {}) {
     val state by vm.lists.collectAsStateWithLifecycle()
     val verdicts by vm.verdicts.collectAsStateWithLifecycle()
     val decided by vm.queueStates.collectAsStateWithLifecycle()
@@ -75,7 +76,12 @@ fun ListDetail(vm: AppViewModel, key: String, padding: PaddingValues, onMenu: (L
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
         val canSync = list.section == "lists" && list.tracks.isNotEmpty()
-        item(key = "head") { ListHeader(list, onSync = if (canSync) { on -> vm.setSync(list, on) } else null, onPin = if (canSync) { on -> vm.setPinned(list, on) } else null) {
+        val mine = list.kind in USER_MADE
+        item(key = "head") { ListHeader(
+            list, onSync = if (canSync) { on -> vm.setSync(list, on) } else null, onPin = if (canSync) { on -> vm.setPinned(list, on) } else null,
+            onRename = if (mine) { title -> vm.renameList(list, title) } else null,
+            onDelete = if (mine) { { vm.deleteList(list); onDeleted() } } else null,
+        ) {
             val context = LocalContext.current
             Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
                 if (list.tracks.isNotEmpty()) AbButton("Play now", { vm.play(list.key) })
@@ -120,6 +126,9 @@ fun ListDetail(vm: AppViewModel, key: String, padding: PaddingValues, onMenu: (L
     }
 }
 
+/** Lists you made, which you can rename and delete; the rest are rebuilt by the server. */
+private val USER_MADE = setOf("asked", "radio", "explore", "set")
+
 /** Tracks that would fit the list, fetched when you reach the bottom; swipe right or tap Add to put one in. */
 @Composable
 private fun Suggestions(vm: AppViewModel, list: MixList, onMenu: (ListItem, String) -> Unit) {
@@ -148,7 +157,12 @@ private fun Suggestions(vm: AppViewModel, list: MixList, onMenu: (ListItem, Stri
 
 /** A list's title block: kind, colour, counts, the energy arc and key path, and [actions]. Shared by lists and drafts. */
 @Composable
-fun ListHeader(list: MixList, onSync: ((Boolean) -> Unit)? = null, onPin: ((Boolean) -> Unit)? = null, actions: @Composable () -> Unit) {
+fun ListHeader(
+    list: MixList, onSync: ((Boolean) -> Unit)? = null, onPin: ((Boolean) -> Unit)? = null,
+    onRename: ((String) -> Unit)? = null, onDelete: (() -> Unit)? = null, actions: @Composable () -> Unit,
+) {
+    var editing by remember(list.key) { mutableStateOf<String?>(null) }
+    var confirming by remember(list.key) { mutableStateOf(false) }
     Column(Modifier.padding(top = Ab.space.s, bottom = Ab.space.m), verticalArrangement = Arrangement.spacedBy(Ab.space.s)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             list.context?.let { Dot(contextColor(it.hue), size = 8.dp); Spacer(Modifier.width(Ab.space.s)) }
@@ -160,8 +174,22 @@ fun ListHeader(list: MixList, onSync: ((Boolean) -> Unit)? = null, onPin: ((Bool
                 tint = if (list.sync) Ab.colors.keep else Ab.colors.textFaint, size = 40.dp,
             )
             if (onPin != null && list.sync) AbButton(if (list.pinned) "Pinned" else "Pin", { onPin(!list.pinned) }, kind = ButtonKind.Ghost)
+            if (onRename != null) AbIconButton(AbIcons.Edit, "Rename", { editing = list.title }, tint = Ab.colors.textFaint, size = 40.dp)
+            if (onDelete != null) AbIconButton(AbIcons.Delete, "Delete this list", { confirming = true }, tint = Ab.colors.textFaint, size = 40.dp)
         }
-        AbText(list.title, style = Ab.type.title, maxLines = 3)
+        if (confirming && onDelete != null) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
+            AbText("Delete this list?", style = Ab.type.caption, color = Ab.colors.textMuted, modifier = Modifier.weight(1f))
+            AbButton("Delete", { confirming = false; onDelete() })
+            AbButton("Cancel", { confirming = false }, kind = ButtonKind.Ghost)
+        }
+        val draftTitle = editing
+        if (draftTitle != null && onRename != null) {
+            AbTextField(draftTitle, { editing = it }, label = "", placeholder = "Name this list")
+            Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
+                AbButton("Save", { onRename(draftTitle.trim()); editing = null }, enabled = draftTitle.isNotBlank())
+                AbButton("Cancel", { editing = null }, kind = ButtonKind.Ghost)
+            }
+        } else AbText(list.title, style = Ab.type.title, maxLines = 3)
         if (list.subtitle.isNotBlank()) AbText(list.subtitle, style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 3)
         val energies = list.tracks.mapNotNull { it.sound?.energy }
         if (energies.size > 2) EnergyArc(energies)

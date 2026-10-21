@@ -141,6 +141,14 @@ fun SettingsScreen(graph: DataGraph, contentPadding: PaddingValues, onDeviceChec
         SettingRow("Feedback notification", description = "Keep, No and Never while something plays; works offline") {
             AbSwitch(settings?.feedbackNotification ?: true, { on -> scope.launch { graph.settings.setFeedbackNotification(on) } })
         }
+        val playOn = settings?.playOn ?: com.georgewaller.audiobrain.data.Settings.TIDAL
+        SettingRow("Play tracks in", description = "Where Play on a track starts it") {
+            Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.xs)) {
+                listOf(com.georgewaller.audiobrain.data.Settings.TIDAL, com.georgewaller.audiobrain.data.Settings.YT_MUSIC).forEach { pkg ->
+                    com.georgewaller.audiobrain.design.AbChip(com.georgewaller.audiobrain.playerName(pkg), selected = playOn == pkg) { scope.launch { graph.settings.setPlayOn(pkg) } }
+                }
+            }
+        }
 
         SectionHeader("Outbox") {
             AbText(if (pending == 0) "all sent" else "$pending waiting", style = Ab.type.caption, color = Ab.colors.textMuted)

@@ -31,7 +31,7 @@ android {
 
     defaultConfig {
         applicationId = "com.georgewaller.audiobrain"
-        minSdk = 30 // Android 11, for the FiiO DAPs
+        minSdk = 29 // Android 10 up: the FiiO DAPs and older phones
         targetSdk = 36
         versionCode = appVersionCode
         versionName = appVersionName
@@ -81,5 +81,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.compose.material3)
     implementation(libs.coil.compose)
+    implementation(libs.androidx.glance.appwidget)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    testImplementation(libs.junit)
 }
