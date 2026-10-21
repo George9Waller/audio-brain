@@ -49,11 +49,7 @@ class MainActivity : ComponentActivity() {
             if (text.isNotBlank()) shared = text
             return
         }
-        val uri = intent?.data ?: return
-        if (uri.scheme != "audiobrain" || uri.host != "connect") return
-        val url = uri.getQueryParameter("url").orEmpty()
-        val token = uri.getQueryParameter("token").orEmpty()
-        if (url.isBlank() || token.isBlank()) return
+        val (url, token) = intent?.dataString?.let(::parseConnectLink) ?: return
         lifecycleScope.launch {
             dataGraph.settings.setConnection(url, token)
             openSettings = true

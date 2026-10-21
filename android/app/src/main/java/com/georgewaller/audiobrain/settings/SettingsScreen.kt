@@ -1,6 +1,7 @@
 package com.georgewaller.audiobrain.settings
 
 import android.Manifest
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -49,6 +50,7 @@ import com.georgewaller.audiobrain.design.Dot
 import com.georgewaller.audiobrain.design.SectionHeader
 import com.georgewaller.audiobrain.design.SettingRow
 import com.georgewaller.audiobrain.design.StatusPill
+import com.georgewaller.audiobrain.parseConnectLink
 import com.georgewaller.audiobrain.style
 import com.georgewaller.audiobrain.player.NowPlayingListener
 import com.georgewaller.audiobrain.player.SessionTracker
@@ -93,11 +95,27 @@ fun SettingsScreen(graph: DataGraph, contentPadding: PaddingValues, onDeviceChec
         }
     }
 
+    /** Fills both fields from a pasted connect link and tests it; false when [text] has no link in it. */
+    fun useLink(text: String): Boolean {
+        val (url, key) = parseConnectLink(text) ?: return false
+        server = url
+        token = key
+        test()
+        return true
+    }
+
+    fun pasteLink() {
+        val clip = context.getSystemService(ClipboardManager::class.java).primaryClip
+        val text = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+        if (!useLink(text)) onMessage("No connect link on the clipboard")
+    }
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(contentPadding)) {
         AbText("Settings", style = Ab.type.display, modifier = Modifier.padding(top = Ab.space.l))
 
         SectionHeader("Server")
-        AbTextField(server, { server = it }, "Address", placeholder = "http://audio-brain.tailnet.ts.net:8000", keyboardType = KeyboardType.Uri)
+        // a pasted connect link (much text at once, not typing) fills both fields
+        AbTextField(server, { if (it.length - server.length < 20 || !useLink(it)) server = it }, "Address", placeholder = "http://audio-brain.tailnet.ts.net:8000", keyboardType = KeyboardType.Uri)
         Spacer(Modifier.height(Ab.space.m))
         AbTextField(token, { token = it }, "Token", placeholder = "from manage.py api_token", secret = true)
         Spacer(Modifier.height(Ab.space.m))
@@ -106,7 +124,9 @@ fun SettingsScreen(graph: DataGraph, contentPadding: PaddingValues, onDeviceChec
             Spacer(Modifier.width(Ab.space.m))
             result?.let { (ok, text) -> AbText(text, style = Ab.type.caption, color = if (ok) Ab.colors.keep else Ab.colors.no, modifier = Modifier.weight(1f)) }
         }
-        AbText("Or run `manage.py api_token` on the server and open the link it prints on this device.", style = Ab.type.caption, color = Ab.colors.textFaint, modifier = Modifier.padding(top = Ab.space.s))
+        Spacer(Modifier.height(Ab.space.m))
+        AbButton("Paste connect link", ::pasteLink, kind = ButtonKind.Quiet)
+        AbText("Or copy the link `manage.py api_token` prints, then paste it here or into Address.", style = Ab.type.caption, color = Ab.colors.textFaint, modifier = Modifier.padding(top = Ab.space.s))
 
         SectionHeader("Listening")
         SettingRow(

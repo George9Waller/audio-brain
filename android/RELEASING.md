@@ -124,8 +124,10 @@ reuse a tag that was already installed on a device; use the next number.
    ```sh
    kubectl exec deploy/audio-brain-api -c api -- python manage.py api_token --url http://ubuntuserver.tail1604aa.ts.net:30800
    ```
-   Paste the `audiobrain://connect?...` link into a note on the device and tap it, or use the `adb shell am start` line
-   it prints. In Settings, Save and test should say "Connected".
+   Get the `audiobrain://connect?...` link onto the device (a note, an email or a chat with yourself), **copy** it, and
+   in the app's Settings tap **Paste connect link** (or paste it into Address). Most apps won't make an `audiobrain://`
+   link tappable, so pasting is the reliable way. Over USB, the `adb shell am start` line it prints does the same.
+   Settings should then say "Connected".
 5. On the DAPs, allow **notification access** in Settings, so it can see what Tidal or UAPP is playing.
 
 ## When something goes wrong

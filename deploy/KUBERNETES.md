@@ -213,7 +213,7 @@ cluster, and loaded lists, a list and the map with nothing in logcat. Debug buil
   ```sh
   kubectl exec deploy/audio-brain-api -c api -- python manage.py api_token --url http://ubuntuserver.tail1604aa.ts.net:30800
   ```
-      Paste the link into a note on the device and tap it, or use the `adb shell am start` line it prints. (The emulator
+      Copy the link on the device and tap Settings › Paste connect link, or use the `adb shell am start` line it prints. (The emulator
       has no MagicDNS: use `http://100.122.82.67:30800`.)
 
 ## Phase 5: tidying
