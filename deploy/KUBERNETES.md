@@ -172,6 +172,8 @@ Mac stays the primary until the cut-over at the end. Do a dry run first with the
 
 ## Phase 4: the app on every device
 
+The step-by-step for making the key, releasing and setting up a device is [android/RELEASING.md](../android/RELEASING.md).
+
 Built and tested 21 Oct: a release build (R8 on, signed with a test key) installed on the emulator, connected to the
 cluster, and loaded lists, a list and the map with nothing in logcat. Debug builds are now
 `com.georgewaller.audiobrain.debug`, labelled "Audio Brain dev", so a dev build and the release sit side by side.

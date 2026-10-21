@@ -1,7 +1,7 @@
 # audio-brain: where it stands and what's next
 
 Handoff notes, 18 Oct 2026. Start a new session by reading this, then `spec.md`, `android/PLAN.md` and
-`android/CATALOGUE.md`.
+`android/CATALOGUE.md`. Releasing the app (signing key, tags, Obtainium) is `android/RELEASING.md`.
 
 **Everything left to do is in [BACKLOG.md](BACKLOG.md)**, as self-contained tasks in waves for parallel agents. The
 next-steps sections below are the history behind it.
