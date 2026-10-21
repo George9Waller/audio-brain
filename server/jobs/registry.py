@@ -103,9 +103,11 @@ MODELS = [
     ("Track scorer", "jobs.steps.train_scorer"),
     ("Context ranker", "jobs.steps.train_context_ranker"),
     ("Map layout", "recommend.atlas.build_map"),
-    ("Candidates from Tidal's similar tracks", "recommend.candidates.expand_candidates"),
     ("Weekly researched discovery leads", "recommend.discovery.run_discovery"),
 ]
+# Its own job after the mixes: it downloads and analyses each new track, so while the catalogue catches up on what
+# your liked tracks point to (thousands a night at first) it can take hours, and the morning's mixes shouldn't wait
+CANDIDATES = [("Candidates from Tidal's similar tracks", "recommend.candidates.expand_candidates")]
 MIXES = [("Mixes", "jobs.steps.mixes")]
 TIDAL_RECOMMENDATIONS = [("Tidal's mixes", "recommend.external.snapshot_tidal")]
 
@@ -118,9 +120,10 @@ JOBS = {job.key: job for job in [
     Job("enrichment", "Enrichment", "Identity, Tidal IDs, audio analysis, CLAP, genres and tags for tracks that lack them", ENRICHMENT, Daily(1)),
     Job("models", "Models", "Sessions, vectors (session, combined, taste), contexts, the track scorer and the context ranker, retrained", QUEUE + MODELS, Daily(3)),
     Job("mixes", "Mixes and lists", "Context, era, Fresh and Rediscovery mixes (pushed to Tidal), and the discovery lists: releases, artists, albums and sets", MIXES, Daily(6, 30)),
+    Job("candidates", "New candidates", "Tracks Tidal lists as similar to your contexts' members, brought in and analysed", CANDIDATES, Daily(7)),
     Job(
         "discover", "Everything", "The whole pipeline in order, as `manage.py discover`",
-        LASTFM + FAVOURITES + FIND_SETS + FIND_RELEASES + QUEUE + ENRICHMENT + TRACKLISTS + SCORE_RELEASES + SCORE_SETS + MODELS + MIXES,
+        LASTFM + FAVOURITES + FIND_SETS + FIND_RELEASES + QUEUE + ENRICHMENT + TRACKLISTS + SCORE_RELEASES + SCORE_SETS + MODELS + CANDIDATES + MIXES,
         options={"skip_enrichment": "Only find new things; enrich them on a later run"},
     ),
     # Daily, as My Daily Discovery is replaced every morning (about 08:30 UTC); unchanged mixes aren't stored again.

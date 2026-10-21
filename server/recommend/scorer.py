@@ -504,6 +504,7 @@ def shared_catalogue():
     """The catalogue arrays, reloaded at most hourly within one process."""
     now = timezone.now()
     if _catalogue["value"] is None or now - _catalogue["loaded"] > timedelta(hours=1):
+        _catalogue["value"] = None  # let the old arrays go before the new ones are built, not hold both
         _catalogue.update(value=Catalogue(), loaded=now)
     return _catalogue["value"]
 
