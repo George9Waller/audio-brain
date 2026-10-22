@@ -4,8 +4,10 @@ A job is a list of steps. Each step is a dotted path to a function (imported onl
 doesn't load torch to list jobs) or "command:<name>" for a management command. Steps return a short summary, or
 None. One step failing doesn't stop the rest, as in `manage.py discover`.
 
-Jobs run in lanes, one job per lane at a time: quick syncs aren't held up for hours behind enrichment, and the jobs
-that rebuild vectors, models and mixes never overlap each other.
+Jobs run in lanes, one job per lane at a time: quick syncs aren't held up for hours behind enrichment, the jobs
+that rebuild vectors, models and mixes never overlap each other, and enrichment's lookups (hours a night while the
+catalogue grows, nearly all of it waiting on MusicBrainz, Discogs and Tidal rate limits) run beside them, so the
+morning's mixes don't wait for them. Audio analysis, which loads Essentia and CLAP, stays on the main lane.
 """
 
 from dataclasses import dataclass, field
@@ -14,7 +16,7 @@ from zoneinfo import ZoneInfo
 
 from django.conf import settings
 
-SYNC, MAIN = "sync", "main"
+SYNC, MAIN, LOOKUP = "sync", "main", "lookups"
 
 
 def local_zone():
@@ -87,9 +89,11 @@ FIND_RELEASES = [
     ("New releases on labels you play", "discovery.labels.check_labels"),
 ]
 QUEUE = [("Discovery queue states", "discovery.queue.update_queue")]
-ENRICHMENT_STAGES = ["identity", "tidal", "audio", "clap", "genres", "artist_tags", "lastfm_tags"]
-ENRICHMENT = [(f"Enrichment: {stage}", f"command:enrich --stage={stage}") for stage in ENRICHMENT_STAGES]
-ENRICHMENT += [("Artist profiles (MusicBrainz)", "enrichment.artists.profile_artists")]
+LOOKUP_STAGES, ANALYSIS_STAGES = ["identity", "tidal", "genres", "artist_tags", "lastfm_tags"], ["audio", "clap"]
+LOOKUPS = [(f"Enrichment: {stage}", f"command:enrich --stage={stage}") for stage in LOOKUP_STAGES]
+LOOKUPS += [("Artist profiles (MusicBrainz)", "enrichment.artists.profile_artists")]
+ANALYSIS = [(f"Enrichment: {stage}", f"command:enrich --stage={stage}") for stage in ANALYSIS_STAGES]
+ENRICHMENT = LOOKUPS + ANALYSIS
 TRACKLISTS = [("Set tracklists", "sets.tracklists.fetch_tracklists")]
 SCORE_RELEASES = [("Score releases", "discovery.score.score_releases")]
 SCORE_SETS = [("Score sets", "discovery.score.score_sets")]
@@ -117,10 +121,10 @@ JOBS = {job.key: job for job in [
     Job("sets", "Sets", "New sets on YouTube and in your history, their tracklists, and how well each fits", FIND_SETS + TRACKLISTS + SCORE_SETS, Daily(4, 30)),
     Job("releases", "New releases", "Releases from watched artists, remixers and labels, scored and queued", FIND_RELEASES + SCORE_RELEASES + QUEUE, Weekly(4, 5)),
     Job("discovery_summary", "Weekly discovery", "A weekly card of releases found by artist, remixer and label, and the five best fits", [("Weekly discovery card", "discovery.summary.build_weekly_summary")], Weekly(4, 6)),
-    Job("enrichment", "Enrichment", "Identity, Tidal IDs, audio analysis, CLAP, genres and tags for tracks that lack them", ENRICHMENT, Daily(1)),
+    Job("enrichment", "Enrichment", "Identity, Tidal IDs, genres, tags and artist profiles for tracks that lack them", LOOKUPS, Daily(1), lane=LOOKUP),
     Job("models", "Models", "Sessions, vectors (session, combined, taste), contexts, the track scorer and the context ranker, retrained", QUEUE + MODELS, Daily(3)),
     Job("mixes", "Mixes and lists", "Context, era, Fresh and Rediscovery mixes (pushed to Tidal), and the discovery lists: releases, artists, albums and sets", MIXES, Daily(6, 30)),
-    Job("candidates", "New candidates", "Tracks Tidal lists as similar to your contexts' members, brought in and analysed", CANDIDATES, Daily(7)),
+    Job("candidates", "New candidates", "Tracks Tidal lists as similar to your contexts' members, brought in and analysed, then audio analysis and CLAP for any other tracks that lack them", CANDIDATES + ANALYSIS, Daily(7)),
     Job(
         "discover", "Everything", "The whole pipeline in order, as `manage.py discover`",
         LASTFM + FAVOURITES + FIND_SETS + FIND_RELEASES + QUEUE + ENRICHMENT + TRACKLISTS + SCORE_RELEASES + SCORE_SETS + MODELS + CANDIDATES + MIXES,

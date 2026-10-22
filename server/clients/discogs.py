@@ -6,6 +6,7 @@ from clients.base import APIClient
 class DiscogsClient(APIClient):
     base_url = "https://api.discogs.com/"
     min_interval = 1.0  # 60 requests a minute when authenticated
+    shared_lane = "discogs"  # the limit is per key, whichever job is asking
 
     def __init__(self):
         super().__init__()

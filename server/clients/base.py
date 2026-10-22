@@ -68,7 +68,10 @@ class APIClient:
         return response
 
     def wait(self):
-        """Hold off until min_interval has passed since the last request started."""
+        """Hold off until min_interval has passed since the last request started (on the shared lane, if there is one)."""
+        if self.lane:
+            self.lane.wait()
+            return
         delay = self.last_request + self.min_interval - time.monotonic()
         if delay > 0:
             time.sleep(delay)

@@ -23,6 +23,7 @@ class TidalClient(APIClient):
 
     base_url = "https://openapi.tidal.com/v2/"
     min_interval = 0.5
+    shared_lane = "tidal"  # jobs on different lanes (enrichment, candidates, mixes, syncs) share one pace
 
     def __init__(self, user=False):
         super().__init__()
