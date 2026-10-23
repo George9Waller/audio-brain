@@ -12,7 +12,7 @@ imagePullSecrets:
 # CI rewrites these lines on every build (.github/workflows/deploy.yaml); the MCP image is tagged mcp-<sha>
 env:
   IMAGE_TAG: '50566b0820651bef54e9dfa228c4b01ffced728e'
-  MCP_IMAGE_TAG: '50566b0820651bef54e9dfa228c4b01ffced728e'
+  MCP_IMAGE_TAG: '007a43478c1013971c4642a7bc572db4919155dd'
 
 # Every property of this AWS Secrets Manager secret becomes an environment variable: POSTGRES_PASSWORD, SECRET_KEY,
 # API_TOKEN and the API keys (the list is in deploy/KUBERNETES.md, Phase 0)
