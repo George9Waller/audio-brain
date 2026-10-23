@@ -37,10 +37,17 @@ function periodLabel(day: string, granularity: string) {
   return `${+d} ${MONTHS[+m - 1]}`;
 }
 
+/** "Jan 2019", or "2019" for the first of a year. */
+function when(day: string) {
+  const [y, m, d] = day.split("-");
+  return m === "01" && d === "01" ? y : `${MONTHS[+m - 1]} ${y}`;
+}
+
 function title(s: Stats) {
-  const when = s.start && s.end ? `${s.start.slice(0, 7)} to ${s.end.slice(0, 7)}` : s.start ? `since ${s.start.slice(0, 7)}` : s.end ? `before ${s.end.slice(0, 7)}` : "all time";
+  const span = s.start && s.end ? `${when(s.start)} to ${when(s.end)}` : s.start ? `since ${when(s.start)}` : s.end ? `before ${when(s.end)}` : "all time";
   const filters = Object.entries(s.filters).map(([k, v]) => (k === "country" ? `in ${v}` : v)).join(", ");
-  return { name: NOUNS[s.group] ?? s.group, sub: [when, filters].filter(Boolean).join(" · ") };
+  const name = s.view === "sound" ? "Your sound over time" : NOUNS[s.group] ?? s.group;
+  return { name, sub: [span, filters].filter(Boolean).join(" · ") };
 }
 
 function Switch<T extends string>({ value, options, onChange, busy }: { value: T; options: [T, string][]; onChange: (v: T) => void; busy?: boolean }) {
@@ -119,10 +126,10 @@ function Plot({ s, full, share, colour }: { s: Stats; full: boolean; share: bool
     ];
     return (
       <div class="stack">
-        <figure><figcaption>{s.measure === "weighted" ? "Weighted plays" : "Plays"}</figcaption>
+        <figure><figcaption>{s.measure === "weighted" ? "Weighted plays" : "Plays"} per {s.granularity}, at most {fmt(Math.max(0, ...(s.totals ?? [])))}</figcaption>
           <Columns values={s.totals ?? []} labels={periods.map((_, i) => label(i))} height={90}
                    tick={(i) => (i % Math.max(1, Math.ceil(periods.length / 6)) === 0 ? label(i) : null)} detail={(i) => `${fmt((s.totals ?? [])[i])} ${measure}`} /></figure>
-        <figure><figcaption>Sound, 0 to 1</figcaption><Legend series={feel} picked={picked} pick={pick} />
+        <figure><figcaption>Sound, 0 to 1</figcaption>{full && <Legend series={feel} picked={picked} pick={pick} />}
           <Lines series={feel.filter((x) => !picked || x.key === picked)} periods={periods} label={label} max={1} height={full ? 200 : 150} format={(v) => v.toFixed(2)} /></figure>
         {full && <figure><figcaption>Tempo, BPM</figcaption>
           <Lines series={[{ key: "bpm", label: "BPM", values: keep((x) => x.bpm), color: slot(0) }]} periods={periods} label={label} height={140}
@@ -139,7 +146,7 @@ function Plot({ s, full, share, colour }: { s: Stats; full: boolean; share: bool
   const format = share ? (v: number) => pct(v) : fmt;
   return (
     <div class="stack">
-      <Legend series={drawn} picked={picked} pick={pick} />
+      {full && <Legend series={drawn} picked={picked} pick={pick} />}
       <Lines series={shown} periods={periods} label={label} height={full ? 240 : 180} format={format} />
       {full && all.length > 1 && (
         <ul class="sparks">

@@ -92,12 +92,26 @@ never changes: add it to Sonos favourites once and `play_sonos_favorite` plays w
 
 ## Visual components (MCP Apps)
 
+### Style brief
+
+Agreed over Phase 0, for every component in every phase:
+- **Simple and descriptive:** lots of information without overload. How important a piece of information is decides
+  how much attention it gets, so it stays simple and elegant and still gives everything that matters.
+- **Claude gets the detail, you get the calm summary.** The text and `structuredContent` carry everything Claude
+  needs to reason and act; what's drawn is the summary.
+- **Booking.com's connector is the gold standard.**
+- **Echo the app.** Not a visual clone: it can lean on Claude's own MCP rendering, but it should click as audio-brain
+  (a look of its own, unlike the app, didn't).
+- **A compact inline card that expands to full screen** (option C). Inline: the name, a short summary of the
+  artists (not "Starts with…") and the actions, **on one line**: **Open in Tidal** (primary), then **Keep it**, then
+  **Play on Sonos**. Expanded: context colours, no BPM or key, and each track's sigil where a track number would be.
+
 Each tool that has a component sets `_meta.ui.resourceUri`. Buttons in a component call server tools through the host
 bridge (`callServerTool`), so refining a draft is taps or words, whichever is easier.
 
 | Component | Shows | Used by |
 |---|---|---|
-| Draft editor | Rows with art, artist – title, BPM/key/energy chips, a "new" badge and the reason it was picked. Lock, remove and swap per row; steer chips (more energy, fewer vocals, more new, darker); Keep, Play, Open in TIDAL, Undo | `make_mix`, `refine_mix`, `show_list` |
+| Draft editor | Rows with the track's sigil, artist – title, a "new" badge and the reason it was picked. Lock, remove and swap per row; steer chips (more energy, fewer vocals, more new, darker); Keep, Play, Open in TIDAL, Undo | `make_mix`, `refine_mix`, `show_list` |
 | Charts | Ranked bars, time series with sparklines, hour × weekday heatmap, stream graph | `stats`, `trends`, `rhythms`, `discovery_funnel` |
 | Timeline | Eras, milestones and play volume on one axis | `eras`, `time_travel`, `digest` |
 | Track card / artist card | The story: first heard, plays per month, contexts, verdicts, lists it's in | `track_story`, `artist` |
@@ -305,8 +319,54 @@ Steps left for you:
 
 ### Phase 2: making and refining mixes
 
-- [ ] `/make` with `request` and `tracks` recipes; `/drafts/{key}/refine` with versions.
-- [ ] Mix tools, draft editor, the Play → Sonos favourite handoff; verdict and queue tools.
+- [x] `/make` with `request` and `tracks` recipes; `/drafts/{key}/refine` with versions.
+- [x] Mix tools, draft editor, the Play → Sonos favourite handoff; verdict and queue tools.
+
+**Built 24 Oct.** Server:
+- `/make` takes `request` (any `MusicRequest` fields; the rest are left open, and the prompt isn't parsed), a
+  `{"type": "tracks", "track_ids", "keep_order"}` recipe (tracks your verdicts rule out are dropped; sequenced for
+  flow unless `keep_order`) and `title`. `recommend.query.ask` is split into parsing and `run(request)`, so both
+  paths search the same way.
+- `POST /drafts/{key}/refine` (`recommend/drafts.py`): `remove`, `add`, `move`, `lock`/`unlock`, `swap` (the
+  closest track to it, within the draft's request, that the draft hasn't shown and no verdict rules out), `steer`
+  (`changes` to the request, with `energy: up|down` as a step; `exploration`; or `text`, which the LLM folds into
+  the request, falling back to adding the words to the sound), `length`, `resequence` and `undo`. Each call saves a
+  version first (`Mix.versions`, last 20), so one undo takes back the whole call. What a draft was made from is kept
+  in `Mix.spec`, so a steer changes the request rather than starting again. Locked tracks keep their place through a
+  steer; when fewer tracks fit than there are open slots, the draft keeps its length with its own earlier tracks,
+  and says so.
+- Attribution: `Mix.made_by` and `DraftOutcome.by` record the principal (`"claude"` or `"app"`); a mix Claude made is
+  logged with `Recommendation.source="claude"`, and a verdict sent with `MCP_TOKEN` gets `Feedback.source="claude"`
+  (`where` stays the list or draft it came up in). `labels.CLAUDE` weighs all of these (1.0 now; 0 drops them).
+- Labels from refining: a track removed or swapped out counts as swiped out (−0.5); one added or swapped in and still
+  there when the draft is kept or played, +0.5 (`DraftOutcome.added`). Migration `recommend 0023_draft_refining`.
+
+MCP (`claude_mcp/mixes.py`; the list helpers moved to `lists.py`): `make_mix` and `refine_mix` in the draft editor;
+`start_radio`, `extend_radio`, `explore_artist` and `edit_list` in the list component; `discard_draft`,
+`give_verdict` (yes, no, not now), `never_play` (on its own so it can carry `destructiveHint`), `queue_decision`,
+`rename_list`, `delete_list` (destructive) and `set_sync`. `keep` and `play` from Phase 0 cover keeping and playing
+drafts. Verdicts and release decisions go through `/sync`, as the app's outbox does.
+
+Draft editor (`ui/draft.html`), following the style brief: inline it's the same compact card as a list (name, size,
+colour strip, who's in it, and Open in Tidal, Keep it, Play on Sonos on one line), with Undo by the note once
+something has changed. Full screen is the editor: steer chips (More energy, Calmer, Fewer vocals, More new, Darker;
+one already in effect shows a ✓) and every track, its sigil first, with lock, swap and remove. Each tap calls
+`refine_mix` and passes the new draft to Claude with `updateModelContext`, so Claude knows what changed when the
+user next speaks. Harness: `/harness/?page=draft&width=390`; its `refine_mix` is a rough local stand-in.
+
+Tested: `recommend.tests.DraftRefineTests` (a lock survives a steer, undo restores the whole call, swap avoids
+verdicts and what's been shown, refining feeds the labels, bad operations refused) and `api.tests.MakeAndRefineTests`
+(chosen tracks without vetoed ones, a structured request skipping the parser, verdicts from Claude attributed); the
+`claude_mcp` tests cover the new tools against a mocked API. On the local database: a 20-track "warm, groovy, sunny,
+instrumental, medium energy" draft took 21 s in a cold shell (most of it loading CLAP, which the API pod keeps
+loaded); locking two and steering energy up took 1 s and rebuilt the other 18; a swap plus a "darker, moodier" steer
+took 3.4 s.
+
+Steps left for you:
+1. Push. The API's migrate initContainer applies `recommend 0023`; CI builds the new MCP image.
+2. In claude.ai, reconnect the connector or start a new chat, so Claude picks up the new tools.
+3. From the phone: "something for cooking, less vocal", two refinements (one by tapping, one in words), then "play
+   it in the kitchen". The S2 household has no Kitchen: Claude should ask for the room or use the Dining Room.
 - *Done when:* from the phone, "something for cooking, less vocal", two refinements, then "play it in the
   kitchen" ends with the right music playing.
 

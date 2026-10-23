@@ -23,9 +23,14 @@ export function useWidth<T extends HTMLElement>(): [preact.RefObject<T | null>, 
   useLayoutEffect(() => {
     if (!ref.current) return;
     setWidth(ref.current.clientWidth);
-    const observer = new ResizeObserver(([entry]) => setWidth(Math.round(entry.contentRect.width)));
+    // a frame later, so a width change that changes the page's height can't loop back into the observer
+    let frame = 0;
+    const observer = new ResizeObserver(([entry]) => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setWidth(Math.round(entry.contentRect.width)));
+    });
     observer.observe(ref.current);
-    return () => observer.disconnect();
+    return () => { cancelAnimationFrame(frame); observer.disconnect(); };
   }, []);
   return [ref, width];
 }
@@ -85,7 +90,7 @@ export function Columns({ values, labels, tick, height = 120, color, detail }: {
   const tip: Tip = hover == null ? null
     : { x: hover * step + step / 2, y: plot - (values[hover] / max) * (plot - 4), body: <><b>{labels[hover]}</b><span>{detail(hover)}</span></> };
   return (
-    <div ref={ref}>
+    <div ref={ref} style={{ height }}>
       {width > 0 && (
         <Frame tip={tip} width={width} height={height}>
           <svg width={width} height={height} onPointerMove={at} onPointerDown={at} onPointerLeave={() => setHover(null)} role="img" aria-label="Column chart">
@@ -109,39 +114,55 @@ export function Columns({ values, labels, tick, height = 120, color, detail }: {
 export type Series = { key: string; label: string; values: number[]; color: string };
 
 /** Lines over time on one axis, with a crosshair that lists every series at the period under the finger. */
-export function Lines({ series, periods, label, height = 180, format = fmt, max: fixed, min = 0 }: {
+export function Lines({ series, periods, label, height = 180, format = fmt, max: fixed, min = 0, named = true }: {
   series: Series[]; periods: string[]; label: (i: number) => string; height?: number; format?: (v: number) => string; max?: number;
   min?: number;  // a baseline above zero, for a measure like tempo that never nears it
+  named?: boolean;  // each line's name at its end, so the chart reads without the legend
 }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [at, setAt] = useState<number | null>(null);
+  const ends = named && series.length > 1 && width >= 300;
+  const right = ends ? Math.min(96, Math.round(width * 0.26)) : 8;
   const axis = 18, left = 34, plot = height - axis - 6, n = periods.length;
   const max = fixed ?? (Math.max(...series.flatMap((s) => s.values), 0) || 1);
   const grid = fixed === 1 ? [0, 0.5, 1] : ticks(max - min).map((t) => t + min);
   const top = Math.max(max, grid[grid.length - 1]);
-  const x = (i: number) => left + (n > 1 ? (i * (width - left - 8)) / (n - 1) : (width - left) / 2);
+  const x = (i: number) => left + (n > 1 ? (i * (width - left - right)) / (n - 1) : (width - left - right) / 2);
   const y = (v: number) => 6 + plot - ((v - min) / (top - min || 1)) * plot;
   const every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor((width - left) / 56))));
   const move = (e: PointerEvent) => {
-    const i = Math.round(((e.offsetX - left) / Math.max(1, width - left - 8)) * (n - 1));
+    const i = Math.round(((e.offsetX - left) / Math.max(1, width - left - right)) * (n - 1));
     setAt(Math.min(n - 1, Math.max(0, i)));
   };
   const tip: Tip = at == null ? null : {
     x: x(at), y: 6, body: <><b>{label(at)}</b>{[...series].sort((a, b) => b.values[at] - a.values[at]).map((s) => (
       <span key={s.key} class="tip-row"><i class="swatch" style={{ background: s.color }} />{s.label}<span class="number">{format(s.values[at])}</span></span>))}</>,
   };
+  // names at the lines' ends, highest first, nudged apart so none overlap
+  const placed: { s: Series; y: number }[] = [];
+  if (ends) {
+    for (const s of [...series].sort((a, b) => y(a.values[n - 1] ?? 0) - y(b.values[n - 1] ?? 0))) {
+      const want = y(s.values[n - 1] ?? 0) + 4;
+      placed.push({ s, y: Math.max(want, (placed[placed.length - 1]?.y ?? -Infinity) + 13) });
+    }
+    const over = (placed[placed.length - 1]?.y ?? 0) - (6 + plot + 4);
+    if (over > 0) placed.forEach((p) => { p.y -= over; });
+  }
+  const room = Math.floor((right - 8) / 6.2);  // characters that fit, at 11px
+  const short = (t: string) => (t.length > room ? `${t.slice(0, Math.max(1, room - 1))}…` : t);
   return (
-    <div ref={ref}>
+    <div ref={ref} style={{ height }}>
       {width > 0 && (
         <Frame tip={tip} width={width} height={height}>
           <svg width={width} height={height} onPointerMove={move} onPointerDown={move} onPointerLeave={() => setAt(null)} role="img" aria-label="Line chart over time">
-            {grid.map((g) => <g key={g}><line x1={left} x2={width} y1={y(g) + 0.5} y2={y(g) + 0.5} stroke={g !== min ? "var(--grid)" : "var(--axis)"} />
+            {grid.map((g) => <g key={g}><line x1={left} x2={width - right + 8} y1={y(g) + 0.5} y2={y(g) + 0.5} stroke={g !== min ? "var(--grid)" : "var(--axis)"} />
               <text x={left - 6} y={y(g) + 4} class="tick" text-anchor="end">{format(g)}</text></g>)}
             {periods.map((_, i) => i % every === 0 && <text key={i} x={x(i)} y={height - 4} class="tick" text-anchor="middle">{label(i)}</text>)}
             {series.map((s) => (
               <path key={s.key} d={s.values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join("")}
                 fill="none" stroke={s.color} stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
             ))}
+            {placed.map(({ s, y: ly }) => <text key={`n${s.key}`} x={x(n - 1) + 6} y={ly} class="tick end" style={{ fill: s.color }}><title>{s.label}</title>{short(s.label)}</text>)}
             {at != null && <line x1={x(at)} x2={x(at)} y1={6} y2={6 + plot} stroke="var(--axis)" />}
             {at != null && series.map((s) => <circle key={s.key} cx={x(at)} cy={y(s.values[at])} r="4" fill={s.color} stroke="var(--bg)" stroke-width="2" />)}
           </svg>
@@ -170,19 +191,23 @@ export function Heatmap({ cells, detail }: { cells: number[][]; detail: (day: nu
   const [ref, width] = useWidth<HTMLDivElement>();
   const [tip, setTip] = useState<Tip>(null);
   const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"], left = 32, axis = 16, gap = 2;
-  const cell = Math.max(6, (width - left) / 24), h = Math.min(cell, 22), height = days.length * h + axis;
+  // rows tall enough to tap on a phone; the finger can slide across them, the tip following
+  const cell = Math.max(6, (width - left) / 24), h = 22, height = days.length * h + axis;
   const max = Math.max(...cells.flat(), 0) || 1;
+  const show = (r: number, c: number) => setTip({ x: left + c * cell + cell / 2, y: r * h, body: <><b>{days[r]} {String(c).padStart(2, "0")}:00</b><span>{detail(r, c)}</span></> });
+  const point = (e: PointerEvent) => {
+    const c = Math.floor((e.offsetX - left) / cell), r = Math.floor(e.offsetY / h);
+    if (c >= 0 && c < 24 && r >= 0 && r < 7) show(r, c);
+  };
   return (
-    <div ref={ref}>
+    <div ref={ref} style={{ height }}>
       {width > 0 && (
         <Frame tip={tip} width={width} height={height}>
-          <svg width={width} height={height} onPointerLeave={() => setTip(null)} role="img" aria-label="Plays by hour and weekday">
+          <svg width={width} height={height} onPointerMove={point} onPointerDown={point} onPointerLeave={() => setTip(null)} role="img" aria-label="Plays by hour and weekday">
             {days.map((d, r) => <text key={d} x={0} y={r * h + h / 2 + 4} class="tick">{d}</text>)}
             {cells.map((row, r) => row.map((v, c) => (
               <rect key={`${r}-${c}`} x={left + c * cell} y={r * h} width={cell - gap} height={h - gap} rx="2"
-                fill={v ? `color-mix(in oklab, var(--seq-high) ${Math.round(12 + (v / max) * 88)}%, var(--seq-low))` : "var(--empty)"}
-                onPointerEnter={() => setTip({ x: left + c * cell + cell / 2, y: r * h, body: <><b>{days[r]} {String(c).padStart(2, "0")}:00</b><span>{detail(r, c)}</span></> })}
-                onPointerDown={() => setTip({ x: left + c * cell + cell / 2, y: r * h, body: <><b>{days[r]} {String(c).padStart(2, "0")}:00</b><span>{detail(r, c)}</span></> })} />
+                fill={v ? `color-mix(in oklab, var(--seq-high) ${Math.round(12 + (v / max) * 88)}%, var(--seq-low))` : "var(--empty)"} />
             )))}
             {[0, 6, 12, 18].map((hour) => <text key={hour} x={left + hour * cell} y={height - 3} class="tick">{String(hour).padStart(2, "0")}</text>)}
           </svg>

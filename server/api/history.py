@@ -228,7 +228,9 @@ def ranked(dimension, filters, count=5):
     grouped = aggregate(dimension, "none", filters=filters)
     keys = [k for k in sorted((k for _, k in grouped), key=lambda k: -grouped[(None, k)][1]) if k][:count]
     names = labels(dimension, keys)
-    return [{"key": k, "label": names.get(k, k), "plays": grouped[(None, k)][0], "weighted": round(grouped[(None, k)][1], 1)} for k in keys]
+    hues = all_hues() if dimension == "context" else {}
+    return [{"key": k, "label": names.get(k, k), "plays": grouped[(None, k)][0], "weighted": round(grouped[(None, k)][1], 1),
+             **({"hue": hues.get(int(k))} if dimension == "context" and k.isdigit() else {})} for k in keys]
 
 
 def hours(filters):

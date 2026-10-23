@@ -16,6 +16,7 @@ from django.utils import timezone
 from catalogue.models import AudioFeatures, Track
 from history.models import Listen
 from library.models import OAuthToken
+from recommend import editorial
 from recommend.lists import save, track_items
 from recommend.mixes import context_mix, contexts_for_now, fresh_picks
 from recommend.models import Context, DraftOutcome, Mix, Playlist
@@ -126,7 +127,23 @@ def run_recipe(recipe, length=30, exploration=None):
         return picks, title, f"Your plays from {start:%d %b %Y} to {end:%d %b %Y}" + (", unplayed since" if mode == "then_not_since" else ", most distinctive first")
     if kind == "fresh":
         return fresh_picks(length), "Fresh releases", "New releases from artists, remixers and labels you play, best fit first"
+    if kind == "tracks":
+        return chosen_tracks(recipe), "Your picks", "Tracks chosen for you in conversation"
     raise ValueError(f"Unknown recipe {kind!r}")
+
+
+def chosen_tracks(recipe):
+    """A list chosen track by track (by Claude, from SQL or the conversation), without the ones your verdicts rule
+    out, sequenced for flow unless `keep_order`."""
+    from recommend.drafts import against_verdict, items_for
+
+    ids = list(dict.fromkeys(int(t) for t in recipe.get("track_ids") or []))
+    if not ids:
+        raise ValueError("Give the tracks' IDs")
+    blocked = against_verdict(ids)
+    tracks = Track.objects.select_related("artist", "album").in_bulk([t for t in ids if t not in blocked])
+    picks = picks_from(items_for([tracks[t] for t in ids if t in tracks], "Chosen for this mix"))
+    return picks if recipe.get("keep_order") else editorial.sequence(picks)
 
 
 def mood_options(exploration, default):
@@ -145,21 +162,31 @@ def mood_options(exploration, default):
     return {"filters": Filters(familiarity="mixed"), "novelty_share": exploration}
 
 
-def make(prompt="", recipe=None, length=None, exploration=None):
-    """Build a draft mix from a prompt or a recipe, for review. Nothing is saved to Lists or logged as a
-    recommendation until it's kept or played. Returns (draft Mix or None, what the request was read as)."""
+def make(prompt="", recipe=None, length=None, exploration=None, request=None, title=None, by=""):
+    """Build a draft mix for review from a prompt, a structured request (a MusicRequest, filled in by Claude, so the
+    words needn't be parsed) or a recipe. Nothing is saved to Lists or logged as a recommendation until it's kept or
+    played. Returns (draft Mix or None, what the request was read as)."""
+    from recommend.drafts import new_spec
     from recommend.lists import playable
+    from recommend.query import ask, run
 
+    parsed, seeds = None, []
     if recipe:
-        wanted = length or 30
-        picks, title, subtitle = run_recipe(recipe, round(wanted * 1.6), exploration=exploration)
+        tracks = recipe.get("type") == "tracks"
+        wanted = length or (len(recipe.get("track_ids") or []) if tracks else 30)
+        picks, made_title, subtitle = run_recipe(recipe, wanted if tracks else round(wanted * 1.6), exploration=exploration)
         understood = subtitle
+        seeds = recipe.get("track_ids") if tracks else [recipe["track_id"]] if recipe.get("type") == "seed" else []
     else:
-        from recommend.query import ask
-        # no length given: whatever the words say ("two hours of..."), else 30
-        picks, request = ask(prompt, length=length, overfetch=1.6, exploration=exploration)
-        wanted = request.length
-        title, understood = (request.title or "").strip()[:60] or short_title(prompt), describe(request)
+        if request is not None:
+            if length:
+                request.length = length
+            picks, parsed = run(request, prompt, overfetch=1.6, exploration=exploration)
+        else:
+            # no length given: whatever the words say ("two hours of..."), else 30
+            picks, parsed = ask(prompt, length=length, overfetch=1.6, exploration=exploration)
+        wanted = parsed.length
+        made_title, understood = (parsed.title or "").strip()[:60] or short_title(prompt) or "Your mix", describe(parsed)
         subtitle = understood
     picks = playable(picks, wanted)  # only tracks Tidal can play, as with lists
     for old in Mix.objects.filter(kind="draft", built_at__lt=timezone.now() - DRAFTS_LAST):
@@ -167,10 +194,12 @@ def make(prompt="", recipe=None, length=None, exploration=None):
         old.delete()
     if not picks:
         return None, understood
-    draft = save(f"draft:{uuid.uuid4().hex[:8]}", "draft", Mix.DRAFTS, title, subtitle, track_items(picks))
-    logged_request = (prompt[:470] + f"\nexploration={exploration:.2f}") if exploration is not None else prompt[:500]
-    Mix.objects.filter(pk=draft.pk).update(request=logged_request, logged=False)
-    draft.request, draft.logged = logged_request, False
+    draft = save(f"draft:{uuid.uuid4().hex[:8]}", "draft", Mix.DRAFTS, (title or "").strip()[:250] or made_title, subtitle, track_items(picks))
+    words = prompt or (parsed.sound if parsed else "")
+    logged_request = (words[:470] + f"\nexploration={exploration:.2f}") if exploration is not None else words[:500]
+    spec = new_spec(prompt, parsed, recipe, exploration, seeds, [p.track.pk for p in picks])
+    Mix.objects.filter(pk=draft.pk).update(request=logged_request, logged=False, made_by=by, spec=spec)
+    draft.request, draft.logged, draft.made_by, draft.spec = logged_request, False, by, spec
     return draft, understood
 
 
@@ -198,8 +227,8 @@ def keep(draft, title=None, remove=()):
     if remove:
         draft.items = [i for i in draft.items if i.get("track_id") not in set(remove)]
     if not draft.logged:
-        log_recommendations(picks_from(draft.items), source="ask", request=(draft.request or draft.title)[:500])
-    draft.kind, draft.section, draft.logged = "asked", Mix.LISTS, True
+        log_recommendations(picks_from(draft.items), source=source_of(draft), request=(draft.request or draft.title)[:500])
+    draft.kind, draft.section, draft.logged, draft.versions = "asked", Mix.LISTS, True, []
     draft.key = "ask:" + draft.key.split(":", 1)[1]
     if title:
         draft.title = title[:250]
@@ -219,7 +248,7 @@ def play(mix):
     if mix.kind == "draft":
         record_draft(mix, DraftOutcome.PLAYED)
     if not mix.logged:
-        log_recommendations(picks_from(mix.items), source="ask", playlist=playlist, request=(mix.request or mix.title)[:500])
+        log_recommendations(picks_from(mix.items), source=source_of(mix), playlist=playlist, request=(mix.request or mix.title)[:500])
         Mix.objects.filter(pk=mix.pk).update(logged=True)
     return f"https://tidal.com/browse/playlist/{playlist.external_id}" if playlist.external_id else None
 
@@ -230,9 +259,21 @@ def discard(draft):
     draft.delete()
 
 
+def source_of(mix):
+    """How its tracks are logged as recommendations: "claude" for a mix Claude made, so labels and backtests can
+    weigh it apart."""
+    return "claude" if mix.made_by == "claude" else "ask"
+
+
 def record_draft(draft, outcome, removed=()):
-    DraftOutcome.objects.create(key=draft.key, request=(draft.request or draft.title)[:500], outcome=outcome,
-                                tracks=[i["track_id"] for i in draft.items if i.get("kind") == "track"], removed=list(removed))
+    """What the draft showed, with the tracks taken out of it (swiped out, or removed or swapped out while refining)
+    and the ones added to it that are still there."""
+    spec = draft.spec or {}
+    shown = [i["track_id"] for i in draft.items if i.get("kind") == "track"]
+    removed = list(dict.fromkeys([*removed, *spec.get("removed", [])]))
+    DraftOutcome.objects.create(key=draft.key, request=(draft.request or draft.title)[:500], outcome=outcome, by=draft.made_by,
+                                tracks=shown + [t for t in removed if t not in shown], removed=removed,
+                                added=[t for t in spec.get("added", []) if t in shown and t not in removed])
 
 
 RADIOS_KEPT = 8
@@ -304,7 +345,7 @@ def sync_list(mix, on, pinned=False):
     tracks = {t.pk: t for t in Track.objects.filter(pk__in=[i["track_id"] for i in mix.items if i.get("kind") == "track"])}
     playlist = push_playlist(mix.key, mix.title, mix.subtitle, [tracks[i["track_id"]] for i in mix.items if i.get("track_id") in tracks], context=mix.context)
     if not mix.logged:
-        log_recommendations(picks_from(mix.items), source="ask", playlist=playlist, request=(mix.request or mix.title)[:500])
+        log_recommendations(picks_from(mix.items), source=source_of(mix), playlist=playlist, request=(mix.request or mix.title)[:500])
         Mix.objects.filter(pk=mix.pk).update(logged=True)
     return playlist_url(playlist)
 

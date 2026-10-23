@@ -68,6 +68,12 @@ def ask(text, length=None, overfetch=1.0, exploration=None):
     request = parse_request(text)
     if length:
         request.length = length
+    return run(request, text, overfetch, exploration)
+
+
+def run(request, text="", overfetch=1.0, exploration=None, seeds=()):
+    """(picks, request) for a structured request, parsed from words or filled in by Claude. `text` is the words it
+    came from, if any; `seeds` are analysed tracks to start from besides the ones the request names."""
     wanted = request.length
     request = request.model_copy(update={"length": round(wanted * overfetch)})
     if request.period_mode != "none" and request.period_start and request.period_end:
@@ -77,9 +83,18 @@ def ask(text, length=None, overfetch=1.0, exploration=None):
         genre_words = list(request.styles) + [w for w in re.findall(r"[a-z][a-z&-]+", request.sound.lower()) if is_genre_word(w)]
         return time_travel(start, end, request.period_mode, request.length, text_vector, filters, genre_words), request.model_copy(update={"length": wanted})
     context = Context.objects.filter(pk=request.context_id, active=True).first() if request.context_id else None
-    seeds = find_seeds(request.similar_to)
+    seeds = list(seeds) + find_seeds(request.similar_to)
     text_vector = clap.embed_text([request.sound])[0] if request.sound.strip() else None
-    filters = Filters(
+    # The explicit mood control takes precedence over inferred wording.  It
+    # changes the familiar/new candidate quota, while the sound request still
+    # determines what is a good fit within each pool.
+    novelty = exploration if exploration is not None else (context.novelty_share if context else 0.3)
+    picks = recommend(length=request.length, text_vector=text_vector, context=context, seeds=seeds, filters=filters_for(request, exploration), novelty_share=novelty)
+    return picks, request.model_copy(update={"length": wanted})
+
+
+def filters_for(request, exploration=None):
+    return Filters(
         bpm_min=request.bpm_min,
         bpm_max=request.bpm_max,
         vocals=request.vocals,
@@ -91,12 +106,6 @@ def ask(text, length=None, overfetch=1.0, exploration=None):
         languages=[l.lower() for l in request.languages],
         decades=request.decades,
     )
-    # The explicit mood control takes precedence over inferred wording.  It
-    # changes the familiar/new candidate quota, while the sound request still
-    # determines what is a good fit within each pool.
-    novelty = exploration if exploration is not None else (context.novelty_share if context else 0.3)
-    picks = recommend(length=request.length, text_vector=text_vector, context=context, seeds=seeds, filters=filters, novelty_share=novelty)
-    return picks, request.model_copy(update={"length": wanted})
 
 
 def is_genre_word(word):

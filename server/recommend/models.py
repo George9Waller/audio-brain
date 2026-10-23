@@ -202,6 +202,10 @@ class Mix(models.Model):
     request = models.CharField(max_length=500, blank=True)  # the prompt, for asked mixes and drafts
     suggestions = models.JSONField(default=list, blank=True)  # tracks that would fit, built with the list (same shape as items)
     logged = models.BooleanField(default=True)  # whether its tracks are in the Recommendation log yet (drafts: not until kept or played)
+    made_by = models.CharField(max_length=20, blank=True)  # who asked for it: "app" or "claude" (api.auth principals)
+    # drafts (recommend.drafts): what it was made from, to refine it by, and the versions before each refine, to undo
+    spec = models.JSONField(default=dict, blank=True)
+    versions = models.JSONField(default=list, blank=True)
     built_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -289,6 +293,8 @@ class DraftOutcome(models.Model):
     outcome = models.CharField(max_length=10, choices=OUTCOMES)
     tracks = models.JSONField(default=list)  # track IDs the draft showed
     removed = models.JSONField(default=list)  # track IDs swiped out before keeping
+    added = models.JSONField(default=list)  # track IDs added to it, or swapped in, while refining it
+    by = models.CharField(max_length=20, blank=True)  # who made the draft: "app" or "claude"
     at = models.DateTimeField(auto_now_add=True, db_index=True)
 
 

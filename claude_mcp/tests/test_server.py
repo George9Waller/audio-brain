@@ -49,7 +49,18 @@ ARTIST = {"id": 3, "name": "Burial", "country": "GB", "area": "London", "kind": 
           "labels": [{"key": "2", "label": "Hyperdub", "plays": 80, "weighted": 60}], "styles": [], "contexts": [],
           "similar": [{"name": "Kode9", "match": 0.8, "artist_id": None, "plays": 0}], "verdicts": {}, "favourite": True,
           "favourite_tracks": 0, "remixes": 0, "releases": []}
+DRAFT = {**LIST, "key": "draft:ab", "kind": "draft", "section": "drafts", "title": "Kitchen", "subtitle": "warm; instrumental"}
+DRAFT["items"] = [{**DRAFT["items"][0], "locked": True}, DRAFT["items"][1]]
+SPEC = {"request": {"sound": "warm", "vocals": "instrumental", "energy": "medium", "familiarity": "mixed", "styles": []},
+        "exploration": None, "versions": 1, "locked": [1]}
 ROUTES = {
+    "/api/v1/make": lambda r: {"mix": DRAFT, "understood": "warm; instrumental", "spec": {**SPEC, "versions": 0, "locked": []}},
+    "/api/v1/drafts/draft:ab/refine": lambda r: {"mix": DRAFT, "spec": SPEC,
+                                                 "done": [f"did {o['op']}" for o in json.loads(r.content)["operations"]]},
+    "/api/v1/sync": lambda r: {"accepted": [{"client_id": i["client_id"], "track_id": 1} for i in json.loads(r.content).get("feedback", [])],
+                               "rejected": [{"client_id": i["client_id"], "reason": "No such release"} for i in json.loads(r.content).get("queue", [])]},
+    "/api/v1/radio": lambda r: {"mix": {**LIST, "key": "radio:1", "kind": "radio", "title": "Radio · Archangel"},
+                                "tidal_url": "https://tidal.com/browse/playlist/radio", "added": 0},
     "/api/v1/history/stats": lambda r: {**STATS, "group": r.url.params.get("group", "artist")},
     "/api/v1/tracks/1/story": lambda r: STORY,
     "/api/v1/artists/3/story": lambda r: ARTIST,
@@ -63,7 +74,7 @@ ROUTES = {
 def env(tmp_path):
     ui = tmp_path / "ui"
     ui.mkdir()
-    for name in ("list", "chart", "story"):
+    for name in ("list", "chart", "story", "draft"):
         (ui / f"{name}.html").write_text(f"<html>{name}</html>")
     totp = pyotp.random_base32()
     config = Config(public_url=PUBLIC, api_url="http://api/api/v1", mcp_token="claude-token",
@@ -305,3 +316,43 @@ def test_reasoning_tools_over_mcp(env):
     sql = call_tool(client, token, "sql", {"query": "select n from x"})
     assert "| 1 |" in sql["content"][0]["text"] and "cut at the limit" in sql["content"][0]["text"]
     assert call_tool(client, token, "schema", {"tables": ["history_listen"]})["content"][0]["text"] == "# guide history_listen"
+
+
+def test_mix_tools_over_mcp(env):
+    client, totp, calls = env
+    token = connect(client, totp)[1]["access_token"]
+    tools = {t["name"]: t for t in call_tool(client, token, None, None)["tools"]}
+    assert tools["make_mix"]["_meta"]["ui"]["resourceUri"] == "ui://audio-brain/draft.html"
+    assert tools["refine_mix"]["_meta"]["ui"]["resourceUri"] == "ui://audio-brain/draft.html"
+    assert tools["start_radio"]["_meta"]["ui"]["resourceUri"] == "ui://audio-brain/list.html"
+    assert all(tools[n]["annotations"]["destructiveHint"] for n in ("never_play", "delete_list"))
+    assert not tools["give_verdict"]["annotations"]["destructiveHint"]
+    assert "never" not in json.dumps(tools["give_verdict"]["inputSchema"]["properties"]["verdict"])
+
+    made = call_tool(client, token, "make_mix", {"request": {"title": "Kitchen", "vocals": "instrumental", "energy": "medium"}, "length": 20})
+    body = json.loads(calls[-1].content)
+    assert body["request"] == {"title": "Kitchen", "vocals": "instrumental", "energy": "medium"}
+    assert (body["title"], body["length"], "recipe" in body) == ("Kitchen", 20, False)
+    data = made["structuredContent"]
+    assert (data["view"], data["key"], data["tracks"][0]["locked"], data["versions"]) == ("draft", "draft:ab", True, 0)
+    assert "Request: sound “warm”; vocals instrumental; energy medium." in made["content"][0]["text"]
+
+    call_tool(client, token, "make_mix", {"track_ids": [3, 1, 2], "keep_order": True})
+    assert json.loads(calls[-1].content)["recipe"] == {"type": "tracks", "track_ids": [3, 1, 2], "keep_order": True}
+    assert call_tool(client, token, "make_mix", {})["isError"] is True
+
+    refined = call_tool(client, token, "refine_mix", {"key": "draft:ab", "operations": [
+        {"op": "lock", "track_ids": [1]}, {"op": "steer", "changes": {"energy": "up"}}]})
+    assert json.loads(calls[-1].content)["operations"] == [{"op": "lock", "track_ids": [1]}, {"op": "steer", "changes": {"energy": "up"}}]
+    text = refined["content"][0]["text"]
+    assert "Done: did lock; did steer." in text and "Locked: #1." in text and "1 earlier version to undo to." in text
+    assert refined["structuredContent"]["done"] == ["did lock", "did steer"]
+
+    verdict = call_tool(client, token, "give_verdict", {"track_id": 1, "verdict": "yes", "where": "draft:ab"})
+    sent = json.loads(calls[-1].content)["feedback"][0]
+    assert (sent["verdict"], sent["track"], sent["where"]) == ("yes", {"id": 1}, "draft:ab") and "client_id" in sent
+    assert verdict["content"][0]["text"] == "Recorded yes for #1."
+    assert call_tool(client, token, "queue_decision", {"release_id": 9, "state": "saved"})["isError"] is True
+
+    radio = call_tool(client, token, "start_radio", {"track_id": 1})
+    assert radio["structuredContent"]["key"] == "radio:1" and "TIDAL: https://tidal.com/browse/playlist/radio" in radio["content"][0]["text"]

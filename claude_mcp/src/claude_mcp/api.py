@@ -18,6 +18,9 @@ class Api:
     async def post(self, path, body=None):
         return await self._send("POST", path, json=body or {})
 
+    async def delete(self, path):
+        return await self._send("DELETE", path)
+
     async def _send(self, method, path, **kwargs):
         response = await self._client.request(method, path, **kwargs)
         if response.status_code >= 400:

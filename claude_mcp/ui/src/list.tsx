@@ -7,12 +7,12 @@ import { useEffect, useState } from "preact/hooks";
 import { App, applyDocumentTheme, applyHostFonts, applyHostStyleVariables } from "@modelcontextprotocol/ext-apps";
 import type { McpUiDisplayMode, McpUiHostContext } from "@modelcontextprotocol/ext-apps";
 import "./style.css";
-import { ColourStrip, EnergyArc, KeyPath, Sigil, contextColor } from "./music";
+import { Artists, ColourStrip, EnergyArc, KeyPath, Sigil, contextColor } from "./music";
 
 export type Track = {
   track_id: number; artist: string; title: string; reason: string; novel: boolean; hue: number | null; verdict: string | null;
   bpm: number | null; camelot: string | null; energy: number | null; moods: number[] | null; vocal: boolean;
-  context: string | null; artist_new: boolean;
+  context: string | null; artist_new: boolean; locked?: boolean;
 };
 type Other = { kind: string; title: string; artist: string; detail: string; reason: string; url: string | null; state: string | null };
 type ListRow = {
@@ -52,19 +52,6 @@ app.ontoolresult = (result) => {
   setData(data);
 };
 app.onhostcontextchanged = applyContext;
-
-/** The artist summary, with the leading artists' names in bold. */
-function Artists({ text, names }: { text: string; names: string[] }) {
-  const parts: (string | preact.JSX.Element)[] = [];
-  let rest = text;
-  for (const name of names) {
-    const at = rest.indexOf(name);
-    if (at < 0) continue;
-    parts.push(rest.slice(0, at), <b key={name}>{name}</b>);
-    rest = rest.slice(at + name.length);
-  }
-  return <p class="artists">{parts}{rest}</p>;
-}
 
 function Expand({ onClick }: { onClick: () => void }) {
   return (

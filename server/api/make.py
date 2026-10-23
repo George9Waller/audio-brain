@@ -27,7 +27,12 @@ class Action(Schema):
 
 class MakeIn(Schema):
     prompt: str = ""
+    # a structured request (recommend.query.MusicRequest's fields, any left out are open), used instead of parsing
+    # the prompt; Claude fills it in
+    request: dict[str, Any] | None = None
+    # a quick action's, or {"type": "tracks", "track_ids": [...], "keep_order": false} for a list chosen by hand
     recipe: dict[str, Any] | None = None
+    title: str | None = None
     length: int | None = None  # none: what the prompt says ("two hours of..."), else 30
     # 0 is dependable rediscovery; 1 is unfamiliar but context-fitting music.
     # Kept optional so existing clients retain their present recommendation mix.
@@ -37,6 +42,19 @@ class MakeIn(Schema):
 class Draft(Schema):
     mix: ListOut | None  # None when nothing matched
     understood: str  # what the request was read as, to show above the draft
+    spec: dict[str, Any] | None = None  # the request as it stands, exploration, versions and locked tracks, to refine by
+
+
+class RefineIn(Schema):
+    # applied in order, each {"op": ...}: remove/lock/unlock {track_ids}; add {track_ids, position}; move {track_id,
+    # position}; swap {track_id}; steer {changes, text, exploration}; length {length}; resequence; undo
+    operations: list[dict[str, Any]] = []
+
+
+class Refined(Schema):
+    mix: ListOut
+    done: list[str]  # one line per operation
+    spec: dict[str, Any]
 
 
 class KeepIn(Schema):
@@ -68,15 +86,45 @@ def actions(request, playing: int | None = None):
 @router.post("/make", response=Draft)
 def make_draft(request, body: MakeIn):
     """A draft for review: not in Lists and not logged until it's kept or played."""
-    if not body.prompt.strip() and not body.recipe:
+    from pydantic import ValidationError
+    from recommend.drafts import describe, request_from
+
+    if not body.prompt.strip() and not body.recipe and not body.request:
         raise HttpError(400, "Say what you want, or pick a quick action")
     if body.exploration is not None and not 0 <= body.exploration <= 1:
         raise HttpError(400, "Exploration must be between 0 and 1")
     try:
-        draft, understood = make(body.prompt, body.recipe, max(5, min(body.length, 80)) if body.length else None, body.exploration)
+        structured = request_from(body.request) if body.request and not body.recipe else None
+        draft, understood = make(body.prompt, body.recipe, max(5, min(body.length, 80)) if body.length else None, body.exploration,
+                                 request=structured, title=body.title, by=request.auth or "")
+    except ValidationError as error:
+        raise HttpError(400, f"That request doesn't fit: {error.errors()[0]['loc']}: {error.errors()[0]['msg']}")
     except (ValueError, KeyError, LookupError) as error:
         raise HttpError(400, f"Couldn't make that: {error}")
-    return {"mix": list_out(draft) if draft else None, "understood": understood}
+    if not draft:
+        return {"mix": None, "understood": understood}
+    out = list_out(draft)
+    out["items"] = detail(out["items"])
+    return {"mix": out, "understood": understood, "spec": describe(draft)}
+
+
+@router.post("/drafts/{key}/refine", response=Refined)
+def refine_draft(request, key: str, body: RefineIn):
+    """Change a draft step by step; each call saves a version first, so `undo` takes back the whole call. With no
+    operations it's the draft as it stands."""
+    from pydantic import ValidationError
+    from recommend.drafts import RefineError, describe, refine
+
+    draft = get_object_or_404(Mix, key=key, kind="draft")
+    try:
+        draft, done = refine(draft, body.operations)
+    except ValidationError as error:
+        raise HttpError(400, f"That change doesn't fit the request: {error.errors()[0]['loc']}: {error.errors()[0]['msg']}")
+    except (RefineError, KeyError, TypeError) as error:
+        raise HttpError(400, str(error))
+    out = list_out(draft)
+    out["items"] = detail(out["items"])
+    return {"mix": out, "done": done, "spec": describe(draft)}
 
 
 @router.post("/drafts/{key}/keep", response=ListOut)

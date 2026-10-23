@@ -12,7 +12,7 @@ import { Sigil, contextColor } from "./music";
 import type { Track } from "./list";
 
 type Month = { month: string; plays: number; weighted: number };
-type Ranked = { key: string; label: string; plays: number; weighted: number };
+type Ranked = { key: string; label: string; plays: number; weighted: number; hue?: number | null };
 type Sound = { bpm: number; camelot: string | null; key: string; scale: string; energy: number; instrumental: number; shape?: number[];
                happy: number; party: number; danceability: number; aggressive: number; sad: number; relaxed: number };
 type TrackStory = {
@@ -83,7 +83,13 @@ function asTrack(s: TrackStory): Track {
            context: s.context?.name ?? null, artist_new: false };
 }
 
-function TrackCard({ s, full, open }: { s: TrackStory; full: boolean; open: (tool: string, args: Record<string, unknown>) => void }) {
+type CardProps<S> = { s: S; full: boolean; open: (tool: string, args: Record<string, unknown>) => void; side?: preact.JSX.Element | false };
+
+/** The card's header, with the expand button beside it inline; everything below it gets the full width. */
+const Head = ({ children, side }: { children: preact.ComponentChildren; side?: preact.JSX.Element | false }) =>
+  side ? <div class="top top-start">{children}{side}</div> : <>{children}</>;
+
+function TrackCard({ s, full, open, side }: CardProps<TrackStory>) {
   const sound = s.sound;
   const facts = [
     sound && `${Math.round(sound.bpm)} BPM · ${sound.camelot ?? `${sound.key} ${sound.scale}`} · energy ${sound.energy.toFixed(2)} · ${sound.instrumental < 0.5 ? "vocal" : "instrumental"}`,
@@ -93,12 +99,12 @@ function TrackCard({ s, full, open }: { s: TrackStory; full: boolean; open: (too
   ].filter(Boolean) as string[];
   return (
     <>
-      <div class="who">
+      <Head side={side}><div class="who grow">
         <Sigil track={asTrack(s)} size={44} />
         <div class="name"><h1 class={full ? "big" : ""}>{s.name}</h1>
           <p class="meta"><button class="link-text" onClick={() => open("artist", { artist: String(s.artist_id) })}>{s.artist}</button>
             {[s.album, s.released?.slice(0, 4)].filter(Boolean).map((x) => ` · ${x}`).join("")}</p></div>
-      </div>
+      </div></Head>
       <Tiles items={[[fmt(s.plays), "plays"], [month(s.first_played), "first heard"], [month(s.last_played), "last played"]]} />
       <MonthChart months={s.months} full={full} />
       <Chips items={[...(s.context ? [{ label: s.context.name, color: contextColor(s.context.hue) }] : []), ...s.styles.slice(0, full ? 6 : 3).map((x) => ({ label: x }))]} />
@@ -110,12 +116,12 @@ function TrackCard({ s, full, open }: { s: TrackStory; full: boolean; open: (too
   );
 }
 
-function ArtistCard({ s, full, open }: { s: ArtistStory; full: boolean; open: (tool: string, args: Record<string, unknown>) => void }) {
+function ArtistCard({ s, full, open, side }: CardProps<ArtistStory>) {
   const who = [s.kind, s.area || s.country, s.active_from ? `since ${s.active_from}` : ""].filter(Boolean).join(" · ");
   const top = s.top_tracks.slice(0, full ? 15 : 3);
   return (
     <>
-      <div class="name"><h1 class={full ? "big" : ""}>{s.name}</h1>{who && <p class="meta">{who}</p>}</div>
+      <Head side={side}><div class="name"><h1 class={full ? "big" : ""}>{s.name}</h1>{who && <p class="meta">{who}</p>}</div></Head>
       <Tiles items={[[fmt(s.plays), "plays"], [`${s.tracks_played} of ${s.tracks}`, "tracks played"], [month(s.first_played), "first heard"]]} />
       <MonthChart months={s.months} full={full} />
       {top.length > 0 && (
@@ -123,7 +129,7 @@ function ArtistCard({ s, full, open }: { s: ArtistStory; full: boolean; open: (t
           <Bars bars={top.map((t) => ({ label: t.title, value: t.plays, detail: `${t.plays}`, onClick: () => open("track_story", { track_id: t.track_id }) }))} /></figure>
       )}
       <Chips items={s.styles.slice(0, full ? 8 : 3).map((x) => ({ label: x.label }))} />
-      {full && <Ranks caption="Contexts" items={s.contexts} />}
+      {full && <Ranks caption="Contexts" items={s.contexts} color={(r) => contextColor(r.hue ?? null)} />}
       {full && <Ranks caption="Labels" items={s.labels} />}
       {full && <HourChart hours={s.hours} />}
       {full && s.similar.length > 0 && (
@@ -143,16 +149,17 @@ function Root() {
   const [back, setBack] = useState<Story[]>([]);
   if (!s) return <p class="note pad">Looking it up…</p>;
   const open = (tool: string, args: Record<string, unknown>) => { setBack([...back, s]); call(tool, args); };
-  const card = s.view === "track" ? <TrackCard s={s} full={full} open={open} /> : <ArtistCard s={s} full={full} open={open} />;
+  const side = !full && <Expand onClick={expand} />;
+  const card = s.view === "track" ? <TrackCard s={s} full={full} open={open} side={side} /> : <ArtistCard s={s} full={full} open={open} side={side} />;
   const backButton = back.length > 0 && <button class="back" disabled={busy} onClick={goBack}>‹ {back[back.length - 1].name}</button>;
   function goBack() { const previous = back[back.length - 1]; setBack(back.slice(0, -1)); setData(previous); }
   const tidal = s.view === "track" && s.tidal_url;
-  const actions = tidal && <div class="actions"><button class="secondary" onClick={() => app.openLink({ url: s.tidal_url! })}>Open in Tidal ↗</button></div>;
+  const actions = tidal && <div class="actions"><button class="primary" onClick={() => app.openLink({ url: s.tidal_url! })}>Open in Tidal ↗</button></div>;
   if (!full) {
     return (
       <main class="card">
         {backButton}
-        <div class="top"><div class="grow stack">{card}</div><Expand onClick={expand} /></div>
+        {card}
         {actions}
         {note && <p class="note">{note}</p>}
       </main>

@@ -163,3 +163,19 @@ button.bar-row { min-height: 44px; }
 .numbers .total td { font-weight: 600; }
 .scroll { overflow-x: auto; margin-top: 16px; }
 .pad-top { padding-top: 14px; }
+
+/* the draft editor (draft.tsx): steer chips, and rows with lock, swap and remove */
+.chips-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { min-height: 36px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line) !important; font-size: 13px; font-weight: 500; color: var(--muted); }
+.chip.on { background: var(--bg-2); color: var(--text); border-color: transparent !important; cursor: default; }
+.chip:disabled { opacity: 1; color: var(--faint); }
+.row.edit { gap: 10px; padding: 6px 0; }
+.card .rows .row:first-child { border-top: 0; }
+.tools { flex: none; display: flex; gap: 2px; margin-right: -6px; }
+.tool { width: 36px; height: 40px; display: grid; place-items: center; border-radius: 10px; color: var(--faint); }
+.tool:not(:disabled):hover { color: var(--text); background: var(--bg-2); }
+.tool.on { color: var(--text); }
+.row.locked .label { font-weight: 600; }
+.status { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.undo { flex: none; min-height: 36px; padding: 0 2px; font-size: 13px; font-weight: 500; color: var(--muted); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+.tick.end { font-weight: 500; }

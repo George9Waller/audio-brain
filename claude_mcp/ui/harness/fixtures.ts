@@ -119,8 +119,15 @@ export const story: Record<string, object> = {
             months, hours: Array.from({ length: 24 }, (_, h) => (h >= 21 ? 30 : h >= 9 && h <= 17 ? 18 : 3)),
             labels: [{ key: "1", label: "Domino", plays: 550, weighted: 430 }, { key: "2", label: "Just Music", plays: 97, weighted: 70 }],
             styles: [{ key: "1", label: "Techno", plays: 430, weighted: 1 }, { key: "2", label: "Ambient", plays: 354, weighted: 1 }, { key: "3", label: "IDM", plays: 274, weighted: 1 }],
-            contexts: [{ key: "12", label: "Late night", plays: 300, weighted: 1 }, { key: "13", label: "Ambient mornings", plays: 120, weighted: 1 }],
+            contexts: [{ key: "12", label: "Late night", plays: 300, weighted: 1, hue: 250 }, { key: "13", label: "Ambient mornings", plays: 120, weighted: 1, hue: 200 }],
             similar: [{ name: "Kiasmos", match: 1, artist_id: 101, plays: 206 }, { name: "Rival Consoles", match: 0.7, artist_id: 102, plays: 107 }, { name: "Max Cooper", match: 0.6, artist_id: null, plays: 0 }],
             verdicts: { yes: 3 }, favourite: true, favourite_tracks: 7,
             releases: [{ title: "Ritual (live)", kind: "ALBUM", date: "2026-10-16", state: "new" }] },
+};
+
+export const draft = {
+  ...list, view: "draft", key: "draft:ab12", kind: "draft", section: "drafts", title: "Kitchen, low vocals",
+  subtitle: "sounds like “warm, rolling”; instrumental; medium energy", understood: "sounds like “warm, rolling”; instrumental; medium energy",
+  kept: false, request: { sound: "warm, rolling", vocals: "instrumental", energy: "medium", familiarity: "mixed", styles: [] },
+  exploration: null, versions: 0, done: [],
 };

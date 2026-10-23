@@ -1,9 +1,9 @@
 import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
-import { list, lists, played, releases, stats, story } from "./fixtures";
+import { draft, list, lists, played, releases, stats, story } from "./fixtures";
 
 const params = new URLSearchParams(location.search);
 const theme = params.get("theme") === "dark" ? "dark" : "light";
-const page = params.get("page") ?? "list";  // list, chart or story
+const page = params.get("page") ?? "list";  // list, chart, story or draft
 const view = params.get("view") ?? (page === "chart" ? "lines" : page === "story" ? "track" : "index");
 document.body.classList.toggle("dark", theme === "dark");
 document.querySelector<HTMLElement>(".chat")!.style.maxWidth = `${params.get("width") ?? 720}px`;
@@ -44,8 +44,27 @@ bridge.oncalltool = async ({ name, arguments: args }) => {
   if (name === "track_story") return result(story.track);
   if (name === "artist") return result(story.artist);
   if (name === "play") return result(played);
+  if (name === "refine_mix") return result(refined(args?.operations as { op: string; track_ids?: number[]; track_id?: number }[]));
   return result(byKey[String(args?.key)] ?? list);
 };
+// refine_mix as the server does it, roughly: enough to see the editor respond
+let current = { ...draft, tracks: draft.tracks.map((t) => ({ ...t, locked: false })) };
+const history: typeof current[] = [];
+function refined(ops: { op: string; track_ids?: number[]; track_id?: number }[]) {
+  const done: string[] = [];
+  for (const op of ops) {
+    if (op.op === "undo") { current = history.pop() ?? current; done.push("Undid the last change"); continue; }
+    history.push(current);
+    const ids = new Set(op.track_ids ?? [op.track_id]);
+    if (op.op === "remove") current = { ...current, tracks: current.tracks.filter((t) => !ids.has(t.track_id)) };
+    if (op.op === "lock" || op.op === "unlock") current = { ...current, tracks: current.tracks.map((t) => ids.has(t.track_id) ? { ...t, locked: op.op === "lock" } : t) };
+    if (op.op === "swap" || op.op === "steer") current = { ...current, tracks: current.tracks.map((t) => (op.op === "steer" ? !t.locked : ids.has(t.track_id)) ? { ...t, track_id: t.track_id + 100, title: `${t.title} (alt)` } : t) };
+    done.push(`Did ${op.op}`);
+  }
+  current = { ...current, versions: history.length, done, count: `${current.tracks.length} tracks` };
+  return current;
+}
+bridge.onupdatemodelcontext = async (params) => { log(`updateModelContext: ${JSON.stringify(params.content).slice(0, 120)}…`); return {}; };
 bridge.onmessage = async (params) => { log(`sendMessage: ${JSON.stringify(params.content)}`); return {}; };
 bridge.onopenlink = async ({ url }) => { log(`openLink ${url}`); return {}; };
 // the component's errors, in the log under it (same origin in dev)
@@ -59,6 +78,7 @@ async function initial() {
   if (params.get("local")) return (await fetch(`/harness/local/${view}.json`)).json();
   if (page === "chart") return stats[view];
   if (page === "story") return story[view];
+  if (page === "draft") return current;
   return view === "index" ? lists : view === "releases" ? releases : list;
 }
 bridge.oninitialized = async () => { bridge.sendToolResult(result(await initial())); };

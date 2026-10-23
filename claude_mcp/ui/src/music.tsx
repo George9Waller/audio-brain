@@ -96,3 +96,16 @@ export function KeyPath({ keys }: { keys: string[] }) {
     </div>
   );
 }
+
+/** The artist summary, with the leading artists' names in bold. */
+export function Artists({ text, names }: { text: string; names: string[] }) {
+  const parts: (string | preact.JSX.Element)[] = [];
+  let rest = text;
+  for (const name of names) {
+    const at = rest.indexOf(name);
+    if (at < 0) continue;
+    parts.push(rest.slice(0, at), <b key={name}>{name}</b>);
+    rest = rest.slice(at + name.length);
+  }
+  return <p class="artists">{parts}{rest}</p>;
+}

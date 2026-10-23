@@ -397,3 +397,83 @@ class ThreadedPlayableTests(TransactionTestCase):
             for future in [first, wanted, again, *queued]:
                 self.assertFalse(future.result(timeout=5))
         self.assertEqual(calls, [a.pk, d.pk, c.pk, b.pk])
+
+
+def picks_of_tracks(tracks):
+    from recommend.retrieve import Pick
+    return [Pick(audio=None, score=1.0, signals={}, novel=False, reason="fits", track=t) for t in tracks]
+
+
+class DraftRefineTests(TestCase):
+    """recommend.drafts: refining a draft, and what refining tells the labels."""
+
+    def setUp(self):
+        self.tracks = make_tracks(9)
+        self.a, self.b, self.c, self.d, self.e, self.f, self.g, self.h, self.i = self.tracks
+        from recommend.drafts import new_spec, request_from
+        from recommend.lists import track_items
+        self.draft = Mix.objects.create(key="draft:cc", kind="draft", section=Mix.DRAFTS, title="Cooking", request="cooking", logged=False,
+                                        made_by="claude", items=track_items(picks_of_tracks(self.tracks[:4])),
+                                        spec=new_spec("cooking", request_from({"sound": "warm"}), tracks=[t.pk for t in self.tracks[:4]]))
+
+    def refine(self, *operations, found=()):
+        from recommend import drafts
+        with mock.patch.object(drafts, "run", return_value=(picks_of_tracks(found), None)) as run:
+            draft, done = drafts.refine(Mix.objects.get(pk=self.draft.pk), list(operations))
+        return draft, done, run
+
+    def ids(self, draft):
+        return [i["track_id"] for i in draft.items]
+
+    def test_lock_survives_a_steer(self):
+        draft, _, run = self.refine({"op": "lock", "track_ids": [self.b.pk]},
+                                    {"op": "steer", "changes": {"vocals": "instrumental", "energy": "high"}},
+                                    found=[self.e, self.b, self.f, self.g, self.h])
+        self.assertEqual(self.ids(draft), [self.e.pk, self.b.pk, self.f.pk, self.g.pk])  # b kept at 2, never twice
+        self.assertTrue(draft.items[1]["locked"])
+        request = run.call_args.args[0]
+        self.assertEqual((request.vocals, request.energy, request.sound), ("instrumental", "high", "warm"))
+        self.assertEqual(draft.spec["request"]["vocals"], "instrumental")
+
+    def test_undo_restores_the_whole_call(self):
+        self.refine({"op": "remove", "track_ids": [self.a.pk]}, {"op": "move", "track_id": self.d.pk, "position": 1})
+        draft, _, _ = self.refine({"op": "length", "length": 5}, found=[self.e])
+        self.assertEqual(self.ids(draft), [self.d.pk, self.b.pk, self.c.pk, self.e.pk])
+        self.assertEqual(len(draft.versions), 2)
+        draft, done, _ = self.refine({"op": "undo"})
+        self.assertEqual(self.ids(draft), [self.d.pk, self.b.pk, self.c.pk])
+        draft, _, _ = self.refine({"op": "undo"})
+        self.assertEqual(self.ids(draft), [t.pk for t in self.tracks[:4]])
+        self.assertEqual((draft.versions, draft.spec["removed"]), ([], []))
+        from recommend.drafts import RefineError
+        with self.assertRaises(RefineError):
+            self.refine({"op": "undo"})
+
+    def test_swap_avoids_verdicts_and_what_was_shown(self):
+        now = datetime.now(UTC)
+        Feedback.objects.create(track=self.e, verdict=Feedback.NO, source="app", given_at=now)
+        Feedback.objects.create(track=self.f, verdict=Feedback.NOT_NOW, source="app", given_at=now)
+        draft, done, _ = self.refine({"op": "swap", "track_id": self.a.pk}, found=[self.b, self.e, self.f, self.g, self.h])
+        self.assertEqual(self.ids(draft), [self.g.pk, self.b.pk, self.c.pk, self.d.pk])
+        self.assertIn("for Someone – Track 6", done[0])
+        draft, _, _ = self.refine({"op": "swap", "track_id": self.g.pk}, found=[self.a, self.g, self.h])
+        self.assertEqual(self.ids(draft)[0], self.h.pk)  # not a again: it's been shown
+
+    def test_refining_feeds_the_labels(self):
+        self.refine({"op": "remove", "track_ids": [self.a.pk]}, {"op": "add", "track_ids": [self.i.pk], "position": 1})
+        with mock.patch("recommend.actions.log_recommendations") as logged:
+            keep(Mix.objects.get(pk=self.draft.pk))
+        self.assertEqual(logged.call_args.kwargs["source"], "claude")
+        outcome = DraftOutcome.objects.get()
+        self.assertEqual((outcome.by, outcome.removed, outcome.added), ("claude", [self.a.pk], [self.i.pk]))
+        strengths = labels.by_track(labels.collect(favourites=False))
+        self.assertEqual(strengths, {self.a.pk: labels.SWIPED_OUT, self.i.pk: labels.ADDED_TO_DRAFT,
+                                     self.b.pk: labels.KEPT, self.c.pk: labels.KEPT, self.d.pk: labels.KEPT})
+        with mock.patch.object(labels, "CLAUDE", 0):
+            self.assertEqual(labels.collect(favourites=False), [])
+
+    def test_bad_operations_are_refused(self):
+        from recommend.drafts import RefineError
+        for op in [{"op": "shuffle"}, {"op": "remove"}, {"op": "move", "track_id": self.i.pk}, {"op": "length", "length": 200}]:
+            with self.assertRaises(RefineError):
+                self.refine(op)

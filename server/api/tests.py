@@ -1,4 +1,5 @@
 import uuid
+from unittest import mock
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -331,3 +332,45 @@ class HistoryTests(TestCase):
         self.assertEqual((listens["total"], listens["listens"][0]["played_at"]), (3, "2026-05-01T00:30+01:00"))
         sessions = self.client.get("/api/v1/history/sessions", headers=self.headers).json()
         self.assertEqual([s["intent"] for s in sessions["sessions"]], [None, 0.5])
+
+
+@override_settings(API_TOKEN="secret", MCP_TOKEN="claude-secret")
+class MakeAndRefineTests(TestCase):
+    def setUp(self):
+        from recommend.tests import make_tracks
+        self.tracks = make_tracks(4)
+        self.headers = {"Authorization": "Bearer claude-secret"}
+
+    def post(self, path, body):
+        return self.client.post(path, body, content_type="application/json", headers=self.headers)
+
+    def test_a_mix_of_chosen_tracks_leaves_out_verdicts(self):
+        from django.utils import timezone
+        a, b, c, d = self.tracks
+        Feedback.objects.create(track=c, verdict=Feedback.NEVER, source="app", given_at=timezone.now())
+        made = self.post("/api/v1/make", {"recipe": {"type": "tracks", "track_ids": [a.pk, b.pk, c.pk, d.pk], "keep_order": True},
+                                          "title": "Kitchen"}).json()
+        self.assertEqual([i["track_id"] for i in made["mix"]["items"]], [a.pk, b.pk, d.pk])
+        self.assertEqual(made["mix"]["title"], "Kitchen")
+        from recommend.models import Mix
+        draft = Mix.objects.get(key=made["mix"]["key"])
+        self.assertEqual((draft.made_by, draft.spec["seeds"]), ("claude", [a.pk, b.pk, c.pk, d.pk]))
+        refined = self.post(f"/api/v1/drafts/{draft.key}/refine", {"operations": [{"op": "lock", "track_ids": [b.pk]}, {"op": "move", "track_id": d.pk, "position": 1}]}).json()
+        self.assertEqual(([i["track_id"] for i in refined["mix"]["items"]], refined["spec"]["locked"], refined["spec"]["versions"]), ([d.pk, a.pk, b.pk], [b.pk], 1))
+        self.assertEqual(self.post(f"/api/v1/drafts/{draft.key}/refine", {"operations": [{"op": "dance"}]}).status_code, 400)
+
+    def test_a_structured_request_skips_parsing(self):
+        from recommend.retrieve import Pick
+        picks = [Pick(audio=None, score=1, signals={}, novel=True, track=t) for t in self.tracks]
+        with mock.patch("recommend.query.parse_request") as parse, mock.patch("recommend.query.recommend", return_value=picks) as recommend:
+            made = self.post("/api/v1/make", {"request": {"title": "Slow cooking", "vocals": "instrumental", "energy": "medium"}, "length": 5}).json()
+        parse.assert_not_called()
+        self.assertEqual(recommend.call_args.kwargs["filters"].vocals, "instrumental")
+        self.assertEqual((made["mix"]["title"], made["spec"]["request"]["energy"]), ("Slow cooking", "medium"))
+        self.assertEqual(self.post("/api/v1/make", {"request": {"energy": "loud"}}).status_code, 400)
+
+    def test_a_verdict_from_claude_is_attributed(self):
+        import uuid
+        self.post("/api/v1/sync", {"feedback": [{"client_id": str(uuid.uuid4()), "verdict": "yes", "track": {"id": self.tracks[0].pk},
+                                                  "where": "draft:ab", "given_at": "2026-10-24T12:00:00Z"}]})
+        self.assertEqual(Feedback.objects.get().source, "claude")

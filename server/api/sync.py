@@ -107,7 +107,8 @@ def sync(request, body: SyncIn):
                 continue
             context = Context.objects.filter(pk=item.context_id).first() if item.context_id else None
             Feedback.objects.create(
-                track=track, verdict=item.verdict, note=item.note, source="app", where=item.where[:200], context=context,
+                track=track, verdict=item.verdict, note=item.note, source="claude" if request.auth == "claude" else "app",
+                where=item.where[:200], context=context,
                 given_at=item.given_at, client_id=item.client_id,
                 observed={k: v for k, v in ref.dict(exclude={"id"}).items() if v},
             )

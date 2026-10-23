@@ -6,7 +6,9 @@ than what's inferred from plays.
   list edit           added to a list +1; removed from one -0.5 (a soft no: it can still fit elsewhere). Edits made
                       in Tidal to a synced playlist arrive as list edits too (recommend.playlists.read_back).
   draft               kept: +0.3 for each track left in; swiped out before keeping -0.5; discarded -0.2; left to
-                      expire, nothing (it may never have been looked at)
+                      expire, nothing (it may never have been looked at). Refining it (recommend.drafts): a track
+                      removed or swapped out counts as swiped out, and one added or swapped in and still there when
+                      it's kept or played +0.5
   suggestion played   a logged recommendation played within the outcome window +0.5, or +0.8 if played more than
                       once; one that went to Tidal in a playlist and wasn't played -0.1 (seen, probably, and passed
                       over). Lists only shown in the app aren't counted unplayed: there's no telling they were seen.
@@ -17,6 +19,10 @@ than what's inferred from plays.
 
 `collect` returns the labels; `by_track` folds them into one strength per track, with your latest verdict, if any,
 overriding everything inferred.
+
+What Claude did for you is labelled too: verdicts it recorded because you stated them (Feedback source "claude"),
+drafts it made and refined, and suggestions from them (Recommendation source "claude"). They count CLAUDE times as
+much as the same label from the app; 0 leaves them out.
 """
 
 from collections import Counter, defaultdict
@@ -30,8 +36,10 @@ VERDICT = {Feedback.YES: 1.0, Feedback.NO: -1.0, Feedback.NEVER: -1.0, Feedback.
 ADDED, REMOVED = 1.0, -0.5
 KEPT, SWIPED_OUT, DISCARDED = 0.3, -0.5, -0.2
 PLAYED, PLAYED_AGAIN, PASSED_OVER = 0.5, 0.8, -0.1
+ADDED_TO_DRAFT = 0.5
 FAVOURITE = 1.0
 COMPARISON = 0.75
+CLAUDE = 1.0
 
 
 @dataclass(frozen=True)
@@ -54,23 +62,36 @@ def collect(since=None, until=None, favourites=True):
         return qs
 
     labels = []
-    for track_id, verdict, at, where in window(Feedback.objects.all(), "given_at").values_list("track_id", "verdict", "given_at", "where"):
-        labels.append(Label(track_id, VERDICT[verdict], "verdict", at, where))
+    for track_id, verdict, at, where, source in window(Feedback.objects.all(), "given_at").values_list("track_id", "verdict", "given_at", "where", "source"):
+        if source != "claude" or CLAUDE:
+            labels.append(Label(track_id, VERDICT[verdict] * (CLAUDE if source == "claude" else 1), "verdict", at, where))
     for track_id, action, at, key in window(ListEdit.objects.all(), "at").values_list("track_id", "action", "at", "key"):
         labels.append(Label(track_id, ADDED if action == ListEdit.ADD else REMOVED, "list edit", at, key))
     for draft in window(DraftOutcome.objects.all(), "at"):
-        removed = set(draft.removed)
+        removed, added = set(draft.removed), set(draft.added)
+        weight = CLAUDE if draft.by == "claude" else 1
         for track_id in draft.tracks:
-            if draft.outcome == DraftOutcome.KEPT:
-                labels.append(Label(track_id, SWIPED_OUT if track_id in removed else KEPT, "draft", draft.at, draft.key))
+            if draft.outcome in (DraftOutcome.KEPT, DraftOutcome.PLAYED) and track_id in removed:
+                strength = SWIPED_OUT
+            elif draft.outcome in (DraftOutcome.KEPT, DraftOutcome.PLAYED) and track_id in added:
+                strength = ADDED_TO_DRAFT
+            elif draft.outcome == DraftOutcome.KEPT:
+                strength = KEPT
             elif draft.outcome == DraftOutcome.DISCARDED:
-                labels.append(Label(track_id, DISCARDED, "draft", draft.at, draft.key))
+                strength = DISCARDED
+            else:
+                continue
+            if weight:
+                labels.append(Label(track_id, strength * weight, "draft", draft.at, draft.key))
     for track_id, played_at, plays, outcome, pushed, at, source in window(Recommendation.objects.all(), "created_at").values_list(
             "track_id", "played_at", "plays_after", "outcome", "playlist_id", "created_at", "source"):
+        weight = CLAUDE if source == "claude" else 1
+        if not weight:
+            continue
         if played_at:
-            labels.append(Label(track_id, PLAYED_AGAIN if plays >= 2 else PLAYED, "suggestion", played_at, source))
+            labels.append(Label(track_id, (PLAYED_AGAIN if plays >= 2 else PLAYED) * weight, "suggestion", played_at, source))
         elif outcome == "not_played" and pushed:
-            labels.append(Label(track_id, PASSED_OVER, "suggestion", at, source))
+            labels.append(Label(track_id, PASSED_OVER * weight, "suggestion", at, source))
     for left, right, preferred, at, key in window(Comparison.objects.all(), "given_at").values_list("left_id", "right_id", "preferred", "given_at", "key"):
         chosen, other = (left, right) if preferred == Comparison.LEFT else (right, left)
         labels.extend([Label(chosen, COMPARISON, "comparison", at, key), Label(other, -COMPARISON, "comparison", at, key)])
