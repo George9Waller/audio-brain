@@ -4,7 +4,7 @@
 # amd64 only: essentia-tensorflow has no Linux arm64 wheel. See deploy/KUBERNETES.md.
 
 FROM python:3.13-slim AS build
-COPY --from=ghcr.io/astral-sh/uv:0.9.24 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /usr/local/bin/uv
 # 3.13, the newest Python with wheels for everything (gensim has none for 3.14); overrides .python-version (3.12 on the Mac)
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never UV_PYTHON=python3.13
 WORKDIR /app/server
