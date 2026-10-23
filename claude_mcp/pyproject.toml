@@ -1,0 +1,30 @@
+[project]
+name = "claude-mcp"
+version = "0.1.0"
+description = "audio-brain for Claude: a remote MCP server over the audio-brain API (see MCP.md)"
+authors = [
+    { name = "George Waller", email = "54817483+George9Waller@users.noreply.github.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "argon2-cffi>=25.1.0",
+    "httpx>=0.28.1",
+    "mcp>=2.3.0",
+    "pyotp>=2.10.0",
+    "uvicorn>=0.54",
+]
+
+[project.scripts]
+claude-mcp = "claude_mcp.server:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -39,6 +39,16 @@ class ApiTests(TestCase):
         self.assertEqual(self.client.get("/api/v1/health", headers={"Authorization": "Bearer wrong"}).status_code, 401)
         self.assertEqual(self.client.get("/api/v1/health", headers=self.headers).status_code, 200)
 
+    @override_settings(MCP_TOKEN="claude-secret")
+    def test_mcp_token_is_its_own_principal(self):
+        response = self.client.get("/api/v1/health", headers={"Authorization": "Bearer claude-secret"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.wsgi_request.auth, "claude")
+        self.assertEqual(self.client.get("/api/v1/health", headers=self.headers).wsgi_request.auth, "app")
+
+    def test_mcp_token_unset_is_refused(self):
+        self.assertEqual(self.client.get("/api/v1/health", headers={"Authorization": "Bearer "}).status_code, 401)
+
     def test_sync_matches_player_names_and_is_idempotent(self):
         item = {"client_id": str(uuid.uuid4()), "verdict": "yes", "given_at": "2026-10-17T10:00:00Z",
                 "track": {"artist": "Prospa", "title": "Love Songs (feat. Kosmo Kint) - 2024 Remaster"}}

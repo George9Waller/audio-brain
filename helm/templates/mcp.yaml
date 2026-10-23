@@ -1,0 +1,102 @@
+{{- if .Values.mcp.enabled }}
+# The Claude MCP server (MCP.md). Public only through Tailscale Funnel on the node: tailscale funnel --bg --https=443 http://localhost:{{ .Values.mcp.nodePort }}
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: {{ .Values.appName }}-mcp-secrets
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-secrets-store
+    kind: SecretStore
+  target:
+    name: {{ .Values.appName }}-mcp-secrets
+    creationPolicy: Owner
+  # only these, so the one public pod never holds the TIDAL, Last.fm or database secrets
+  data:
+    {{- range list "MCP_TOKEN" "MCP_PASSPHRASE_HASH" "MCP_TOTP_SECRET" "MCP_SIGNING_KEY" "MCP_PUBLIC_URL" }}
+    - secretKey: {{ . }}
+      remoteRef:
+        key: {{ $.Values.awsSecretsKey }}
+        property: {{ . }}
+    {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.appName }}-mcp
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 8001
+      targetPort: http
+      nodePort: {{ .Values.mcp.nodePort }}
+  selector:
+    app: {{ .Values.appName }}-mcp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.appName }}-mcp
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # the OAuth SQLite file is on an RWO volume
+  selector:
+    matchLabels:
+      app: {{ .Values.appName }}-mcp
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.appName }}-mcp
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        fsGroup: 1000
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      containers:
+        - name: mcp
+          image: {{ .Values.image.repository }}:mcp-{{ .Values.env.MCP_IMAGE_TAG }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8001
+          env:
+            - name: AUDIO_BRAIN_API_URL
+              value: http://{{ .Values.appName }}-api:8000/api/v1
+            - name: MCP_DB_PATH
+              value: /data/oauth.sqlite3
+          envFrom:
+            - secretRef:
+                name: {{ .Values.appName }}-mcp-secrets
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 60
+          resources:
+            {{- toYaml .Values.mcp.resources | nindent 12 }}
+          volumeMounts:
+            - name: oauth
+              mountPath: /data
+      volumes:
+        - name: oauth
+          persistentVolumeClaim:
+            claimName: {{ .Values.appName }}-mcp
+{{- end }}

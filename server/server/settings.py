@@ -134,6 +134,8 @@ ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
 
 # Bearer token the companion app sends; the API refuses every request while it's unset (see `manage.py api_token`).
 API_TOKEN = os.environ.get('API_TOKEN', '')
+# Bearer token the Claude MCP server (claude_mcp/) sends; requests with it are attributed to "claude". Unset: refused.
+MCP_TOKEN = os.environ.get('MCP_TOKEN', '')
 
 # Threads the Mixes job builds lists and suggestions on (recommend.lists); 1 builds them one at a time.
 MIXES_THREADS = int(os.environ.get('MIXES_THREADS', '6'))

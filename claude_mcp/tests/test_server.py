@@ -1,0 +1,201 @@
+import base64
+import hashlib
+import json
+import secrets
+from urllib.parse import parse_qs, urlparse
+
+import httpx
+import pyotp
+import pytest
+from argon2 import PasswordHasher
+from starlette.testclient import TestClient
+
+from claude_mcp.config import Config
+from claude_mcp.server import build
+
+CALLBACK = "https://claude.ai/api/mcp/auth_callback"
+PUBLIC = "https://mcp.example.ts.net"
+LIST = {"key": "ctx-7", "kind": "context", "section": "contexts", "title": "Late night", "subtitle": "slow and deep",
+        "context": {"id": 7, "name": "Late night", "hue": 210.0, "family": None}, "items": [
+            {"kind": "track", "track_id": 1, "artist": "Burial", "title": "Archangel", "reason": "you play it at night",
+             "novel": False, "hue": 210.0, "styles": ["Dubstep"], "sound": {"bpm": 139.6, "camelot": "8A", "energy": 0.41}},
+            {"kind": "track", "track_id": 2, "artist": "Four Tet", "title": "Lush", "novel": True, "sound": None}]}
+
+
+@pytest.fixture
+def env(tmp_path):
+    ui = tmp_path / "ui"
+    ui.mkdir()
+    (ui / "list.html").write_text("<html>list</html>")
+    totp = pyotp.random_base32()
+    config = Config(public_url=PUBLIC, api_url="http://api/api/v1", mcp_token="claude-token",
+                    passphrase_hash=PasswordHasher().hash("correct horse battery"), totp_secret=totp,
+                    signing_key="signing", db_path=tmp_path / "oauth.sqlite3", ui_dir=ui)
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert request.headers["authorization"] == "Bearer claude-token"
+        if request.url.path == "/api/v1/lists":
+            return httpx.Response(200, json={"lists": [LIST]})
+        if request.url.path == "/api/v1/mixes/ctx-7/play":
+            return httpx.Response(200, json={"tidal_url": "https://tidal.com/browse/playlist/abc"})
+        return httpx.Response(404, json={"detail": "Not Found"})
+
+    app = build(config, httpx.MockTransport(handler)).streamable_http_app(host="0.0.0.0")
+    with TestClient(app, base_url=PUBLIC) as client:
+        yield client, pyotp.TOTP(totp), calls
+
+
+def pkce():
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    return verifier, challenge
+
+
+def register(client, redirect=CALLBACK):
+    return client.post("/register", json={"redirect_uris": [redirect], "client_name": "Claude",
+                                          "token_endpoint_auth_method": "none", "grant_types": ["authorization_code", "refresh_token"]})
+
+
+def login_form(client, client_id, challenge):
+    response = client.get("/authorize", params={"response_type": "code", "client_id": client_id, "redirect_uri": CALLBACK,
+                                                "code_challenge": challenge, "code_challenge_method": "S256", "state": "xyz"},
+                          follow_redirects=False)
+    assert response.status_code == 302
+    login = urlparse(response.headers["location"])
+    assert login.path == "/login"
+    return parse_qs(login.query)["request"][0]
+
+
+def connect(client, totp):
+    client_id = register(client).json()["client_id"]
+    verifier, challenge = pkce()
+    request = login_form(client, client_id, challenge)
+    response = client.post("/login", data={"request": request, "passphrase": "correct horse battery", "code": totp.now()},
+                           follow_redirects=False)
+    assert response.status_code == 302
+    back = urlparse(response.headers["location"])
+    assert f"{back.scheme}://{back.netloc}{back.path}" == CALLBACK
+    query = parse_qs(back.query)
+    assert query["state"] == ["xyz"]
+    tokens = client.post("/token", data={"grant_type": "authorization_code", "code": query["code"][0], "redirect_uri": CALLBACK,
+                                         "client_id": client_id, "code_verifier": verifier})
+    assert tokens.status_code == 200, tokens.text
+    return client_id, tokens.json()
+
+
+def test_metadata_points_at_the_public_url(env):
+    client, _, _ = env
+    meta = client.get("/.well-known/oauth-authorization-server").json()
+    assert meta["authorization_endpoint"] == f"{PUBLIC}/authorize"
+    assert "S256" in meta["code_challenge_methods_supported"]
+    resource = client.get("/.well-known/oauth-protected-resource/mcp").json()
+    assert resource["resource"] == f"{PUBLIC}/mcp"
+    unauthorised = client.post("/mcp", json={})
+    assert unauthorised.status_code == 401
+    assert "resource_metadata" in unauthorised.headers["www-authenticate"]
+
+
+def test_registration_refuses_other_redirects(env):
+    client, _, _ = env
+    assert register(client, "https://evil.example/callback").status_code == 400
+    assert register(client).status_code == 201
+
+
+def test_wrong_code_or_passphrase_is_refused_and_rate_limited(env):
+    client, totp, _ = env
+    client_id = register(client).json()["client_id"]
+    request = login_form(client, client_id, pkce()[1])
+    wrong_code = client.post("/login", data={"request": request, "passphrase": "correct horse battery", "code": "000000"})
+    assert wrong_code.status_code == 401
+    wrong_pass = client.post("/login", data={"request": request, "passphrase": "nope", "code": totp.now()})
+    assert wrong_pass.status_code == 401
+    for _ in range(3):
+        client.post("/login", data={"request": request, "passphrase": "nope", "code": "000000"})
+    blocked = client.post("/login", data={"request": request, "passphrase": "correct horse battery", "code": totp.now()})
+    assert blocked.status_code == 429
+
+
+def test_tampered_login_request_is_refused(env):
+    client, totp, _ = env
+    client_id = register(client).json()["client_id"]
+    request = login_form(client, client_id, pkce()[1])
+    body, mac = request.rsplit(".", 1)
+    data = json.loads(base64.urlsafe_b64decode(body))
+    forged = base64.urlsafe_b64encode(json.dumps({**data, "redirect_uri": "https://evil.example/"}).encode()).decode()
+    response = client.post("/login", data={"request": f"{forged}.{mac}", "passphrase": "correct horse battery", "code": totp.now()},
+                           follow_redirects=False)
+    assert response.status_code == 400
+
+
+def test_pkce_is_checked(env):
+    client, totp, _ = env
+    client_id = register(client).json()["client_id"]
+    request = login_form(client, client_id, pkce()[1])
+    response = client.post("/login", data={"request": request, "passphrase": "correct horse battery", "code": totp.now()},
+                           follow_redirects=False)
+    code = parse_qs(urlparse(response.headers["location"]).query)["code"][0]
+    tokens = client.post("/token", data={"grant_type": "authorization_code", "code": code, "redirect_uri": CALLBACK,
+                                         "client_id": client_id, "code_verifier": pkce()[0]})
+    assert tokens.status_code == 400
+
+
+def test_refresh_rotates_tokens(env):
+    client, totp, _ = env
+    client_id, tokens = connect(client, totp)
+    refreshed = client.post("/token", data={"grant_type": "refresh_token", "refresh_token": tokens["refresh_token"], "client_id": client_id})
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["access_token"] != tokens["access_token"]
+    again = client.post("/token", data={"grant_type": "refresh_token", "refresh_token": tokens["refresh_token"], "client_id": client_id})
+    assert again.status_code == 400
+
+
+def mcp(client, token, method, params=None, session=None):
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json, text/event-stream"}
+    if session:
+        headers["mcp-session-id"] = session
+    response = client.post("/mcp", headers=headers, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}})
+    assert response.status_code == 200, response.text
+    text = response.text
+    body = json.loads(text.split("data: ", 1)[1].split("\n")[0]) if text.startswith(("event:", "data:")) else response.json()
+    return body, response.headers.get("mcp-session-id")
+
+
+def call_tool(client, token, name, arguments):
+    init, session = mcp(client, token, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {
+        "extensions": {"io.modelcontextprotocol/ui": {"mimeTypes": ["text/html;profile=mcp-app"]}}},
+        "clientInfo": {"name": "test", "version": "1"}})
+    assert "result" in init, init
+    client.post("/mcp", headers={"Authorization": f"Bearer {token}", "mcp-session-id": session or "",
+                                 "Accept": "application/json, text/event-stream"},
+                json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+    if name is None:
+        return mcp(client, token, "tools/list", session=session)[0]["result"]
+    return mcp(client, token, "tools/call", {"name": name, "arguments": arguments}, session=session)[0]["result"]
+
+
+def test_tools_over_mcp(env):
+    client, totp, calls = env
+    _, tokens = connect(client, totp)
+    token = tokens["access_token"]
+
+    tools = {t["name"]: t for t in call_tool(client, token, None, None)["tools"]}
+    assert tools["show_list"]["_meta"]["ui"]["resourceUri"] == "ui://audio-brain/list.html"
+    assert tools["show_list"]["annotations"]["readOnlyHint"] is True
+
+    index = call_tool(client, token, "show_list", {})
+    assert index["structuredContent"]["lists"][0] == {"key": "ctx-7", "title": "Late night", "subtitle": "slow and deep",
+                                                      "section": "contexts", "tracks": 2, "hue": 210.0}
+
+    shown = call_tool(client, token, "show_list", {"key": "ctx-7"})
+    assert "1. Burial – Archangel (#1)" in shown["content"][0]["text"]
+    assert shown["structuredContent"]["tracks"][0]["camelot"] == "8A"
+    assert shown["structuredContent"]["tracks"][1]["bpm"] is None
+
+    missing = call_tool(client, token, "show_list", {"key": "nope"})
+    assert missing["isError"] is True
+
+    played = call_tool(client, token, "play", {"key": "ctx-7"})
+    assert played["structuredContent"]["tidal_url"] == "https://tidal.com/browse/playlist/abc"
+    assert calls[-1].method == "POST"

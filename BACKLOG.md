@@ -237,6 +237,7 @@ reasons, as a notification and a Discover card. *Files:* new `discovery/summary.
 ## Wave 4: playback, Claude and context polish
 
 **E1. MCP server for Claude** (spec phase 3).
+- *Plan:* **[MCP.md](MCP.md)** supersedes the outline below: remote (claude.ai on the phone), MCP Apps components, draft refining, stats and insights.
 - *What:*
   - Tools: `search_by_vibe`, `play_context`, `whats_new`, `time_travel` ("what was I into when we moved to France?"), `explain_pick` and `add_tracklist` (B2). They sit over the existing query functions.
   - It talks to the API with the bearer token, over Tailscale.

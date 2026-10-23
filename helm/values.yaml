@@ -9,9 +9,10 @@ image:
 imagePullSecrets:
   - name: ecr-registry-secret
 
-# CI rewrites this line on every build (.github/workflows/deploy.yaml)
+# CI rewrites these lines on every build (.github/workflows/deploy.yaml); the MCP image is tagged mcp-<sha>
 env:
   IMAGE_TAG: '3b066dab6713a980c7d9cc522e033c89b22acf57'
+  MCP_IMAGE_TAG: 'none'
 
 # Every property of this AWS Secrets Manager secret becomes an environment variable: POSTGRES_PASSWORD, SECRET_KEY,
 # API_TOKEN and the API keys (the list is in deploy/KUBERNETES.md, Phase 0)
@@ -68,6 +69,19 @@ postgresql:
 # API and the worker (RWO is fine on one node)
 data:
   storage: 5Gi
+
+# The Claude MCP server (MCP.md). Its secrets are the MCP_* keys of the AWS secret, MCP_PUBLIC_URL among them (the
+# Funnel URL, https://<node>.<tailnet>.ts.net), so the node's name stays out of this public repo
+mcp:
+  enabled: true
+  nodePort: 30801  # Funnel serves this on 443; the only public port
+  storage: 100Mi  # the OAuth SQLite file; delete it to revoke every token
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
 
 backup:
   enabled: true

@@ -1,0 +1,285 @@
+# audio-brain for Claude: a remote MCP server
+
+The plan for letting Claude reason over the catalogue and listening history and act on it, from claude.ai on the web,
+desktop and phone. Written 22 Oct 2026 so any assistant or person can pick it up: read this, then [NEXT.md](NEXT.md)
+and [deploy/KUBERNETES.md](deploy/KUBERNETES.md). It expands BACKLOG item **E1** and replaces its tool list.
+
+Progress is tracked with the checkboxes. Tick them as you go.
+
+## Goals
+
+- **Remote.** Works as a claude.ai custom connector, so it's usable from the Claude app on the phone, not only Claude Code.
+- **Visual.** Tools answer with interactive components (MCP Apps), not walls of text.
+- **Reasoning.** Low-level stats (plays by anything, over any period) and meta stats (trends, eras, taste drift,
+  discovery funnel), plus read-only SQL as the escape hatch.
+- **Actions.** Make mixes, **refine drafts** step by step, keep and play them, give verdicts, work the discovery queue.
+- **Playback.** "Play something for cooking" ends with music on a Sonos, through Claude's Sonos connector.
+
+## Shape
+
+```
+phone / web / desktop Claude
+        │  HTTPS + OAuth 2.1
+        ▼
+Tailscale Funnel (only this port is public) ──► claude-mcp pod (Python, ~80 MB)
+                                                  │  MCP_TOKEN, cluster DNS
+                                                  ▼
+                                               audio-brain API ──► Postgres
+Claude also calls the Sonos connector ──► play_sonos_favorite("Now")
+```
+
+- **`claude_mcp/`** at the repo root: its own `pyproject.toml` and image. Python, using the `mcp` SDK (FastMCP,
+  streamable HTTP, its auth helpers) and `httpx`. It never imports Django or torch: every tool calls the API, so the
+  API pod's memory is unchanged on the 8 GB node, and Claude's actions take the same write path as the app's (drafts,
+  `DraftOutcome`, the `Recommendation` log, feedback).
+- **Don't name the package `mcp/`.** It would shadow the `mcp` library.
+- **UI bundle** in `claude_mcp/ui/`: Vite + Preact + `@modelcontextprotocol/ext-apps`, built to single HTML files
+  (`vite-plugin-singlefile`) that the server serves as `ui://` resources. Built in the image's first stage.
+
+### Hosting
+
+- New `helm/templates/mcp.yaml`: a Deployment (`replicas: 1`, request 64 Mi, limit 256 Mi) and a NodePort Service
+  (30801). It reaches the API at its cluster Service name.
+- A small RWO PVC for the OAuth SQLite file.
+- Expose it with Funnel on the Lenovo: `tailscale funnel --bg --https=443 http://localhost:30801`. Only this port is
+  public; the API stays on the tailnet at :30800. Not Traefik (broken, and not needed).
+- Secrets in AWS Secrets Manager key `audio-brain`: `MCP_TOKEN`, `MCP_PASSPHRASE_HASH`, `MCP_TOTP_SECRET`,
+  `MCP_SIGNING_KEY` and `MCP_PUBLIC_URL` (the Funnel URL, kept out of this public repo). The pod gets them through
+  its own ExternalSecret (`audio-brain-mcp-secrets`) listing just those five, so the one public pod never holds the
+  TIDAL, Last.fm or database secrets. The API picks up `MCP_TOKEN` through the existing one.
+- CI: `.github/workflows/deploy.yaml` builds each image only when its code changed, and tests `claude_mcp` first. The
+  MCP image goes in the same ECR repository as `audio-brain:mcp-<sha>` (no new repository or IAM change), and
+  `env.MCP_IMAGE_TAG` in `helm/values.yaml` points at it.
+
+### Auth
+
+- **Claude → MCP pod:** a single-user OAuth 2.1 authorization server inside the pod.
+  - Protected Resource Metadata (RFC 9728) on the MCP endpoint, Authorization Server Metadata, Dynamic Client
+    Registration (RFC 7591), and Client ID Metadata Documents if the SDK supports them. PKCE required.
+  - Redirect URIs allow-listed to Claude's OAuth callback; registration refuses anything else.
+  - The authorize page asks for a passphrase and a TOTP code, rate-limited per IP.
+  - Access tokens 1 hour, refresh tokens 30 days, in SQLite on the PVC. Wiping the file revokes everything.
+- **MCP pod → API:** a second bearer token, `MCP_TOKEN`. `api/auth.TokenAuth` returns the principal `"claude"` for
+  it (and `"app"` for `API_TOKEN`), so it can be revoked on its own and everything Claude does is attributed.
+
+### Attribution, and keeping the models honest
+
+- Feedback Claude records is stored with `where="claude"`; recommendations it causes with `source="claude"`.
+  `recommend/labels.py` can weight or drop them, and backtests can leave them out.
+- Claude records a verdict only when you state one. Never infer a no from something not being played. The tool
+  descriptions say so.
+- Tools that destroy or retrain (`delete_list`, verdict `never`, `merge_context`, `split_context`, `run_job`) carry
+  `destructiveHint`, so clients ask first.
+- Whatever the tools return goes to Anthropic as conversation context. That is a deliberate exception to the spec's
+  "only ML inference leaves the box".
+
+## Playback through Sonos
+
+Claude's Sonos connector can't ask for a TIDAL playlist by name, but it can play any **Sonos favourite**, TIDAL ones
+included (the household already has TIDAL favourites). audio-brain rewrites the "Now" playlist in place, so its ID
+never changes: add it to Sonos favourites once and `play_sonos_favorite` plays whatever was written last.
+
+- The flow: `play(key)` writes Now and returns its TIDAL URL; Claude then calls the Sonos connector's
+  `play_sonos_favorite` with the room you name. The draft editor's Play button sends Claude a message to do this
+  (an MCP App can't call another connector's tools).
+- Only the S2 household (Living Room, Dining Room, Bedroom, Living Room Lamp) works with the connector. The other
+  household runs S1, which it doesn't support.
+- **Unverified:** whether Sonos fetches a favourite playlist's tracks at play time or caches them. Phase 0 tests it.
+- If it caches, or one-tap play without Claude is wanted (the Android app), audio-brain calls the Sonos Control API
+  itself (`loadFavorite` / playlist loading). That is the remote half of BACKLOG E2.
+
+## Visual components (MCP Apps)
+
+Each tool that has a component sets `_meta.ui.resourceUri`. Buttons in a component call server tools through the host
+bridge (`callServerTool`), so refining a draft is taps or words, whichever is easier.
+
+| Component | Shows | Used by |
+|---|---|---|
+| Draft editor | Rows with art, artist – title, BPM/key/energy chips, a "new" badge and the reason it was picked. Lock, remove and swap per row; steer chips (more energy, fewer vocals, more new, darker); Keep, Play, Open in TIDAL, Undo | `make_mix`, `refine_mix`, `show_list` |
+| Charts | Ranked bars, time series with sparklines, hour × weekday heatmap, stream graph | `stats`, `trends`, `rhythms`, `discovery_funnel` |
+| Timeline | Eras, milestones and play volume on one axis | `eras`, `time_travel`, `digest` |
+| Track card / artist card | The story: first heard, plays per month, contexts, verdicts, lists it's in | `track_story`, `artist` |
+| Discovery cards | Releases and sets with score and reason; save or dismiss | `whats_new`, `beyond` |
+| Period comparison | Two periods side by side: artists, styles, sound, modes | `compare_periods` |
+
+- Album art comes from TIDAL's image CDN: declare it in the resource's CSP (`resourceDomains`).
+- Colours follow the app: context hues from `recommend/lists.hue`, light and dark from the host's theme.
+- **Fallback.** Every tool also returns `structuredContent` and a short markdown summary (a top-10 table, not a dump).
+  Where components don't render, Claude still has the data and can make an artifact from it.
+- **Unverified:** MCP Apps launched in Claude on web and desktop (Jan 2026). Nothing found confirms the iOS or
+  Android app. Phase 0 tests it.
+
+## Server work in the API
+
+### History and stats endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /history/stats?measure&group&from&to&granularity&filters` | Plays or intent-weighted plays (0.3 + 0.7 × intent) grouped by artist, track, album, label, style, context, country, source, hour or weekday, optionally per week or month. Reads the rollup. |
+| `GET /history/listens?from&to&artist&track&limit` | Raw plays with source, country, session and intent |
+| `GET /history/sessions?from&to` | Sessions with size, intent, top artists and dominant context |
+| `GET /tracks/{id}/story` | First heard, plays per month, last played, verdicts, contexts, lists, recommendation outcomes |
+| `GET /artists/{id}/story` | The same for an artist, plus labels, styles and similar artists |
+| `GET /recommendations?source&from` | What was suggested, and whether it was played or came back |
+| `GET /insights/{kind}?from&to` | The precomputed meta stats below |
+| `GET/POST/DELETE /milestones` | Life events: a date or range and a label |
+| `POST /query` | Read-only SQL (below) |
+
+### Read-only SQL
+
+- A Postgres role `audio_brain_ro` with `SELECT` on every table except `library_oauthtoken`, created by a migration
+  (password from the secret).
+- Each query runs in a `READ ONLY` transaction with `statement_timeout = 10s`, at most 500 rows. Vector columns are
+  shown as `<vector 512>`, but pgvector operators (`<=>`) work in queries.
+- A schema guide served as an MCP resource (`schema://audio-brain`), generated from the models' help texts plus a
+  hand-written page on what things mean: intent and the 0.3 + 0.7 × intent weighting, the Last.fm dedup rule
+  (same track within 10 minutes is one play), sources, favourites per platform, the four verdicts, contexts and
+  families, durable affinity. How well Claude reasons depends mostly on this page.
+
+### Rollup and insights jobs (worker, nightly)
+
+- **`history_rollup`:** plays and intent-weighted plays per week and month × each dimension above; monthly sound
+  averages (BPM, energy, danceability, vocal share, moods) from `AudioFeatures`. One table, rebuilt incrementally
+  from the last checkpoint like every other job.
+- **`insights`:** writes JSON facts to an `Insight` table (kind, period, computed_at, data):
+  - **Trends:** rising and falling artists, styles, labels and contexts, the last 90 days against the baseline, with
+    minimum support. Builds on `recommend/explore.new_interests`.
+  - **Eras:** change points in the monthly style and context mix split history into phases, each with top artists,
+    styles and sound. Reuses the contexts' era detection; one LLM call names each new era.
+  - **Taste drift:** the monthly intent-weighted centroid of `TasteVector`, distance from the month before and from
+    the all-time centre, giving an exploring-versus-settling index.
+  - **Diversity:** artist and style entropy, and the share of plays going to the top 10.
+  - **Discovery funnel:** the share of plays that are first listens; how many new tracks become durable affinity;
+    which sources (labels, remixers, TIDAL similar, sets, Claude's lists) produce the keepers.
+  - **Lifecycle:** canon across years, the typical fade of a new track, dormant favourites, longest artist streaks.
+  - **Rhythms and modes:** hour × weekday by context, summer against winter sound, countries, the
+    deliberate-versus-passive trend, session length.
+
+  Claude does the interpreting in chat. The server only computes facts, so no narrative LLM calls run nightly.
+
+### Making and refining drafts
+
+- `/make` also takes `request: MusicRequest` (Claude fills it, skipping the server's parse) and a recipe
+  `{"type": "tracks", "track_ids": [...]}` (a list Claude chose, from SQL or conversation). The server still applies
+  verdicts and sequences it for flow.
+- **`POST /drafts/{key}/refine`** takes a list of operations and saves a new version each call:
+  - `remove`, `add` (at a position), `move`, `lock` / `unlock`;
+  - `swap(track, n)`: alternatives near that track, not already in the draft and not against a verdict (from
+    `recommend()` seeds and `actions.suggestions`);
+  - `steer`: a change to the `MusicRequest` (energy, BPM, vocals, styles to drop, exploration) or free text;
+    rebuilds only the unlocked slots;
+  - `length` (trim or extend), `resequence` (energy arc, or keep order), `undo`.
+- Versions are kept on the draft (`Mix.versions`, JSON, last 20) until it's kept, played or discarded.
+- Refining feeds the labels: removals already count as swiped-out tracks; tracks added, or kept after a swap, count as
+  weak positives; all tagged `where="claude"`.
+
+## Tools
+
+About 30, grouped so the descriptions stay short. Every list-like tool defaults to 25–50 rows. Tracks are shown as
+`Artist – Title (#id)`.
+
+**Reasoning (read-only)**
+- `sql`, and the `schema` resource
+- `stats`, `listens`, `sessions`, `track_story`, `artist`
+- `trends`, `eras`, `taste_drift`, `rhythms`, `discovery_funnel`, `compare_periods`, `digest(period)`
+- `search` (words), `search_by_vibe` (sound), `time_travel(period, mode)`
+- `now` (the context ranker's picks), `contexts`, `lists`, `explain_pick(list_key, track)`
+- `whats_new` (discovery queue and weekly summary), `beyond` (artists to try or revisit, albums, sets)
+
+**Mixes**
+- `make_mix(prompt | request | track_ids, length, exploration)`: a draft, in the draft editor
+- `refine_mix(key, operations)`, `show_list(key)`
+- `keep_draft`, `discard_draft`, `play(key)` (writes Now; then Claude plays the Sonos favourite)
+- `start_radio`, `extend_radio`, `explore_artist`
+- `edit_list`, `rename_list`, `delete_list`, `set_sync`
+
+**Feedback and housekeeping**
+- `give_verdict(track, yes | no | not_now | never, note)` and `queue_decision(release, heard | saved | dismissed)`, through `/sync`
+- `add_milestone`, `remove_milestone`
+- `rename_context`, `merge_context`, `split_context`, `add_tracklist`, `run_job`
+
+**Prompts**
+- "Weekly review": what's new, which lists got played, what to prune.
+- "Dig into a period": `digest` + `eras` + `time_travel` for a span you name.
+
+## Phases
+
+### Phase 0: test the unknowns (about a day)
+
+Built 22 Oct: `claude_mcp/` (MCP SDK 2.3, which has MCP Apps built in as `mcp.server.apps`), with `show_list` (every
+list, or one list's tracks, in the list component; tapping a list opens it through `callServerTool`) and `play`
+(writes Now; the component's Play button then asks Claude, through `sendMessage`, to play the Sonos favourite). The
+OAuth server, `MCP_TOKEN` and the `"claude"` principal in `TokenAuth`, the chart and CI are in place as well. Tests:
+`cd claude_mcp && uv run pytest` (OAuth metadata, registration refusing other redirect URIs, wrong passphrase or code
+refused and rate-limited, a tampered login request refused, PKCE checked, refresh tokens rotated, and the tools over
+MCP against a mocked API). The image is 57 MB and idles at about 84 MiB.
+No Client ID Metadata Document support in the SDK, so Claude registers through Dynamic Client Registration.
+
+Steps left for you (I can't reach the cluster, AWS or the Sonos app from here):
+
+1. `cd claude_mcp && uv run python -m claude_mcp.setup`: choose the passphrase; it prints the four keys and an
+   `otpauth://` link for the authenticator. Add the four keys to the AWS secret `audio-brain`, plus
+   `MCP_PUBLIC_URL` = `https://<node>.<tailnet>.ts.net`.
+2. Push. CI builds `audio-brain:mcp-<sha>`; Argo starts `audio-brain-mcp` and restarts the API (which needs
+   `MCP_TOKEN`). If the keys weren't in AWS yet, `kubectl annotate externalsecret audio-brain-mcp-secrets
+   force-sync=$(date +%s) --overwrite` fetches them now rather than within the hour.
+3. On the node: `sudo tailscale funnel --bg --https=443 http://localhost:30801`. The first time, it gives a link to
+   allow Funnel in the tailnet policy. Check from outside the tailnet (phone on mobile data):
+   `curl https://<node>.<tailnet>.ts.net/.well-known/oauth-authorization-server`.
+4. claude.ai → Settings → Connectors → Add custom connector, URL `https://<node>.<tailnet>.ts.net/mcp`. Connect;
+   the sign-in page asks for the passphrase and the code.
+
+- [ ] Hello-world `claude_mcp` with one tool and one MCP App component, OAuth and Funnel, deployed to the cluster.
+      (Built and tested; deploying is steps 1–3 above.)
+- [ ] Add it as a custom connector on claude.ai. Check the component renders on web, desktop and **the phone app**.
+- [ ] Add TIDAL "Now" to Sonos favourites (in the Sonos app; the connector can't add favourites. On 22 Oct the
+      S2 household's favourites were BBC Radio 4, concerts, a Dom Dolla set, "Get the fuck awake" and "I Don't
+      Wanna Talk", no Now). Rewrite it from audio-brain, play the favourite through the connector,
+      and check the new tracks play.
+- [ ] Write down both results here; adjust the fallback and playback sections if either fails.
+
+### Phase 1: data and stats
+
+- [ ] `MCP_TOKEN` and the `"claude"` principal in `TokenAuth`.
+- [ ] History endpoints, `history_rollup` job, `/query` with `audio_brain_ro`, the schema guide.
+- [ ] Read tools; chart, track card and artist card components.
+- *Done when:* from the phone, "what was I into when we moved to France?" and "which labels have I drifted away
+  from since 2022?" come back as charts with sensible answers.
+
+### Phase 2: making and refining mixes
+
+- [ ] `/make` with `request` and `tracks` recipes; `/drafts/{key}/refine` with versions.
+- [ ] Mix tools, draft editor, the Play → Sonos favourite handoff; verdict and queue tools.
+- *Done when:* from the phone, "something for cooking, less vocal", two refinements, then "play it in the
+  kitchen" ends with the right music playing.
+
+### Phase 3: meta insights
+
+- [ ] `insights` job and endpoints; milestones.
+- [ ] `trends`, `eras`, `taste_drift`, `rhythms`, `discovery_funnel`, `compare_periods`, `digest`; timeline and
+      comparison components.
+- *Done when:* "what was this year like compared to last?" gets a timeline, the main shifts, and lists made from
+  them.
+
+### Phase 4: polish
+
+- [ ] Prompts; discovery cards.
+- [ ] Optional: the Sonos Control API called directly, for one-tap play from the Android app.
+
+## Tests
+
+- `api/tests.py`: `/query` refuses writes, refuses `library_oauthtoken`, stops at the timeout and caps rows; the
+  history aggregates match counts done by hand on a fixture; refine operations (lock survives a steer, undo restores,
+  swap avoids verdicts).
+- `claude_mcp`: each tool against a mocked `httpx`; OAuth flow (bad redirect URI refused, PKCE checked, refresh
+  works, wrong TOTP refused).
+- Components: build in CI; a smoke test renders each with fixture data.
+
+## Sources
+
+- [Claude blog: interactive tools in Claude](https://claude.com/it/blog/interactive-tools-in-claude)
+- [The Register: Claude MCP Apps arrives](https://www.theregister.com/2026/01/26/claude_mcp_apps_arrives)
+- [MCP Apps API](https://apps.extensions.modelcontextprotocol.io/api/)
+- [WorkOS: building MCP Apps](https://workos.com/blog/building-mcp-apps-inside-claude-chatgpt)
+- [sunpeak: Claude connector OAuth](https://sunpeak.ai/blogs/claude-connector-oauth-authentication/)
+- [Zuplo: Claude connectors compatibility](https://zuplo.com/learn/mcp/compatibility/clients/claude-connectors.md)

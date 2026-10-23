@@ -2,6 +2,9 @@
 {{- if .Values.backup.enabled }}
 {{- $claims = append $claims (dict "name" "backups" "storage" .Values.backup.storage) }}
 {{- end }}
+{{- if .Values.mcp.enabled }}
+{{- $claims = append $claims (dict "name" "mcp" "storage" .Values.mcp.storage) }}
+{{- end }}
 {{- range $claims }}
 ---
 apiVersion: v1
