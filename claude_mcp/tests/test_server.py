@@ -117,6 +117,18 @@ def test_wrong_code_or_passphrase_is_refused_and_rate_limited(env):
     assert blocked.status_code == 429
 
 
+def test_rate_limit_ignores_forged_forwarded_addresses(env):
+    client, totp, _ = env
+    client_id = register(client).json()["client_id"]
+    request = login_form(client, client_id, pkce()[1])
+    for n in range(5):  # a new made-up address each try; Funnel appends the real one last
+        client.post("/login", data={"request": request, "passphrase": "nope", "code": "000000"},
+                    headers={"X-Forwarded-For": f"10.0.0.{n}, 203.0.113.7"})
+    blocked = client.post("/login", data={"request": request, "passphrase": "correct horse battery", "code": totp.now()},
+                          headers={"X-Forwarded-For": "10.0.0.99, 203.0.113.7"})
+    assert blocked.status_code == 429
+
+
 def test_tampered_login_request_is_refused(env):
     client, totp, _ = env
     client_id = register(client).json()["client_id"]

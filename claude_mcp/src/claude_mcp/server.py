@@ -1,7 +1,7 @@
 """The MCP server: tools over the audio-brain API, with MCP Apps components, behind the OAuth provider.
 
 Phase 0 of MCP.md: `show_list` (with the list component) and `play`, enough to test components on each Claude app
-and playback through the Sonos favourite "Now"."""
+and playback through the Sonos favourite for "Now"."""
 
 from typing import Annotated
 
@@ -19,11 +19,12 @@ from claude_mcp.oauth import SCOPE, Provider
 from claude_mcp.store import Store
 
 LIST_UI = "ui://audio-brain/list.html"
+SONOS_FAVOURITE = "Audio Brain · Now"  # the TIDAL "Now" playlist, saved as a Sonos favourite
 
-INSTRUCTIONS = """audio-brain is the user's own music catalogue and listening history, with lists it builds from them.
+INSTRUCTIONS = f"""audio-brain is the user's own music catalogue and listening history, with lists it builds from them.
 Tracks are shown as "Artist – Title (#id)". To play something, call `play` with a list's key; it writes the list to
-the TIDAL playlist "Now". Then play the Sonos favourite named "Now" in the room the user asked for, through the Sonos
-connector. Never record a verdict the user didn't state."""
+the TIDAL playlist "Now". Then play the Sonos favourite "{SONOS_FAVOURITE}" in the room the user asked for,
+through the Sonos connector; it plays whatever was written last. Never record a verdict the user didn't state."""
 
 
 def track_line(item):
@@ -85,16 +86,16 @@ def build(config=None, transport=None):
         title="Play a list",
         annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True),
         description="Write a list or draft to the TIDAL playlist \"Now\" (replacing what was there) and return its "
-                    "TIDAL link. To hear it on a speaker, then play the Sonos favourite \"Now\" through the Sonos "
-                    "connector in the room the user named.",
+                    "TIDAL link. To hear it on a speaker, then play the Sonos favourite "
+                    f"\"{SONOS_FAVOURITE}\" through the Sonos connector in the room the user named.",
     )
     async def play(key: Annotated[str, Field(description="The list's or draft's key")]) -> CallToolResult:
         played = await api.post(f"/mixes/{key}/play")
         url = played.get("tidal_url")
         if not url:
             return CallToolResult(content=[TextContent(type="text", text="audio-brain has no TIDAL login, so nothing was written")], is_error=True)
-        return result(f"Wrote list `{key}` to the TIDAL playlist \"Now\": {url}. Now play the Sonos favourite \"Now\".",
-                      {"key": key, "tidal_url": url, "sonos_favourite": "Now"})
+        return result(f"Wrote list `{key}` to the TIDAL playlist \"Now\": {url}. Now play the Sonos favourite \"{SONOS_FAVOURITE}\".",
+                      {"key": key, "tidal_url": url, "sonos_favourite": SONOS_FAVOURITE})
 
     @mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
     async def healthz(request: Request):

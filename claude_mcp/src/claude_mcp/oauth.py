@@ -179,9 +179,10 @@ class Provider:
 
 
 def client_ip(request):
-    """Funnel forwards the caller's address; without it, the peer (a tailnet device)."""
+    """The caller's address. Funnel appends it to X-Forwarded-For, so it's the last entry: earlier ones are whatever
+    the caller sent, and trusting them would let each try claim a new address. Without the header, the peer."""
     forwarded = request.headers.get("x-forwarded-for", "")
-    return forwarded.split(",")[0].strip() or (request.client.host if request.client else "?")
+    return forwarded.split(",")[-1].strip() or (request.client.host if request.client else "?")
 
 
 def login_page(token, error="", status=200):

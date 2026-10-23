@@ -56,7 +56,7 @@ function Root() {
       if (result.isError) { setNote("Couldn't write it to TIDAL."); return; }
       setNote(`Written to TIDAL “Now”. Asking Claude to play it…`);
       await app.sendMessage({ role: "user", content: [{ type: "text",
-        text: `I've written “${list.title}” to the TIDAL playlist “Now”. Play the Sonos favourite “Now” — ask me which room if you don't know.` }] });
+        text: `I've written “${list.title}” to the TIDAL playlist “Now”. Play the Sonos favourite “Audio Brain · Now” — ask me which room if you don't know.` }] });
     } finally { setBusy(false); }
   }
 

@@ -25,7 +25,7 @@ Tailscale Funnel (only this port is public) ──► claude-mcp pod (Python, ~8
                                                   │  MCP_TOKEN, cluster DNS
                                                   ▼
                                                audio-brain API ──► Postgres
-Claude also calls the Sonos connector ──► play_sonos_favorite("Now")
+Claude also calls the Sonos connector ──► play_sonos_favorite("Audio Brain · Now")
 ```
 
 - **`claude_mcp/`** at the repo root: its own `pyproject.toml` and image. Python, using the `mcp` SDK (FastMCP,
@@ -84,8 +84,10 @@ never changes: add it to Sonos favourites once and `play_sonos_favorite` plays w
   (an MCP App can't call another connector's tools).
 - Only the S2 household (Living Room, Dining Room, Bedroom, Living Room Lamp) works with the connector. The other
   household runs S1, which it doesn't support.
-- **Unverified:** whether Sonos fetches a favourite playlist's tracks at play time or caches them. Phase 0 tests it.
-- If it caches, or one-tap play without Claude is wanted (the Android app), audio-brain calls the Sonos Control API
+- **Tested 23 Oct: Sonos fetches the playlist at play time.** The favourite is "Audio Brain · Now". Played in the
+  Bedroom it started the list then in Now (Zero 7 – Salt Water Sound); after the app wrote a different list to Now,
+  playing the favourite again started that one (Ólafur Arnalds – saman). Nothing is cached, so this flow works as is.
+- If one-tap play without Claude is wanted (the Android app), audio-brain calls the Sonos Control API
   itself (`loadFavorite` / playlist loading). That is the remote half of BACKLOG E2.
 
 ## Visual components (MCP Apps)
@@ -232,11 +234,21 @@ Steps left for you (I can't reach the cluster, AWS or the Sonos app from here):
 - [ ] Hello-world `claude_mcp` with one tool and one MCP App component, OAuth and Funnel, deployed to the cluster.
       (Built and tested; deploying is steps 1–3 above.)
 - [ ] Add it as a custom connector on claude.ai. Check the component renders on web, desktop and **the phone app**.
-- [ ] Add TIDAL "Now" to Sonos favourites (in the Sonos app; the connector can't add favourites. On 22 Oct the
-      S2 household's favourites were BBC Radio 4, concerts, a Dom Dolla set, "Get the fuck awake" and "I Don't
-      Wanna Talk", no Now). Rewrite it from audio-brain, play the favourite through the connector,
-      and check the new tracks play.
-- [ ] Write down both results here; adjust the fallback and playback sections if either fails.
+- [x] Add TIDAL "Now" to Sonos favourites (done in the Sonos app 23 Oct, as "Audio Brain · Now"; the connector
+      can't add favourites). Rewrite it from audio-brain, play the favourite through the connector,
+      and check the new tracks play. **Works:** see "Playback through Sonos".
+- [ ] Write down both results here; adjust the fallback and playback sections if either fails. Sonos is written up;
+      components are still to test.
+
+**Blocked on Tailscale (23 Oct).** The deployed server answers on the tailnet, and Funnel is on with the node
+holding the `funnel` capability, but Tailscale never publishes the public A/AAAA record for the node's name (the
+`ts.net` nameservers have only the ACME TXT record), so claude.ai can't reach it. This is
+[tailscale/tailscale#21698](https://github.com/tailscale/tailscale/issues/21698) /
+[#21829](https://github.com/tailscale/tailscale/issues/21829), open with many reports this week. Removing and
+re-adding the `funnel` node attribute (a workaround reported there) didn't help; a bug report ID is on #21829.
+Check with `dig @ns1.dnsimple.com <node>.<tailnet>.ts.net A +short`. If it isn't fixed in a few days: run
+Tailscale as its own node in the MCP pod (a sidecar with its own name and auth key) and Funnel that, or a
+Cloudflare Tunnel on a subdomain (needs the domain's DNS on Cloudflare).
 
 ### Phase 1: data and stats
 
