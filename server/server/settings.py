@@ -136,6 +136,8 @@ ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY')
 API_TOKEN = os.environ.get('API_TOKEN', '')
 # Bearer token the Claude MCP server (claude_mcp/) sends; requests with it are attributed to "claude". Unset: refused.
 MCP_TOKEN = os.environ.get('MCP_TOKEN', '')
+# The read-only Postgres role Claude's SQL runs as (api.query); empty for a local trust login
+QUERY_DB_PASSWORD = os.environ.get('POSTGRES_RO_PASSWORD', '')
 
 # Threads the Mixes job builds lists and suggestions on (recommend.lists); 1 builds them one at a time.
 MIXES_THREADS = int(os.environ.get('MIXES_THREADS', '6'))

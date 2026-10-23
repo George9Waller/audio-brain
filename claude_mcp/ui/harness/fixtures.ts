@@ -60,3 +60,67 @@ export const releases = {
 };
 
 export const played = { key: "explore:late", tidal_url: "https://tidal.com/browse/playlist/abc", sonos_favourite: "Audio Brain · Now" };
+
+// The chart and story components (server reasoning.py). Synthetic: real listening data stays out of the repo; put
+// real results in harness/local/<view>.json (git-ignored) and open ?page=chart&view=<view>&local=1 to see those.
+const years = ["2019-01-01", "2020-01-01", "2021-01-01", "2022-01-01", "2023-01-01", "2024-01-01", "2025-01-01", "2026-01-01"];
+const seriesOf = (key: string, label: string, values: number[]) => ({ key, label, values });
+const labels = [
+  seriesOf("5", "Ninja Tune", [320, 410, 380, 290, 210, 160, 120, 90]), seriesOf("9", "Warp", [120, 150, 220, 260, 300, 280, 240, 260]),
+  seriesOf("12", "Hyperdub", [200, 180, 90, 60, 40, 30, 20, 25]), seriesOf("3", "Anjunadeep", [10, 30, 90, 240, 380, 420, 390, 350]),
+  seriesOf("7", "Erased Tapes", [80, 90, 110, 100, 120, 150, 170, 160]), seriesOf("2", "Defected", [5, 10, 40, 160, 220, 180, 90, 60]),
+  seriesOf("8", "Ghostly", [40, 35, 30, 50, 45, 30, 25, 20]),
+];
+const total = (values: number[][]) => values[0].map((_, i) => values.reduce((n, v) => n + v[i], 0) * 3);
+const rowsOf = (series: { key: string; label: string; values: number[] }[]) => {
+  const sum = series.reduce((n, s) => n + s.values.reduce((a, b) => a + b, 0), 0) * 3;
+  return series.map((s) => { const w = s.values.reduce((a, b) => a + b, 0); return { key: s.key, label: s.label, plays: Math.round(w * 1.3), weighted: w, share: w / sum }; });
+};
+const base = { measure: "weighted", start: "2019-01-01", end: null, filters: {}, unassigned: { plays: 2100, weighted: 1500 } };
+
+export const stats: Record<string, object> = {
+  lines: { ...base, view: "lines", group: "label", granularity: "year", total: { plays: 31000, weighted: 24000 }, rows: rowsOf(labels),
+           periods: years, totals: total(labels.map((s) => s.values)), series: labels },
+  bars: { ...base, view: "bars", group: "artist", granularity: "none", total: { plays: 31000, weighted: 24000 }, unassigned: null,
+          rows: rowsOf(["Bonobo", "Jon Hopkins", "Kiasmos", "Four Tet", "Floating Points", "Nils Frahm", "Burial", "Rival Consoles", "Ólafur Arnalds", "Caribou", "Moderat", "Jamie xx"]
+            .map((name, i) => seriesOf(String(i + 1), name, [900 / (1 + i * 0.35)]))) },
+  columns: { ...base, view: "columns", group: "hour", granularity: "none", total: { plays: 31000, weighted: 24000 }, unassigned: null,
+             rows: Array.from({ length: 24 }, (_, h) => ({ key: String(h), label: `${String(h).padStart(2, "0")}:00`, plays: 0,
+               weighted: Math.round(400 + 900 * Math.max(0, Math.sin(((h - 7) / 24) * Math.PI * 2)) + (h > 20 ? 500 : 0)), share: 0.04 })) },
+  heatmap: { ...base, view: "heatmap", group: "weekday_hour", granularity: "none", total: { plays: 31000, weighted: 24000 }, unassigned: null,
+             rows: Array.from({ length: 168 }, (_, i) => { const d = Math.floor(i / 24) + 1, h = i % 24;
+               return { key: `${d}-${String(h).padStart(2, "0")}`, label: "", plays: 0, share: 0,
+                 weighted: Math.round((h >= 8 && h <= 18 ? (d <= 5 ? 120 : 60) : h >= 19 && h <= 23 ? (d >= 5 ? 150 : 70) : 10) * (0.8 + ((i * 37) % 10) / 25)) }; }) },
+  sound: { ...base, view: "sound", group: "all", granularity: "year", total: { plays: 31000, weighted: 24000 }, unassigned: null,
+           rows: [{ key: "", label: "All plays", plays: 31000, weighted: 24000, share: 1 }], periods: years,
+           totals: [6636, 5772, 9007, 11281, 11893, 10594, 6551, 6820],
+           sound: [0.33, 0.48, 0.58, 0.65, 0.68, 0.67, 0.67, 0.64].map((energy, i) => ({ energy, bpm: 110 + i * 2, danceability: 0.6 + i * 0.03,
+             vocal: [0.49, 0.78, 0.89, 0.86, 0.8, 0.79, 0.78, 0.82][i], happy: 0.4, sad: 0.2, relaxed: 0.4 })) },
+};
+
+const months = Array.from({ length: 52 }, (_, i) => {
+  const y = 2022 + Math.floor((i + 7) / 12), m = ((i + 7) % 12) + 1;
+  return { month: `${y}-${String(m).padStart(2, "0")}-01`, plays: i === 0 ? 21 : i < 3 ? 11 - i * 3 : (i * 7) % 5 === 0 ? 4 + (i % 3) : 0, weighted: 0 };
+});
+export const story: Record<string, object> = {
+  track: { view: "track", id: 104, name: "Open Eye Signal", artist: "Jon Hopkins", artist_id: 12, album: "Immunity", label: "Domino",
+           released: "2013-06-03", plays: 97, weighted_plays: 74.8, first_played: "2022-08-01T12:10+01:00", last_played: "2026-06-02T15:40+01:00",
+           sound: { bpm: 126, camelot: "4A", key: "F", scale: "minor", energy: 0.72, instrumental: 0.9, shape: [0.3, 0.6, 0.7, 0.5, 0.3, 0.2],
+                    happy: 0.3, party: 0.6, danceability: 0.7, aggressive: 0.5, sad: 0.3, relaxed: 0.2 },
+           context: { id: 12, name: "Late night", hue: 250 }, styles: ["Techno", "Ambient", "IDM"],
+           countries: [{ key: "GB", label: "GB", plays: 80, weighted: 60 }, { key: "FR", label: "FR", plays: 12, weighted: 9 }, { key: "IS", label: "IS", plays: 5, weighted: 4 }],
+           months, hours: Array.from({ length: 24 }, (_, h) => (h >= 21 || h < 2 ? 9 : h >= 12 && h <= 16 ? 4 : 1)),
+           verdicts: [{ verdict: "yes", given_at: "2026-10-01", where: "Late night" }], favourites: ["tidal"],
+           lists: [{ key: "context:12", title: "Late night (2019–2026)" }], tidal_url: "https://tidal.com/browse/track/1",
+           recommendations: { suggested: 3, played: 2, not_played: 1, pending: 0 } },
+  artist: { view: "artist", id: 12, name: "Jon Hopkins", country: "GB", area: "Kingston upon Thames", kind: "Person", active_from: 2001,
+            plays: 873, weighted_plays: 693, first_played: "2021-09-06T09:00+01:00", last_played: "2026-09-29T22:00+01:00", tracks: 78, tracks_played: 69,
+            top_tracks: [["Open Eye Signal", 97], ["Emerald Rush", 73], ["Singularity", 58], ["Collider", 39], ["Abandon Window", 38]].map(([title, plays], i) => ({ track_id: 104 + i, title, plays, weighted: Number(plays) * 0.8 })),
+            months, hours: Array.from({ length: 24 }, (_, h) => (h >= 21 ? 30 : h >= 9 && h <= 17 ? 18 : 3)),
+            labels: [{ key: "1", label: "Domino", plays: 550, weighted: 430 }, { key: "2", label: "Just Music", plays: 97, weighted: 70 }],
+            styles: [{ key: "1", label: "Techno", plays: 430, weighted: 1 }, { key: "2", label: "Ambient", plays: 354, weighted: 1 }, { key: "3", label: "IDM", plays: 274, weighted: 1 }],
+            contexts: [{ key: "12", label: "Late night", plays: 300, weighted: 1 }, { key: "13", label: "Ambient mornings", plays: 120, weighted: 1 }],
+            similar: [{ name: "Kiasmos", match: 1, artist_id: 101, plays: 206 }, { name: "Rival Consoles", match: 0.7, artist_id: 102, plays: 107 }, { name: "Max Cooper", match: 0.6, artist_id: null, plays: 0 }],
+            verdicts: { yes: 3 }, favourite: true, favourite_tracks: 7,
+            releases: [{ title: "Ritual (live)", kind: "ALBUM", date: "2026-10-16", state: "new" }] },
+};

@@ -2,7 +2,7 @@
   "name": "audio-brain-mcp-ui",
   "version": "1.0.0",
   "scripts": {
-    "build": "vite build",
+    "build": "INPUT=list.html vite build && INPUT=chart.html vite build && INPUT=story.html vite build",
     "dev": "vite"
   },
   "type": "module",

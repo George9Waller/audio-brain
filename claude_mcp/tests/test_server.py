@@ -28,11 +28,43 @@ RELEASES = {"key": "releases", "kind": "releases", "section": "discover", "title
                                         "detail": "Album · 4 May 2018", "reason": "artist you play", "url": "https://tidal.com/browse/album/1"}]}
 
 
+STATS = {"group": "label", "measure": "weighted", "granularity": "year", "start": "2022-01-01", "end": None, "filters": {},
+         "total": {"plays": 300, "weighted": 250.0}, "unassigned": {"plays": 20, "weighted": 15.0},
+         "rows": [{"key": "5", "label": "Ninja Tune", "plays": 120, "weighted": 100.0, "share": 0.4},
+                  {"key": "9", "label": "Warp", "plays": 60, "weighted": 50.0, "share": 0.2}],
+         "periods": ["2022-01-01", "2023-01-01"], "totals": [150.0, 100.0],
+         "series": [{"key": "5", "label": "Ninja Tune", "values": [90.0, 10.0]}, {"key": "9", "label": "Warp", "values": [20.0, 30.0]}]}
+STORY = {"id": 1, "line": "Burial – Archangel (#1)", "name": "Archangel", "artist": "Burial", "artist_id": 3, "album": "Untrue",
+         "label": "Hyperdub", "released": "2007-11-05", "plays": 40, "weighted_plays": 31.5, "first_played": "2016-02-01T22:10+00:00",
+         "last_played": "2026-10-01T23:00+01:00", "sound": {"bpm": 139.6, "key": "C", "scale": "minor", "camelot": "5A", "energy": 0.4, "instrumental": 0.3},
+         "context": {"id": 7, "name": "Late night", "hue": 210.0}, "styles": ["Dubstep"], "countries": [{"key": "GB", "label": "GB", "plays": 38, "weighted": 30}],
+         "months": [{"month": "2016-02-01", "plays": 5, "weighted": 4}, {"month": "2016-03-01", "plays": 0, "weighted": 0}],
+         "hours": [0] * 23 + [12], "verdicts": [{"verdict": "yes", "given_at": "2026-10-01", "where": "Late night", "source": "app", "note": ""}],
+         "favourites": ["tidal"], "lists": [{"key": "ctx-7", "title": "Late night", "kind": "mix"}],
+         "recommendations": {"suggested": 2, "played": 1, "not_played": 1, "pending": 0, "played_again": 1, "sources": {"mix": 2}}}
+ARTIST = {"id": 3, "name": "Burial", "country": "GB", "area": "London", "kind": "Person", "active_from": 2005, "active_to": None,
+          "language": "", "genres": [], "plays": 90, "weighted_plays": 70.0, "first_played": "2016-02-01T22:10+00:00",
+          "last_played": "2026-10-01T23:00+01:00", "tracks": 12, "tracks_played": 8,
+          "top_tracks": [{"track_id": 1, "title": "Archangel", "plays": 40, "weighted": 31.5}], "months": [], "hours": [0] * 24,
+          "labels": [{"key": "2", "label": "Hyperdub", "plays": 80, "weighted": 60}], "styles": [], "contexts": [],
+          "similar": [{"name": "Kode9", "match": 0.8, "artist_id": None, "plays": 0}], "verdicts": {}, "favourite": True,
+          "favourite_tracks": 0, "remixes": 0, "releases": []}
+ROUTES = {
+    "/api/v1/history/stats": lambda r: {**STATS, "group": r.url.params.get("group", "artist")},
+    "/api/v1/tracks/1/story": lambda r: STORY,
+    "/api/v1/artists/3/story": lambda r: ARTIST,
+    "/api/v1/search": lambda r: {"tracks": [], "artists": [{"id": 3, "name": "Burial", "tracks": 12}], "contexts": []},
+    "/api/v1/query": lambda r: {"columns": ["n"], "rows": [[1], [2]], "truncated": True, "ms": 4},
+    "/api/v1/schema": lambda r: {"text": "# guide " + r.url.params.get("tables", "")},
+}
+
+
 @pytest.fixture
 def env(tmp_path):
     ui = tmp_path / "ui"
     ui.mkdir()
-    (ui / "list.html").write_text("<html>list</html>")
+    for name in ("list", "chart", "story"):
+        (ui / f"{name}.html").write_text(f"<html>{name}</html>")
     totp = pyotp.random_base32()
     config = Config(public_url=PUBLIC, api_url="http://api/api/v1", mcp_token="claude-token",
                     passphrase_hash=PasswordHasher().hash("correct horse battery"), totp_secret=totp,
@@ -51,6 +83,8 @@ def env(tmp_path):
             return httpx.Response(200, json={"sync": True, "pinned": True, "tidal_url": "https://tidal.com/browse/playlist/own"})
         if request.url.path == "/api/v1/mixes/ctx-7/play":
             return httpx.Response(200, json={"tidal_url": "https://tidal.com/browse/playlist/abc"})
+        if request.url.path in ROUTES:
+            return httpx.Response(200, json=ROUTES[request.url.path](request))
         return httpx.Response(404, json={"detail": "Not Found"})
 
     app = build(config, httpx.MockTransport(handler)).streamable_http_app(host="0.0.0.0")
@@ -241,3 +275,33 @@ def test_tools_over_mcp(env):
     kept = call_tool(client, token, "keep", {"key": "ctx-7"})
     assert kept["structuredContent"] == {"key": "ctx-7", "kept": True, "tidal_url": "https://tidal.com/browse/playlist/own"}
     assert call_tool(client, token, "keep", {"key": "releases"})["isError"] is True
+
+
+def test_reasoning_tools_over_mcp(env):
+    client, totp, calls = env
+    token = connect(client, totp)[1]["access_token"]
+    tools = {t["name"]: t for t in call_tool(client, token, None, None)["tools"]}
+    assert tools["stats"]["_meta"]["ui"]["resourceUri"] == "ui://audio-brain/chart.html"
+    assert tools["artist"]["_meta"]["ui"]["resourceUri"] == "ui://audio-brain/story.html"
+    assert all(tools[n]["annotations"]["readOnlyHint"] for n in ("stats", "sql", "schema", "track_story", "listens", "now"))
+
+    stats = call_tool(client, token, "stats", {"group": "label", "granularity": "year", "start": "2022-01-01", "country": "FR"})
+    request = calls[-1]
+    assert (request.url.params["country"], request.url.params["measure"], "artist" in request.url.params) == ("FR", "weighted", False)
+    text = stats["content"][0]["text"]
+    assert "| Ninja Tune (#5) | 120 | 100 | 40.0% |" in text and "Plays with no label yet: 15" in text
+    assert "| Ninja Tune | 90 | 10 |" in text and "| 2022 | 2023 |" in text
+    assert stats["structuredContent"]["view"] == "lines"
+    assert call_tool(client, token, "stats", {"group": "weekday_hour"})["structuredContent"]["view"] == "heatmap"
+
+    story = call_tool(client, token, "track_story", {"track_id": 1})
+    assert story["structuredContent"]["view"] == "track"
+    assert "Sound: 140 BPM, 5A, energy 0.40, vocal." in story["content"][0]["text"]
+    assert "Suggested 2 times (mix 2): played after 1" in story["content"][0]["text"]
+
+    artist = call_tool(client, token, "artist", {"artist": "burial"})  # by name, through search
+    assert artist["structuredContent"]["view"] == "artist" and "**Burial** (#3): Person, London" in artist["content"][0]["text"]
+
+    sql = call_tool(client, token, "sql", {"query": "select n from x"})
+    assert "| 1 |" in sql["content"][0]["text"] and "cut at the limit" in sql["content"][0]["text"]
+    assert call_tool(client, token, "schema", {"tables": ["history_listen"]})["content"][0]["text"] == "# guide history_listen"

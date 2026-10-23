@@ -37,3 +37,23 @@ class Listen(models.Model):
 
     def __str__(self):
         return f"{self.track} @ {self.played_at}"
+
+
+class Rollup(models.Model):
+    """Plays per week and per month by one dimension (history.rollup.DIMENSIONS), for every period that had ended
+    when the nightly rollup ran. Rebuilt in full each night; history.rollup.aggregate counts the rest live."""
+
+    WEEK, MONTH = "week", "month"
+
+    granularity = models.CharField(max_length=5)  # "week" or "month"
+    period = models.DateField()  # its first day, in the listening time zone
+    dimension = models.CharField(max_length=20)  # "all", "artist", "style", "hour"...
+    key = models.CharField(max_length=100)  # the artist's or tag's ID, the country code, the hour...; "" for none
+    plays = models.PositiveIntegerField()
+    weighted = models.FloatField()  # plays weighted by intent (history.intent.play_weight)
+    # "all" only: intent-weighted sums over the plays of analysed tracks (n is their weight), so averages over any
+    # span are the sums divided by n
+    sound = models.JSONField(null=True, blank=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["dimension", "granularity", "period"])]

@@ -1,6 +1,7 @@
 """The MCP server: tools over the audio-brain API, with MCP Apps components, behind the OAuth provider.
 
-Phase 0 of MCP.md: `show_list` (with the list component), `play` and `keep`. Claude gets every detail as text; the
+Phase 0 of MCP.md: `show_list` (with the list component), `play` and `keep`; Phase 1's read tools are in
+reasoning.py. Claude gets every detail as text; the
 component shows a calm summary inline and the whole list when expanded to full screen."""
 
 from typing import Annotated
@@ -14,6 +15,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
 from claude_mcp import config as settings
+from claude_mcp import reasoning
 from claude_mcp.api import Api, ApiError
 from claude_mcp.oauth import SCOPE, Provider
 from claude_mcp.store import Store
@@ -203,6 +205,7 @@ def build(config=None, transport=None):
         return result(text, data)
 
     apps.add_html_resource(LIST_UI, (config.ui_dir / "list.html").read_text(), title="audio-brain list", prefers_border=True)
+    reasoning.register_apps(apps, api, config)
 
     # after the Apps tools and resources: the server takes them from the extension when it's made
     mcp = MCPServer(
@@ -246,6 +249,8 @@ def build(config=None, transport=None):
         synced = await api.post(f"/mixes/{key}/sync", {"on": True, "pinned": True})
         return result(f"Kept \"{mix['title']}\": synced to TIDAL and pinned. {synced.get('tidal_url') or ''}".strip(),
                       {"key": key, "kept": True, "tidal_url": synced.get("tidal_url")})
+
+    reasoning.register(mcp, api)
 
     @mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
     async def healthz(request: Request):

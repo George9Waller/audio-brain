@@ -100,6 +100,7 @@ SCORE_SETS = [("Score sets", "discovery.score.score_sets")]
 MODELS = [
     ("Recommendation outcomes", "recommend.outcomes.update_outcomes"),
     ("Listening sessions", "history.sessions.build_sessions"),
+    ("History rollup", "history.rollup.build_rollup"),
     ("Session track vectors", "recommend.session_vectors.build_track_vectors"),
     ("Combined sound and session vectors", "recommend.fused.build_fused_vectors"),
     ("Taste vectors", "recommend.taste.build_taste_vectors"),
@@ -122,7 +123,7 @@ JOBS = {job.key: job for job in [
     Job("releases", "New releases", "Releases from watched artists, remixers and labels, scored and queued", FIND_RELEASES + SCORE_RELEASES + QUEUE, Weekly(4, 5)),
     Job("discovery_summary", "Weekly discovery", "A weekly card of releases found by artist, remixer and label, and the five best fits", [("Weekly discovery card", "discovery.summary.build_weekly_summary")], Weekly(4, 6)),
     Job("enrichment", "Enrichment", "Identity, Tidal IDs, genres, tags and artist profiles for tracks that lack them", LOOKUPS, Daily(1), lane=LOOKUP),
-    Job("models", "Models", "Sessions, vectors (session, combined, taste), contexts, the track scorer and the context ranker, retrained", QUEUE + MODELS, Daily(3)),
+    Job("models", "Models", "Sessions, the history rollup, vectors (session, combined, taste), contexts, the track scorer and the context ranker, retrained", QUEUE + MODELS, Daily(3)),
     Job("mixes", "Mixes and lists", "Context, era, Fresh and Rediscovery mixes (pushed to Tidal), and the discovery lists: releases, artists, albums and sets", MIXES, Daily(6, 30)),
     Job("candidates", "New candidates", "Tracks Tidal lists as similar to your contexts' members, brought in and analysed, then audio analysis and CLAP for any other tracks that lack them", CANDIDATES + ANALYSIS, Daily(7)),
     Job(

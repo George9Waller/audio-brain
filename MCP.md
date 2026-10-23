@@ -130,9 +130,13 @@ bridge (`callServerTool`), so refining a draft is taps or words, whichever is ea
 
 ### Read-only SQL
 
-- A Postgres role `audio_brain_ro` with `SELECT` on every table except `library_oauthtoken`, created by a migration
-  (password from the secret).
-- Each query runs in a `READ ONLY` transaction with `statement_timeout = 10s`, at most 500 rows. Vector columns are
+- A Postgres role `audio_brain_ro` with `SELECT` on every table except `library_oauthtoken` (and Django's `auth_*`
+  and `django_*`). It's created, and its grants refreshed, after every `migrate` (a `post_migrate` handler in
+  `api/apps.py`), so tables added later are readable without a migration of their own. Password:
+  `POSTGRES_RO_PASSWORD` in the AWS secret. It's a separate login rather than `SET ROLE`, which SQL can undo.
+- Each query runs on its own connection as that role, as one prepared statement (Postgres refuses a second statement,
+  so a query can't `SET` its way out), in a `READ ONLY` transaction with `statement_timeout = 10s` and a watchdog
+  that cancels it at 12 s whatever it set, at most 500 rows. Vector columns are
   shown as `<vector 512>`, but pgvector operators (`<=>`) work in queries.
 - A schema guide served as an MCP resource (`schema://audio-brain`), generated from the models' help texts plus a
   hand-written page on what things mean: intent and the 0.3 + 0.7 × intent weighting, the Last.fm dedup rule
@@ -142,8 +146,13 @@ bridge (`callServerTool`), so refining a draft is taps or words, whichever is ea
 ### Rollup and insights jobs (worker, nightly)
 
 - **`history_rollup`:** plays and intent-weighted plays per week and month × each dimension above; monthly sound
-  averages (BPM, energy, danceability, vocal share, moods) from `AudioFeatures`. One table, rebuilt incrementally
-  from the last checkpoint like every other job.
+  averages (BPM, energy, danceability, vocal share, moods) from `AudioFeatures`. One table (`history.Rollup`), with
+  sound stored as intent-weighted sums, so averages over any span still add up.
+  - **Built 24 Oct:** rebuilt in full each night, after sessions, rather than from a checkpoint. Rescoring sessions
+    changes every play's weight, and a full rebuild takes about 6 s. It holds every week and month that had ended
+    when it ran (track and album by month only, since by week they were most of the table), about 430k rows and
+    45 MB, truncated and refilled in one transaction. `history.rollup.aggregate` reads whole periods from it and counts the edges and anything since live, so
+    answers are always current. Anything filtered is counted live (30–350 ms over 138k plays).
 - **`insights`:** writes JSON facts to an `Insight` table (kind, period, computed_at, data):
   - **Trends:** rising and falling artists, styles, labels and contexts, the last 90 days against the baseline, with
     minimum support. Builds on `recommend/explore.new_interests`.
@@ -256,8 +265,41 @@ server), so the node stays private and needs no host setup.
 ### Phase 1: data and stats
 
 - [x] `MCP_TOKEN` and the `"claude"` principal in `TokenAuth` (done in Phase 0).
-- [ ] History endpoints, `history_rollup` job, `/query` with `audio_brain_ro`, the schema guide.
-- [ ] Read tools; chart, track card and artist card components.
+- [x] History endpoints, `history_rollup` job, `/query` with `audio_brain_ro`, the schema guide.
+- [x] Read tools; chart, track card and artist card components.
+
+**Built 24 Oct.** Server (`api/history.py`, `api/query.py`, `api/schema.py`, `history/rollup.py`):
+`/history/stats` (any dimension, over a span or per week, month, quarter or year, by plays or weighted plays, with
+filters by ID or exact name; `group=all` adds the average sound per period), `/history/listens`, `/history/sessions`,
+`/tracks/{id}/story`, `/artists/{id}/story`, `/recommendations`, `POST /query`, and `/schema` (the guide, served
+through a `schema` tool as well as being described here: claude.ai can't read MCP resources on its own). MCP tools
+(`claude_mcp/reasoning.py`): `stats` (chart), `track_story` and `artist` (story), `sql`, `schema`, `listens`,
+`sessions`, `search`, `search_by_vibe`, `contexts`, `now` and `recommendations`. The time-series and period tools
+(`trends`, `eras`, `time_travel`, `digest`...) stay in Phase 3.
+
+Components: `chart.html` draws ranked bars, lines over time (legend, crosshair, count or share; full screen adds a
+sparkline per series and a table), columns for hours and weekdays, the hour × weekday heatmap, and sound over time.
+Its Weighted/Plays switch calls `stats` again. `story.html` draws the track and artist cards; tapping an artist, a
+top track or a similar artist opens theirs, with Back. Colours are the dataviz reference palette's first six slots
+(validated against both themes). Series keep their colour while the component is open, and contexts keep their
+own hues. To look: `npm run dev`, then `/harness/?page=chart&view=lines|bars|columns|heatmap|sound` or
+`?page=story&view=track|artist`, with `&mode=fullscreen` and `&theme=dark`. Real results saved to
+`ui/harness/local/<view>.json` (git-ignored, as the repo is public) show with `&local=1`.
+
+Tests: `api.tests.QueryTests` (refuses writes, the token table, a second statement and switching role; stops at
+the timeout; caps rows; summarises vectors) and `HistoryTests` (stats against hand counts, live and from the rollup,
+including a play that is in May in London but April in UTC); `claude_mcp` tests each new tool against a mocked API.
+
+Tried against the real database: the countries per quarter show the time in France (2023–24, up to a third of
+plays), then Last.fm's unknown country from 2025. Labels per year show Sony fading after 2022, Universal after 2024,
+and Armada rising to 2024. Track and artist stories, SQL and sound search all answer sensibly.
+
+Steps left for you:
+1. Add `POSTGRES_RO_PASSWORD` (any long random string) to the AWS secret `audio-brain`, then push. The API's
+   migrate initContainer creates the role with it. If the key goes in after the deploy, restart the API pod once
+   the secret has synced, so `migrate` sets the password.
+2. The first nightly models run builds the rollup; until then everything is counted live, which is fine.
+3. From the phone, ask the two questions below.
 - *Done when:* from the phone, "what was I into when we moved to France?" and "which labels have I drifted away
   from since 2022?" come back as charts with sensible answers.
 

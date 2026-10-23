@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from django.test import TestCase, override_settings
@@ -208,3 +208,126 @@ class SigilTests(TestCase):
         got = shapes([(t.pk, context.pk) for t in tracks])
         happiest, saddest = got[tracks[-1].pk][0], got[tracks[0].pk][0]
         self.assertGreater(happiest - saddest, 0.8)  # 0.40 vs 0.51 raw: nearly the whole range once ranked
+
+
+@override_settings(API_TOKEN="secret")
+class QueryTests(TestCase):
+    """Claude's read-only SQL. It runs on its own connection, so it can't see rows a test creates; none of these
+    need any."""
+
+    def query(self, sql, limit=500):
+        return self.client.post("/api/v1/query", {"sql": sql, "limit": limit}, content_type="application/json",
+                                headers={"Authorization": "Bearer secret"})
+
+    def test_reads_tables_and_caps_rows(self):
+        self.assertEqual(self.query("select count(*) from catalogue_track").json()["rows"], [[0]])
+        capped = self.query("select n from generate_series(1, 600) n").json()
+        self.assertEqual((len(capped["rows"]), capped["truncated"]), (500, True))
+        self.assertEqual(len(self.query("select n from generate_series(1, 600) n", limit=20).json()["rows"]), 20)
+        self.assertEqual(self.query("select name from catalogue_artist where name like '%x%'").status_code, 200)
+
+    def test_vectors_are_summarised(self):
+        self.assertEqual(self.query("select '[1,2,3]'::vector as v").json()["rows"], [["<vector 3>"]])
+
+    def test_refuses_writes_tokens_and_second_statements(self):
+        for sql in ["delete from catalogue_track", "create table x (a int)", "select * from library_oauthtoken",
+                    "select * from auth_user", "select 1; set role postgres", "select set_config('role', 'postgres', false)"]:
+            response = self.query(sql)
+            self.assertEqual(response.status_code, 400, sql)
+
+    def test_stops_at_the_timeout(self):
+        from unittest import mock
+        with mock.patch("api.query.TIMEOUT", 1):
+            response = self.query("select pg_sleep(3)")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("stopped after 1 s", response.json()["detail"])
+
+
+@override_settings(API_TOKEN="secret", LISTENING_TIME_ZONE="Europe/London")
+class HistoryTests(TestCase):
+    """Stats against counts done by hand: two artists, five plays, two sessions (one half-intended), styles on
+    both tracks, and one play just before midnight UTC that is in May in London (BST)."""
+
+    def setUp(self):
+        import time_machine
+        from catalogue.models import Tag, TrackTag
+        from history.models import Listen, Session
+
+        self.clock = time_machine.travel(datetime(2026, 5, 15, 12, tzinfo=ZoneInfo("UTC")), tick=False)
+        self.clock.start()
+        self.a = Artist.objects.create(name="Artist A")
+        self.b = Artist.objects.create(name="Artist B")
+        self.a1 = Track.objects.create(name="One", artist=self.a)
+        self.b1 = Track.objects.create(name="Two", artist=self.b)
+        house, techno = Tag.objects.create(name="House"), Tag.objects.create(name="Techno")
+        for track, tag in [(self.a1, house), (self.a1, techno), (self.b1, house)]:
+            TrackTag.objects.create(track=track, tag=tag, source="discogs_style")
+        half = Session.objects.create(start=datetime(2026, 1, 10, tzinfo=ZoneInfo("UTC")), end=datetime(2026, 1, 20, tzinfo=ZoneInfo("UTC")), size=2, intent=0.5)
+        full = Session.objects.create(start=datetime(2026, 2, 3, tzinfo=ZoneInfo("UTC")), end=datetime(2026, 4, 30, tzinfo=ZoneInfo("UTC")), size=2, intent=None)
+        utc = ZoneInfo("UTC")
+        for track, at, session, country, source in [
+            (self.a1, datetime(2026, 1, 10, 10, tzinfo=utc), half, "FR", "spotify"),
+            (self.b1, datetime(2026, 1, 20, 10, tzinfo=utc), half, "FR", "spotify"),
+            (self.a1, datetime(2026, 2, 3, 10, tzinfo=utc), full, "GB", "spotify"),
+            (self.a1, datetime(2026, 4, 30, 23, 30, tzinfo=utc), full, "GB", "spotify"),  # 00:30 on 1 May in London
+            (self.b1, datetime(2026, 5, 10, 10, tzinfo=utc), None, "", "lastfm"),
+        ]:
+            Listen.objects.create(track=track, played_at=at, session=session, country=country, source=source)
+        self.headers = {"Authorization": "Bearer secret"}
+
+    def tearDown(self):
+        self.clock.stop()
+
+    def stats(self, **params):
+        response = self.client.get("/api/v1/history/stats", params, headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.content)
+        return response.json()
+
+    def by_label(self, data, field="plays"):
+        return {row["label"]: row[field] for row in data["rows"]}
+
+    def check(self):
+        self.assertEqual(self.by_label(self.stats(measure="plays")), {"Artist A": 3, "Artist B": 2})
+        self.assertEqual(self.by_label(self.stats(), "weighted"), {"Artist A": 2.6, "Artist B": 1.6})  # 0.65 + 1 + 1, 0.65 + 1
+        monthly = self.stats(measure="plays", granularity="month")
+        self.assertEqual(monthly["periods"], ["2026-01-01", "2026-02-01", "2026-03-01", "2026-04-01", "2026-05-01"])
+        self.assertEqual({s["label"]: s["values"] for s in monthly["series"]}, {"Artist A": [1, 1, 0, 0, 1], "Artist B": [1, 0, 0, 0, 1]})
+        self.assertEqual(monthly["totals"], [2, 1, 0, 0, 2])
+        styles = self.stats(group="style", measure="plays")
+        self.assertEqual(self.by_label(styles), {"House": 5, "Techno": 3})
+        self.assertEqual(styles["rows"][0]["share"], 1.0)  # a play counts once in each of its styles
+        self.assertEqual(self.by_label(self.stats(measure="plays", start="2026-01-15", end="2026-05-01")), {"Artist A": 1, "Artist B": 1})
+        self.assertEqual(self.by_label(self.stats(measure="plays", country="FR")), {"Artist A": 1, "Artist B": 1})
+        self.assertEqual(self.by_label(self.stats(measure="plays", artist="Artist A", group="country")), {"GB": 2, "FR": 1})
+        hours = self.stats(group="hour", measure="plays")
+        self.assertEqual(self.by_label(hours)["00:00"], 1)
+        self.assertEqual(self.stats(group="all", granularity="year", measure="plays")["totals"], [5])
+
+    def test_stats_live(self):
+        self.check()
+
+    def test_stats_from_the_rollup_match(self):
+        from history.models import Rollup
+        from history.rollup import build_rollup, rolled_through
+        build_rollup()
+        # January and February stored (nothing was played in March or April); the rest is counted live
+        self.assertEqual(rolled_through("month"), date(2026, 3, 1))
+        self.assertEqual(Rollup.objects.filter(dimension="artist", granularity="month").count(), 3)
+        self.assertFalse(Rollup.objects.filter(dimension="track", granularity="week").exists())
+        self.check()
+
+    def test_bad_requests(self):
+        self.assertEqual(self.client.get("/api/v1/history/stats", {"group": "mood"}, headers=self.headers).status_code, 400)
+        self.assertEqual(self.client.get("/api/v1/history/stats", {"artist": "Nobody"}, headers=self.headers).status_code, 404)
+        self.assertEqual(self.client.get("/api/v1/history/stats", {"start": "last year"}, headers=self.headers).status_code, 400)
+
+    def test_stories_listens_and_sessions(self):
+        story = self.client.get(f"/api/v1/tracks/{self.a1.pk}/story", headers=self.headers).json()
+        self.assertEqual((story["plays"], story["first_played"], story["styles"]), (3, "2026-01-10T10:00+00:00", ["House", "Techno"]))
+        self.assertEqual([m["plays"] for m in story["months"]], [1, 1, 0, 0, 1])
+        artist = self.client.get(f"/api/v1/artists/{self.b.pk}/story", headers=self.headers).json()
+        self.assertEqual((artist["plays"], [s["label"] for s in artist["styles"]]), (2, ["House"]))
+        listens = self.client.get("/api/v1/history/listens", {"artist": self.a.pk, "limit": 2}, headers=self.headers).json()
+        self.assertEqual((listens["total"], listens["listens"][0]["played_at"]), (3, "2026-05-01T00:30+01:00"))
+        sessions = self.client.get("/api/v1/history/sessions", headers=self.headers).json()
+        self.assertEqual([s["intent"] for s in sessions["sessions"]], [None, 0.5])

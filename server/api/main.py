@@ -3,7 +3,7 @@ from datetime import datetime
 from django.utils import timezone
 from ninja import NinjaAPI, Schema
 
-from api import atlas, jobs, library, lists, make, music, sets, sync
+from api import atlas, history, jobs, library, lists, make, music, sets, sync
 from api.auth import TokenAuth
 from jobs.runner import worker_alive
 
@@ -16,6 +16,7 @@ api.add_router("", make.router)
 api.add_router("", library.router)
 api.add_router("", atlas.router)
 api.add_router("", sets.router)
+api.add_router("", history.router)
 
 
 class Health(Schema):
