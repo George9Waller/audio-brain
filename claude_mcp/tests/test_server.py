@@ -15,11 +15,17 @@ from claude_mcp.server import build
 
 CALLBACK = "https://claude.ai/api/mcp/auth_callback"
 PUBLIC = "https://mcp.example.ts.net"
-LIST = {"key": "ctx-7", "kind": "context", "section": "contexts", "title": "Late night", "subtitle": "slow and deep",
+LIST = {"key": "ctx-7", "kind": "mix", "section": "lists", "title": "Late night", "subtitle": "slow and deep",
         "context": {"id": 7, "name": "Late night", "hue": 210.0, "family": None}, "items": [
             {"kind": "track", "track_id": 1, "artist": "Burial", "title": "Archangel", "reason": "you play it at night",
-             "novel": False, "hue": 210.0, "styles": ["Dubstep"], "sound": {"bpm": 139.6, "camelot": "8A", "energy": 0.41}},
-            {"kind": "track", "track_id": 2, "artist": "Four Tet", "title": "Lush", "novel": True, "sound": None}]}
+             "novel": False, "hue": 210.0, "styles": ["Dubstep"], "verdict": "yes", "sound": {"bpm": 139.6, "camelot": "8A", "energy": 0.41,
+             "instrumental": 0.8, "moods": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6], "shape": [0.9, 0.1, 0.5, 0.5, 0.2, 0.7]},
+             "length_ms": 238000, "artist_new": False, "context_name": "Late night"},
+            {"kind": "track", "track_id": 2, "artist": "Four Tet", "title": "Lush", "novel": True, "sound": None,
+             "length_ms": 302000, "artist_new": True, "context_name": None}]}
+RELEASES = {"key": "releases", "kind": "releases", "section": "discover", "title": "New releases", "subtitle": "from artists you play",
+            "context": None, "items": [{"kind": "release", "release_id": 9, "title": "Singularity", "artist": "Jon Hopkins",
+                                        "detail": "Album · 4 May 2018", "reason": "artist you play", "url": "https://tidal.com/browse/album/1"}]}
 
 
 @pytest.fixture
@@ -37,7 +43,12 @@ def env(tmp_path):
         calls.append(request)
         assert request.headers["authorization"] == "Bearer claude-token"
         if request.url.path == "/api/v1/lists":
-            return httpx.Response(200, json={"lists": [LIST]})
+            return httpx.Response(200, json={"lists": [LIST, RELEASES]})
+        if request.method == "GET" and request.url.path in ("/api/v1/mixes/ctx-7", "/api/v1/mixes/releases"):
+            return httpx.Response(200, json=LIST if "ctx-7" in request.url.path else RELEASES)
+        if request.url.path == "/api/v1/mixes/ctx-7/sync":
+            assert json.loads(request.content) == {"on": True, "pinned": True}
+            return httpx.Response(200, json={"sync": True, "pinned": True, "tidal_url": "https://tidal.com/browse/playlist/own"})
         if request.url.path == "/api/v1/mixes/ctx-7/play":
             return httpx.Response(200, json={"tidal_url": "https://tidal.com/browse/playlist/abc"})
         return httpx.Response(404, json={"detail": "Not Found"})
@@ -198,12 +209,27 @@ def test_tools_over_mcp(env):
 
     index = call_tool(client, token, "show_list", {})
     assert index["structuredContent"]["lists"][0] == {"key": "ctx-7", "title": "Late night", "subtitle": "slow and deep",
-                                                      "section": "contexts", "tracks": 2, "hue": 210.0}
+                                                      "section": "lists", "kind": "mix", "family": "",
+                                                      "sync": False, "tracks": 2, "count": "2 tracks", "novel": 0.5, "hue": 210.0,
+                                                      "hues": [210.0, None]}
+    assert index["structuredContent"]["lists"][1]["count"] == "1 release"
 
     shown = call_tool(client, token, "show_list", {"key": "ctx-7"})
-    assert "1. Burial – Archangel (#1)" in shown["content"][0]["text"]
+    text = shown["content"][0]["text"]
+    assert "1. Burial – Archangel (#1): 140 BPM, 8A, energy 0.41, instrumental; Late night, verdict yes; you play it at night" in text
+    assert "2. Four Tet – Lush (#2): new to you, new artist" in text
+    assert "Mostly Burial, with Four Tet; 1 artist new to you." in text and "9 m" in text
+    data = shown["structuredContent"]
+    assert (data["duration"], data["new"], data["contexts"]) == ("9 m", 1, [{"name": "Late night", "hue": 210.0, "tracks": 1}])
+    assert data["kept"] is False and data["can_keep"] is True
     assert shown["structuredContent"]["tracks"][0]["camelot"] == "8A"
     assert shown["structuredContent"]["tracks"][1]["bpm"] is None
+    first = shown["structuredContent"]["tracks"][0]
+    assert first["moods"] == [0.9, 0.1, 0.5, 0.5, 0.2, 0.7] and first["vocal"] is False and first["verdict"] == "yes"
+
+    releases = call_tool(client, token, "show_list", {"key": "releases"})
+    assert "1. Jon Hopkins – Singularity (release)" in releases["content"][0]["text"]
+    assert releases["structuredContent"]["others"][0]["url"] == "https://tidal.com/browse/album/1"
 
     missing = call_tool(client, token, "show_list", {"key": "nope"})
     assert missing["isError"] is True
@@ -211,3 +237,7 @@ def test_tools_over_mcp(env):
     played = call_tool(client, token, "play", {"key": "ctx-7"})
     assert played["structuredContent"]["tidal_url"] == "https://tidal.com/browse/playlist/abc"
     assert calls[-1].method == "POST"
+
+    kept = call_tool(client, token, "keep", {"key": "ctx-7"})
+    assert kept["structuredContent"] == {"key": "ctx-7", "kept": True, "tidal_url": "https://tidal.com/browse/playlist/own"}
+    assert call_tool(client, token, "keep", {"key": "releases"})["isError"] is True

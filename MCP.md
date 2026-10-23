@@ -108,8 +108,9 @@ bridge (`callServerTool`), so refining a draft is taps or words, whichever is ea
 - Colours follow the app: context hues from `recommend/lists.hue`, light and dark from the host's theme.
 - **Fallback.** Every tool also returns `structuredContent` and a short markdown summary (a top-10 table, not a dump).
   Where components don't render, Claude still has the data and can make an artifact from it.
-- **Unverified:** MCP Apps launched in Claude on web and desktop (Jan 2026). Nothing found confirms the iOS or
-  Android app. Phase 0 tests it.
+- **Tested 23 Oct: components render in the Claude desktop app and the phone app,** and tapping through them
+  works (the list component opening a list through `callServerTool`). They look rough, so styling needs a pass
+  before Phase 1's components are built on them.
 
 ## Server work in the API
 
@@ -231,28 +232,30 @@ Steps left for you (I can't reach the cluster, AWS or the Sonos app from here):
 4. claude.ai → Settings → Connectors → Add custom connector, URL `https://<node>.<tailnet>.ts.net/mcp`. Connect;
    the sign-in page asks for the passphrase and the code.
 
-- [ ] Hello-world `claude_mcp` with one tool and one MCP App component, OAuth and Funnel, deployed to the cluster.
-      (Built and tested; deploying is steps 1–3 above.)
-- [ ] Add it as a custom connector on claude.ai. Check the component renders on web, desktop and **the phone app**.
+- [x] Hello-world `claude_mcp` with one tool and one MCP App component, OAuth and Funnel, deployed to the cluster.
+      (The API needed `audio-brain-api` in `ALLOWED_HOSTS`, the Host the MCP pod calls it by.)
+- [x] Add it as a custom connector on claude.ai. Check the component renders on web, desktop and **the phone app**.
+      **Renders on desktop and the phone** (see "Visual components"); not checked separately on the web.
 - [x] Add TIDAL "Now" to Sonos favourites (done in the Sonos app 23 Oct, as "Audio Brain · Now"; the connector
       can't add favourites). Rewrite it from audio-brain, play the favourite through the connector,
       and check the new tracks play. **Works:** see "Playback through Sonos".
-- [ ] Write down both results here; adjust the fallback and playback sections if either fails. Sonos is written up;
-      components are still to test.
+- [x] Write down both results here; adjust the fallback and playback sections if either fails. Both work, so
+      neither section changes.
 
-**Blocked on Tailscale (23 Oct).** The deployed server answers on the tailnet, and Funnel is on with the node
+**Funnel took a while (23 Oct), now working.** The deployed server answers on the tailnet, and Funnel is on with the node
 holding the `funnel` capability, but Tailscale never publishes the public A/AAAA record for the node's name (the
 `ts.net` nameservers have only the ACME TXT record), so claude.ai can't reach it. This is
 [tailscale/tailscale#21698](https://github.com/tailscale/tailscale/issues/21698) /
 [#21829](https://github.com/tailscale/tailscale/issues/21829), open with many reports this week. Removing and
-re-adding the `funnel` node attribute (a workaround reported there) didn't help; a bug report ID is on #21829.
-Check with `dig @ns1.dnsimple.com <node>.<tailnet>.ts.net A +short`. If it isn't fixed in a few days: run
-Tailscale as its own node in the MCP pod (a sidecar with its own name and auth key) and Funnel that, or a
-Cloudflare Tunnel on a subdomain (needs the domain's DNS on Cloudflare).
+re-adding the `funnel` node attribute (a workaround reported there) is what fixed it: the first time, put straight
+back, nothing happened; the second time, left off for a full minute, the record appeared some minutes later. A bug
+report ID is on #21829. Check with `dig @ns1.dnsimple.com <node>.<tailnet>.ts.net A +short`. On the new cluster,
+consider giving the MCP pod its own Tailscale device (a sidecar with its own name and auth key, Funnelling to the
+server), so the node stays private and needs no host setup.
 
 ### Phase 1: data and stats
 
-- [ ] `MCP_TOKEN` and the `"claude"` principal in `TokenAuth`.
+- [x] `MCP_TOKEN` and the `"claude"` principal in `TokenAuth` (done in Phase 0).
 - [ ] History endpoints, `history_rollup` job, `/query` with `audio_brain_ro`, the schema guide.
 - [ ] Read tools; chart, track card and artist card components.
 - *Done when:* from the phone, "what was I into when we moved to France?" and "which labels have I drifted away
@@ -286,6 +289,8 @@ Cloudflare Tunnel on a subdomain (needs the domain's DNS on Cloudflare).
 - `claude_mcp`: each tool against a mocked `httpx`; OAuth flow (bad redirect URI refused, PKCE checked, refresh
   works, wrong TOTP refused).
 - Components: build in CI; a smoke test renders each with fixture data.
+- To look at a component: `cd claude_mcp/ui && npm run dev`, then `/harness/?view=list|index|releases&theme=dark&width=390`.
+  The harness plays Claude's part (`AppBridge`) with sample data in `ui/harness/fixtures.ts`.
 
 ## Sources
 

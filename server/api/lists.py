@@ -78,6 +78,21 @@ def decorate(items):
     return items
 
 
+def detail(items):
+    """What one list's page adds to its tracks: length, whether the artist is new to you, and the context's name."""
+    tracks = [i for i in items if i.get("kind") == "track"]
+    found = {t.pk: t for t in Track.objects.filter(pk__in=[i["track_id"] for i in tracks]).only("length_ms", "artist_id")}
+    artists = {t.artist_id for t in found.values()}
+    played = set(Track.objects.filter(artist__in=artists, intent_plays__gt=0).values_list("artist_id", flat=True).distinct())
+    names = dict(Context.objects.filter(pk__in={i["context_id"] for i in tracks if i.get("context_id")}).values_list("pk", "name"))
+    for item in tracks:
+        track = found.get(item["track_id"])
+        item["length_ms"] = track.length_ms if track else None
+        item["artist_new"] = bool(track) and track.artist_id not in played
+        item["context_name"] = names.get(item.get("context_id"))
+    return items
+
+
 @router.get("/lists", response=ListsOut)
 def lists(request):
     """Every list in one go, so the app can cache them all for offline."""

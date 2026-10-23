@@ -7,7 +7,7 @@ from django.shortcuts import get_object_or_404
 from ninja import Router, Schema
 from ninja.errors import HttpError
 
-from api.lists import ListOut, decorate, list_out
+from api.lists import ListOut, decorate, detail, list_out
 from recommend.lists import track_items
 from api.matching import match
 from api.music import TrackRef
@@ -91,6 +91,14 @@ def discard_draft(request, key: str):
     if draft:
         discard(draft)
     return 204, None
+
+
+@router.get("/mixes/{key}", response=ListOut)
+def get_list(request, key: str):
+    """One list or draft, with each track's length, whether its artist is new to you and its context's name."""
+    out = list_out(get_object_or_404(Mix, key=key))
+    out["items"] = detail(out["items"])
+    return out
 
 
 @router.delete("/mixes/{key}", response={204: None})

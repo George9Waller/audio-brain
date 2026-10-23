@@ -46,6 +46,16 @@ class ApiTests(TestCase):
         self.assertEqual(response.wsgi_request.auth, "claude")
         self.assertEqual(self.client.get("/api/v1/health", headers=self.headers).wsgi_request.auth, "app")
 
+    def test_one_list_with_detail(self):
+        from recommend.models import Mix
+        self.track.length_ms = 240000
+        self.track.save()
+        Mix.objects.create(key="m1", kind="asked", section=Mix.LISTS, title="T", subtitle="",
+                           items=[{"kind": "track", "track_id": self.track.pk, "title": "x", "artist": "y", "context_id": None}])
+        item = self.client.get("/api/v1/mixes/m1", headers=self.headers).json()["items"][0]
+        self.assertEqual((item["length_ms"], item["artist_new"], item["context_name"]), (240000, True, None))
+        self.assertEqual(self.client.delete("/api/v1/mixes/nope", headers=self.headers).status_code, 404)
+
     def test_mcp_token_unset_is_refused(self):
         self.assertEqual(self.client.get("/api/v1/health", headers={"Authorization": "Bearer "}).status_code, 401)
 
