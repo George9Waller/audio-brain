@@ -11,6 +11,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from clients.base import SharedLane, close_lane_connection, retry_after
 from clients.models import RateLimitLane
 from clients.musicbrainz import MusicBrainzClient
+from clients import musicbrainz
 
 
 def response(status, headers=None, body=b"{}"):
@@ -135,3 +136,56 @@ class MusicBrainzBusyTests(SimpleTestCase):
         self.assertNotIn(503, retries.status_forcelist)
         # MusicBrainz's 503s carry Retry-After: 0, which urllib3 would otherwise retry regardless of the list.
         self.assertFalse(retries.is_retry("GET", 503, has_retry_after=True))
+
+
+@override_settings(MUSICBRAINZ_BASE_URL="http://mirror:5000/ws/2/")
+class MusicBrainzMirrorTests(SimpleTestCase):
+    def setUp(self):
+        self.client = MusicBrainzClient()
+        waiting = mock.patch.object(self.client.lane, "wait")
+        waiting.start()
+        self.addCleanup(waiting.stop)
+        self.public = mock.patch.object(self.client.session, "get", return_value=response(200, body=b'{"recordings": []}'))
+        self.mirror = mock.patch.object(self.client.mirror.session, "get", return_value=response(200, body=b'{"id": "x"}'))
+
+    def test_lookups_go_to_the_mirror_and_searches_to_musicbrainz_org(self):
+        with self.public as public, self.mirror as mirror:
+            self.assertEqual(self.client.artist("x"), {"id": "x"})
+            self.client.search_recordings("Burial", "Archangel")
+        self.assertTrue(mirror.call_args.args[0].startswith("http://mirror:5000/ws/2/artist/x"))
+        self.assertEqual(mirror.call_count, 1)
+        self.assertTrue(public.call_args.args[0].startswith("https://musicbrainz.org/ws/2/recording"))
+        self.client.lane.wait.assert_called_once()  # only the search waited its turn
+
+    def test_a_mirror_thats_down_falls_back_for_a_while(self):
+        with self.public as public, self.mirror as mirror:
+            mirror.side_effect = requests.ConnectionError()
+            public.return_value = response(200, body=b'{"id": "y"}')
+            self.assertEqual(self.client.artist("y"), {"id": "y"})
+            self.client.artist("z")
+        self.assertEqual(mirror.call_count, 1)  # the second lookup didn't try it again
+        self.assertEqual(public.call_count, 2)
+        with self.public as public, self.mirror as mirror, \
+                mock.patch.object(musicbrainz.time, "monotonic", return_value=time.monotonic() + musicbrainz.MIRROR_RETRY_AFTER + 1):
+            self.client.artist("x")
+        self.assertEqual(mirror.call_count, 1)  # tried again once the wait was over
+        public.assert_not_called()
+
+    def test_a_failing_mirror_falls_back(self):
+        with self.public as public, self.mirror as mirror:
+            mirror.return_value = response(500)
+            public.return_value = response(404)
+            self.assertIsNone(self.client.artist("x"))
+        public.assert_called_once()
+
+    def test_a_mirror_miss_is_a_miss(self):
+        with self.public as public, self.mirror as mirror:
+            mirror.return_value = response(404)
+            self.assertIsNone(self.client.artist("x"))
+        public.assert_not_called()
+
+    def test_recordings_are_looked_up_one_by_one_on_the_mirror(self):
+        with self.public as public, self.mirror as mirror:
+            mirror.side_effect = [response(200, body=b'{"id": "a"}'), response(404), response(200, body=b'{"id": "c"}')]
+            self.assertEqual(self.client.recordings(["a", "b", "c"]), [{"id": "a"}, {"id": "c"}])
+        public.assert_not_called()

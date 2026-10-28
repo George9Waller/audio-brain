@@ -297,6 +297,27 @@ How the new node is kept for the heavy work:
   the two no longer overlap. That overlap is what OOM-killed the worker, so the mirror also lowers the worker's peak.
 - *Done when:* a night's enrichment of about 6k new tracks finishes in under 30 minutes, with the same resolve rate as
   before (compare `enrichment_enrichmentattempt` status counts).
+- *How much still searches (measured 28 Oct):* of the identity attempts on 24–28 Oct, about 62% resolved by ISRC and
+  38% went on to a search (search hits plus misses; 2,269 of 5,814 on 27 Oct). Many of those have an ISRC that
+  MusicBrainz doesn't list. So with searches on musicbrainz.org, a night of about 6k tracks still spends about 40
+  minutes searching, plus back-offs: down from hours, and done well before models at 03:00, but over the 30-minute
+  goal. To reach it, the follow-up is name matching against the mirror's own tables (`pg_trgm` on `recording.name`
+  and `artist_credit.name`, read-only from `musicbrainz-db`), in place of most searches.
+- *Built 28 Oct* (the import and switch-over are George's, by `deploy/KUBERNETES.md`, "The MusicBrainz mirror"):
+  - The mirror is a `musicbrainz` section of audio-brain's own chart, not a separate Argo CD app: every app here
+    deploys to `default` and shares one SecretStore, so this needs no change to the `George9Waller/helm` repo, and the
+    token is one more key of the `audio-brain` AWS secret (`METABRAINZ_ACCESS_TOKEN`, mounted where
+    `musicbrainz-docker` expects it, and optional, so the mirror serves before it's added).
+  - Pods: `musicbrainz-db` (MetaBrainz's prebuilt `musicbrainz-docker-db:18-build0`, 100 Gi on `data-nvme`,
+    `shared_buffers=1GB`), `musicbrainz-valkey`, and `musicbrainz` (the prebuilt server image, 4 processes), all on
+    the large node; about 5 Gi of limits. The server's own cron replicates at 11:00 UTC.
+  - The import is a suspended CronJob, `musicbrainz-import` (`createdb.sh -fetch`), started by hand; the server stays
+    at 0 replicas until it has finished.
+  - `clients/musicbrainz.py`: with `MUSICBRAINZ_BASE_URL` set, every request without `query=` goes to the mirror
+    with no rate limit, searches to musicbrainz.org through the shared lane, and `recordings(batch)` becomes one
+    lookup per ID. A mirror that's unreachable or answers 5xx sends everything to musicbrainz.org for five minutes.
+  - No thread pool: lookups on the mirror take milliseconds each, and what's left of the time is the searches, which
+    a pool can't speed up (they share musicbrainz.org's one request a second).
 
 **I7. Discogs from its monthly data dumps.**
 - *Why:* Discogs styles are the finest genre signal in the catalogue (`discogs_style` tags), and the API allows 60
@@ -458,7 +479,7 @@ Checked 28 Oct with `kubectl` from the Mac. Both nodes run k3s v1.36.5. Updated 
 - [x] I5a Rate-limit lanes in the database (28 Oct)
 - [x] I5 Move to the new node (moved 28 Oct; old claims kept until a good night, then runbook step 8)
 - [x] I6b Worker per lane (28 Oct; on since I5)
-- [ ] I6 MusicBrainz mirror (decided 28 Oct: without search; searches go to the public API)
+- [ ] I6 MusicBrainz mirror (built 28 Oct: chart and client; next the token, the import and the switch-over)
 - [ ] I7 Discogs dumps
 - [ ] I8 Scheduled backtests
 - [ ] I9 Health view and MCP tool

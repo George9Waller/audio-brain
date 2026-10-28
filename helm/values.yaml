@@ -52,6 +52,9 @@ config:
   LISTENING_TIME_ZONE: Europe/London
   HF_HOME: /app/server/models/hf
   OPENAI_MODEL: gpt-4.1-mini
+  # The MusicBrainz mirror below, for lookups: set to http://musicbrainz:5000/ws/2/ only once its import has finished
+  # (deploy/KUBERNETES.md, "The MusicBrainz mirror"); empty asks musicbrainz.org for everything
+  MUSICBRAINZ_BASE_URL: ""
 
 api:
   nodePort: 30800  # reached over Tailscale at http://<node>.<tailnet>.ts.net:30800
@@ -165,6 +168,37 @@ legacyClaims:
     storage: 5Gi
   - name: postgres
     storage: 10Gi
+
+# A MusicBrainz mirror without search (INFRA.md I6), on the large node: about 4 GB of RAM and 100 GB of NVMe
+musicbrainz:
+  enabled: true
+  # the versions musicbrainz-docker's prebuilt images use; a server upgrade can need a schema change (see its README)
+  image: metabrainz/musicbrainz-docker-musicbrainz:v-2026-09-21.0-build0
+  dbImage: metabrainz/musicbrainz-docker-db:18-build0
+  valkeyImage: valkey/valkey:9-alpine
+  serverReplicas: 0  # 1 once the import has finished: before that its database doesn't exist
+  serverProcesses: 4  # each a Perl process; audio-brain makes one request at a time per stage
+  replicationSchedule: "0 11 * * *"  # UTC
+  dbStorage: 100Gi
+  dumpStorage: 80Gi  # the full export's download and its unpacked tables, only needed for the import (local-path
+  # doesn't enforce it)
+  # the whole database is tens of GB and lookups touch a little of it; the file cache does the rest
+  dbSettings:
+    shared_buffers: 1GB
+    effective_cache_size: 4GB
+    maintenance_work_mem: 512MB  # the import builds the indexes
+  dbResources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2560Mi
+  serverResources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
 
 backup:
   enabled: true

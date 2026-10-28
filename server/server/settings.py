@@ -146,6 +146,10 @@ MIXES_THREADS = int(os.environ.get('MIXES_THREADS', '6'))
 # Contact sent in the User-Agent header; MusicBrainz asks for a URL or email here.
 API_CONTACT = os.environ.get('API_CONTACT', '')
 
+# The local MusicBrainz mirror's web service (INFRA.md I6), e.g. http://musicbrainz:5000/ws/2/; empty for musicbrainz.org.
+# Set it only once the mirror has its data: an empty mirror would answer "not found" for everything.
+MUSICBRAINZ_BASE_URL = os.environ.get('MUSICBRAINZ_BASE_URL', '')
+
 # Essentia's model graphs (enrichment/essentia_models.sha256); the server image has them in /app/essentia
 ESSENTIA_MODELS_DIR = Path(os.environ.get('ESSENTIA_MODELS_DIR', BASE_DIR / 'models'))
 
