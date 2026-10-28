@@ -7,6 +7,9 @@ Tasks are grouped into **waves**. Tasks in the same wave can run in parallel: th
 append to shared ones. A task lists what it depends on. Tasks marked **(you)** need George: devices, accounts or
 decisions.
 
+Server and cluster work (the move to the new node, the nightly failures, local MusicBrainz and Discogs) is planned
+separately in [INFRA.md](INFRA.md), with the same rules.
+
 ## Rules for every agent
 
 - **Start from a clean commit** on a branch named after the task (`b12-edges-mix`). Work in your own worktree.

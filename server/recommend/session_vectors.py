@@ -7,6 +7,7 @@ import logging
 import numpy as np
 from django.db import transaction
 
+from catalogue.deletions import still_there
 from history.sessions import session_sequences
 from recommend.models import TrackVector
 
@@ -40,8 +41,9 @@ def build_track_vectors():
     ids, vectors, counts = train_vectors()
     with transaction.atomic():
         TrackVector.objects.all().delete()
+        there = still_there(ids)
         TrackVector.objects.bulk_create(
-            (TrackVector(track_id=t, vector=v.tolist(), sessions=c) for t, v, c in zip(ids, vectors, counts)), batch_size=2000
+            (TrackVector(track_id=t, vector=v.tolist(), sessions=c) for t, v, c in zip(ids, vectors, counts) if t in there), batch_size=2000
         )
     logger.info("Session vectors for %d tracks", len(ids))
     return len(ids)

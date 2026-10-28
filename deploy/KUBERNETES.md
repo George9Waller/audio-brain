@@ -126,7 +126,7 @@ skipped as a CRD). Everything that changes is in [helm/values.yaml](../helm/valu
 | `pvc.yaml` | `audio-brain-data` (5 Gi), `audio-brain-postgres` (10 Gi), `audio-brain-backups` (10 Gi); all marked `Delete=false` for Argo and `resource-policy: keep` for Helm |
 | `postgres.yaml` | StatefulSet `audio-brain-postgres` on `pgvector/pgvector:pg18`, mounted at `/var/lib/postgresql`, `shared_buffers=256MB`, `pg_isready` probe |
 | `api.yaml` | Deployment `audio-brain-api` + NodePort Service on **30800**. An initContainer waits for Postgres and runs `migrate`. TCP probes. Data volume at `/app/server/models` |
-| `worker.yaml` | Deployment `audio-brain-worker`, `Recreate`, **`replicas: 0` until the cut-over** |
+| `worker.yaml` | Deployment `audio-brain-worker`, `Recreate`, **`replicas: 0` until the cut-over**. With `worker.perLane`, one per lane instead (`audio-brain-worker-main`, `-lookups`, `-sync`, each `run_jobs --lane <lane>`), all on the data PVC's node |
 | `backup.yaml` | CronJob at 00:15: `pg_dump -Fc` into the backups volume, keeping 7 days |
 
 Pods have their own selectors (`app: audio-brain-api` and so on), unlike daily-planner where the worker shares the

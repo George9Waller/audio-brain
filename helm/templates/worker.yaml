@@ -1,33 +1,48 @@
+{{- /*
+One worker running every lane, or with worker.perLane one Deployment per lane (`run_jobs --lane <lane>`), so one
+lane's memory can't kill another's runs and each has its own limit. Every worker must be on the node with the data
+PVC (RWO), which they share with the API, as they do the rate-limit flock files in RATE_LIMIT_DIR.
+*/ -}}
+{{- $workers := list (dict "name" (printf "%s-worker" .Values.appName) "lanes" list "resources" .Values.worker.resources) }}
+{{- if .Values.worker.perLane }}
+{{- $workers = list }}
+{{- range $lane, $config := .Values.worker.lanes }}
+{{- $workers = append $workers (dict "name" (printf "%s-worker-%s" $.Values.appName $lane) "lanes" (list $lane) "resources" $config.resources) }}
+{{- end }}
+{{- end }}
+{{- range $worker := $workers }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ .Values.appName }}-worker
+  name: {{ $worker.name }}
   labels:
-    {{- include "audio-brain.labels" . | nindent 4 }}
+    {{- include "audio-brain.labels" $ | nindent 4 }}
 spec:
-  replicas: {{ .Values.worker.replicas }}
+  replicas: {{ $.Values.worker.replicas }}
   strategy:
     type: Recreate  # the old worker stops before the new one starts, so no job runs twice
   selector:
     matchLabels:
-      app: {{ .Values.appName }}-worker
+      app: {{ $worker.name }}
   template:
     metadata:
       labels:
-        app: {{ .Values.appName }}-worker
+        app: {{ $worker.name }}
       annotations:
-        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
     spec:
-      {{- include "audio-brain.podSpec" . | nindent 6 }}
+      {{- include "audio-brain.podSpec" $ | nindent 6 }}
       terminationGracePeriodSeconds: 60
       containers:
         - name: worker
-          image: {{ include "audio-brain.image" . }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["python", "manage.py", "run_jobs"]
-          {{- include "audio-brain.env" . | nindent 10 }}
+          image: {{ include "audio-brain.image" $ }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command: ["python", "manage.py", "run_jobs"{{ range $worker.lanes }}, "--lane", {{ . | quote }}{{ end }}]
+          {{- include "audio-brain.env" $ | nindent 10 }}
           resources:
-            {{- toYaml .Values.worker.resources | nindent 12 }}
+            {{- toYaml $worker.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /app/server/models
+{{- end }}

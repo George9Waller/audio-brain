@@ -9,8 +9,8 @@ from ninja import Router, Schema
 from ninja.errors import HttpError
 
 from jobs.models import JobRun, WorkerStatus
-from jobs.registry import JOBS, steps_for
-from jobs.runner import STALE, next_due, queue
+from jobs.registry import JOBS, LANES, steps_for
+from jobs.runner import lane_alive, next_due, queue
 
 router = Router(tags=["jobs"])
 
@@ -64,8 +64,13 @@ class Worker(Schema):
     host: str
 
 
+class LaneWorker(Worker):
+    lane: str
+
+
 class JobsOut(Schema):
-    worker: Worker
+    worker: Worker  # every lane together: alive and scheduling only if all of them are
+    workers: list[LaneWorker]  # one per lane
     jobs: list[JobOut]
 
 
@@ -87,17 +92,32 @@ def detail(run):
     return {**summary(run), "options": run.options, "steps": run.steps, "log": run.log, "error": run.error}
 
 
-def worker():
-    status = WorkerStatus.objects.filter(pk=1).first()
-    if status is None:
-        return {"alive": False, "scheduling": False, "seen_at": None, "started_at": None, "host": ""}
-    alive = (timezone.now() - status.seen_at).total_seconds() < STALE
-    return {"alive": alive, "scheduling": status.scheduling, "seen_at": status.seen_at, "started_at": status.started_at, "host": status.host}
+def workers():
+    statuses = {s.lane: s for s in WorkerStatus.objects.all()}
+    out = []
+    for lane in LANES:
+        status = statuses.get(lane)
+        if status is None:
+            out.append({"lane": lane, "alive": False, "scheduling": False, "seen_at": None, "started_at": None, "host": ""})
+        else:
+            out.append({"lane": lane, "alive": lane_alive(status), "scheduling": status.scheduling, "seen_at": status.seen_at, "started_at": status.started_at, "host": status.host})
+    return out
+
+
+def overall(lanes):
+    seen = [w["seen_at"] for w in lanes if w["seen_at"]]
+    started = [w["started_at"] for w in lanes if w["started_at"]]
+    return {
+        "alive": all(w["alive"] for w in lanes), "scheduling": all(w["scheduling"] for w in lanes),
+        "seen_at": min(seen) if len(seen) == len(lanes) else None, "started_at": min(started) if started else None,
+        "host": ", ".join(sorted({w["host"] for w in lanes if w["host"]})),
+    }
 
 
 @router.get("/jobs", response=JobsOut)
 def list_jobs(request):
-    status = WorkerStatus.objects.filter(pk=1).first()
+    lanes = workers()
+    started = {w["lane"]: w["started_at"] for w in lanes}
     jobs = []
     for job in JOBS.values():
         runs = JobRun.objects.filter(job=job.key)
@@ -105,12 +125,12 @@ def list_jobs(request):
         jobs.append({
             "key": job.key, "title": job.title, "description": job.description,
             "schedule": job.schedule.describe() if job.schedule else None, "lane": job.lane, "options": job.options,
-            "next_due": next_due(job, since=status.started_at if status else None),
+            "next_due": next_due(job, since=started[job.lane]),
             "active_run": summary(runs.filter(state__in=[JobRun.QUEUED, JobRun.RUNNING]).first()),
             "last_run": summary(runs.filter(state__in=[JobRun.SUCCEEDED, JobRun.FAILED]).first()),
             "last_success_at": last_success,
         })
-    return {"worker": worker(), "jobs": jobs}
+    return {"worker": overall(lanes), "workers": lanes, "jobs": jobs}
 
 
 @router.post("/jobs/{key}/run", response=RunDetail)

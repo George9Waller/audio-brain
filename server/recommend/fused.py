@@ -6,6 +6,7 @@ import numpy as np
 from django.db import transaction
 from sklearn.decomposition import PCA
 
+from catalogue.deletions import still_there
 from catalogue.models import AudioFeatures
 from catalogue.vectors import rows_with_arrays
 from recommend.models import FusedVector, TrackVector
@@ -34,7 +35,8 @@ def build_fused_vectors():
         rows.append(FusedVector(track_id=track_id, vector=(vector / (np.linalg.norm(vector) or 1)).tolist(), has_session=track_id in sessions))
     with transaction.atomic():
         FusedVector.objects.all().delete()
-        FusedVector.objects.bulk_create(rows, batch_size=2000)
+        there = still_there(r.track_id for r in rows)
+        FusedVector.objects.bulk_create([r for r in rows if r.track_id in there], batch_size=2000)
     logger.info("Fused vectors for %d tracks (%d with listening history)", len(rows), len(sessions))
     return len(rows)
 
