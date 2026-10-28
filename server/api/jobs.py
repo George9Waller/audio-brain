@@ -15,11 +15,28 @@ from jobs.runner import lane_alive, next_due, queue
 router = Router(tags=["jobs"])
 
 
+class ClientUsage(Schema):
+    requests: int
+    busy: int  # 429s and 503s
+    waited: int  # seconds spent waiting for a turn
+
+
+class CatalogueSize(Schema):
+    tracks: int
+    analysed: int
+    highest_id: int
+
+
 class Step(Schema):
     name: str
     state: str  # pending, running, ok, failed
     seconds: int | None = None
     result: str | None = None
+    peak_mb: int | None = None  # the worker's peak resident memory during the step
+    peak_since_start: bool = False  # the peak couldn't be reset, so it's the worker's since it started
+    peak_shared_with: list[str] = []  # other jobs running in the same worker at the time, whose memory is in the peak
+    clients: dict[str, ClientUsage] = {}  # service -> its requests and waits during the step
+    catalogue: CatalogueSize | None = None  # on the first step that holds the tracks (the models steps)
 
 
 class RunSummary(Schema):

@@ -123,6 +123,12 @@ anyway. Only if it still fails afterwards:
 - *Files:* `jobs/runner.py`, `clients/base.py`, the enrich command.
 - *Done when:* a run's detail (`/runs/{id}`) shows each step's peak memory, and enrichment's log has per-client
   totals.
+- *Built 28 Oct:* every step, not only enrichment's, records in its JSON (and so in `/runs/{id}`) `peak_mb`, and
+  `clients`: per service, `requests`, `busy` and `waited` seconds, also logged after the step as above. Counts are
+  per thread, so another lane's job in the same process doesn't mix in; peak memory is per process, so a step lists
+  in `peak_shared_with` any other job running in its worker (none since I6b's per-lane pods, except locally).
+  `peak_since_start` marks a peak that couldn't be reset (macOS). The first step that holds the tracks records
+  `catalogue`: tracks, analysed tracks and the highest track ID. The measuring is `jobs/memory.py`.
 
 **I4. Requeue a run the worker died during.**
 - *Why:* after a death at 03:09 the models job waits a whole day, and mixes are built on stale models.
@@ -474,7 +480,7 @@ Checked 28 Oct with `kubectl` from the Mac. Both nodes run k3s v1.36.5. Updated 
 - [ ] I0 SQL tool password: diagnosed (pod predates the key); resolves with I5's fresh API pod
 - [x] I1 Cluster access and new node facts (28 Oct; SSH keys from the Mac still optional)
 - [x] I2 Merges vs models lock (28 Oct; check a night that overlaps after deploy)
-- [ ] I3 Memory and rate-limit measurement
+- [x] I3 Memory and rate-limit measurement (28 Oct; read the first night's peaks for I5's limits)
 - [x] I4 Requeue after a worker death (28 Oct)
 - [x] I5a Rate-limit lanes in the database (28 Oct)
 - [x] I5 Move to the new node (moved 28 Oct; old claims kept until a good night, then runbook step 8)

@@ -12,12 +12,17 @@ ignore the pacing (the first retry goes at once) and hide five requests behind e
 that carries a `Retry-After` even when 503 isn't in its list, and MusicBrainz sends `Retry-After: 0`, so that is
 switched off too. They back off exponentially
 (or for as long as `Retry-After` asks, if longer) and push the lane back, so the other processes wait too.
+
+Every client counts its requests, busy answers and seconds spent waiting for its turn, per service and per thread
+(`usage`), so the job runner can say where each step's time went: how much of enrichment is MusicBrainz waiting, and
+how much Discogs or Tidal (INFRA.md I3). Per thread, because each lane's job runs in a thread of its own.
 """
 
 import logging
 import os
 import threading
 import time
+from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 
 import requests
@@ -33,6 +38,7 @@ BUSY = (429, 503)
 
 class APIClient:
     base_url: str
+    name = ""  # the service, in the counts of requests and waits; the shared lane's name or the class's by default
     min_interval = 0.0  # seconds between requests, for APIs with a rate limit
     shared_lane = ""  # name of a machine-wide lane, for APIs whose limit is per IP address
     busy_retries = 8  # shared-lane clients: retries after a 429 or 503
@@ -49,6 +55,7 @@ class APIClient:
         self.session.headers["User-Agent"] = f"audio-brain/0.1 ( {settings.API_CONTACT} )" if settings.API_CONTACT else "audio-brain/0.1"
         self.last_request = 0.0
         self.lane = SharedLane(self.shared_lane, self.min_interval) if self.shared_lane else None
+        self.name = self.name or self.shared_lane or type(self).__name__.removesuffix("Client").lower()
 
     def get(self, path="", **params):
         response = self.get_response(path, **params)
@@ -58,10 +65,10 @@ class APIClient:
     def get_response(self, path="", **params):
         if not self.lane:
             self.wait()
-            return self.session.get(f"{self.base_url}{path}", params=params, timeout=30)
+            return self.counted(self.session.get(f"{self.base_url}{path}", params=params, timeout=30))
         for attempt in range(self.busy_retries + 1):
-            self.lane.wait()
-            response = self.session.get(f"{self.base_url}{path}", params=params, timeout=30)
+            self.wait()
+            response = self.counted(self.session.get(f"{self.base_url}{path}", params=params, timeout=30))
             if response.status_code not in BUSY or attempt == self.busy_retries:
                 return response
             pause = max(retry_after(response), min(self.busy_backoff * 2**attempt, self.busy_backoff_max))
@@ -71,13 +78,58 @@ class APIClient:
 
     def wait(self):
         """Hold off until min_interval has passed since the last request started (on the shared lane, if there is one)."""
+        started = time.monotonic()
         if self.lane:
             self.lane.wait()
-            return
-        delay = self.last_request + self.min_interval - time.monotonic()
-        if delay > 0:
-            time.sleep(delay)
-        self.last_request = time.monotonic()
+        else:
+            delay = self.last_request + self.min_interval - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            self.last_request = time.monotonic()
+        usage()[self.name].waited += time.monotonic() - started
+
+    def counted(self, response):
+        counts = usage()[self.name]
+        counts.requests += 1
+        counts.busy += response.status_code in BUSY
+        return response
+
+
+@dataclass
+class Usage:
+    requests: int = 0
+    busy: int = 0  # 429s and 503s
+    waited: float = 0.0  # seconds spent waiting for a turn, pacing and back-offs both
+
+    def describe(self, name):
+        return f"{name}: {self.requests:,} requests, {self.busy:,} busy, {duration(self.waited)} waiting"
+
+
+class UsageCounts(dict):
+    def __missing__(self, name):
+        self[name] = Usage()
+        return self[name]
+
+
+counts = threading.local()
+
+
+def usage():
+    """This thread's counts since `reset_usage`: service name -> Usage."""
+    if not hasattr(counts, "by_service"):
+        counts.by_service = UsageCounts()
+    return counts.by_service
+
+
+def reset_usage():
+    counts.by_service = UsageCounts()
+
+
+def duration(seconds):
+    """4h12m, 12m05s or 40s."""
+    minutes, seconds = divmod(round(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02}m" if hours else f"{minutes}m{seconds:02}s" if minutes else f"{seconds}s"
 
 
 class SharedLane:
