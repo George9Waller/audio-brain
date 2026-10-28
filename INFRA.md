@@ -232,6 +232,19 @@ How the new node is kept for the heavy work:
   them; postgres settings as `-c` args and a 512 Mi `/dev/shm`; thread caps per pod. Backups keep their 10 Gi claim
   on the old node: local-path doesn't enforce the size. The steps are `deploy/KUBERNETES.md`, "Moving to another
   node". The PR merges with `paused: true`: merging is step 2.
+- *Moved 28 Oct, 22:20–22:45,* by the runbook, in about 25 minutes of downtime. What happened:
+  - The taint test passed on both StorageClasses. The sync pruned the old single worker, so no manual delete.
+  - The dump was 666 MB (`-Fc` compresses; the database is about 1.2 GB on disk), restored with
+    `--no-privileges`, with matching track counts. The data volume was copied by tar.
+  - After unpausing: api, `worker-main`, `worker-sync` and postgres on the new node; `worker-lookups` and mcp on the
+    old one; `/health` shows all three lanes alive.
+  - The app over Tailscale still reaches the API through the old node: k3s opens a NodePort on every node and
+    forwards to the pod on the other (`externalTrafficPolicy: Cluster`), in about 35 ms. The MCP reaches the API by
+    Service name across the nodes. The old node is still the only way in from the tailnet, though: I12.
+  - Kept for rollback until a good night: the old `data` and `postgres` claims (`legacyClaims`), and
+    `~/audio-brain-move.dump` and `~/audio-brain-data.tar` on the Mac.
+- *Still to do:* check the MCP `sql` tool (I0); after the first night, read the runs and step peaks (I3), then, with
+  George's go-ahead, drop `legacyClaims`, delete the two old claims and the Mac copies (runbook step 8).
 - *Done when:* every nightly job succeeds two nights running on the new node, the step peaks (I3) are under 70% of
   their limits, nothing but audio-brain runs on the new node, and the MCP `sql` tool answers (I0).
 
@@ -369,6 +382,31 @@ How the new node is kept for the heavy work:
   beside Tidal's similar tracks, compared with a backtest.
 - Each of these is a model or list change, so BACKLOG.md's backtest rule applies.
 
+**I12. Tailscale Kubernetes operator, so the tailnet doesn't depend on the old node.**
+- *Why:* since I5 the API runs on the new node, but the tailnet reaches it only through the old node's Tailscale
+  (its NodePort, forwarded across). If the old node is down, the app and the MCP lose the API though it's still
+  running. The MCP's Funnel is also tied to the old node's host Tailscale, which is why the MCP pod stays there.
+- *What:*
+  - **(you)** an OAuth client in the Tailscale admin console (scopes `devices:core` and `auth_keys`, tag
+    `tag:k8s-operator`, owning `tag:k8s`; check the operator's docs for the current scopes), with the tags added
+    to the tailnet policy file; its ID and secret go in AWS
+    Secrets Manager, synced as a Secret by external-secrets like the others.
+  - The operator's Helm chart (`tailscale/tailscale-operator`) as its own Argo CD app in the `George9Waller/helm`
+    app-of-apps, in a `tailscale` namespace.
+  - The API Service annotated `tailscale.com/expose: "true"` and `tailscale.com/hostname: audio-brain-api` (values in
+    the chart, off by default). The operator runs a small proxy pod (about 50 MB), and the API answers as
+    `audio-brain-api.<tailnet>.ts.net` from whichever node it's on. `ALLOWED_HOSTS` already allows `.ts.net`.
+  - The MCP behind a Tailscale Ingress with `tailscale.com/funnel: "true"`, which replaces the host Funnel. Its public
+    URL changes, so `MCP_PUBLIC_URL` in the AWS secret and the claude.ai connector change with it, and every OAuth
+    token has to be issued again. The MCP pod is then free to run on either node: its only tie is its 100 Mi claim
+    on the old node, so leave it there unless that node goes.
+  - The app: the new API name in its settings (the emulator's IP entry in `ALLOWED_HOSTS` stays until it's moved too).
+  - Keep the NodePorts until the app and the connector have moved, then drop the host Funnel and the NodePorts.
+- *Alternative, if the operator is too much:* join the new node to the tailnet as a second way in. That needs no
+  cluster change, but the app has to try both names.
+- *Done when:* with the old node's Tailscale stopped (`sudo tailscale down` there, briefly), the app and the claude.ai
+  connector still work.
+
 ---
 
 ## Order
@@ -377,28 +415,30 @@ How the new node is kept for the heavy work:
 2. I5a, then I5 once I1's facts are in, ideally after a night of I3's numbers, so the limits are measured rather
    than guessed. I5 needn't wait for I5a: the `lookups` lane moves to the old node when it lands. I5 turns on I6b.
 3. I6 (a mirror without search) and I7 in parallel.
-4. I8, I9 and I10 in parallel; I11 after I6.
+4. I8, I9 and I10 in parallel; I11 after I6. I12 whenever: it's independent of the rest.
 
 ## Cluster facts
 
 (Filled in by I1. Placeholders only: this repo is public.)
 
-Checked 28 Oct with `kubectl` from the Mac. Both nodes run k3s v1.36.5, untainted.
+Checked 28 Oct with `kubectl` from the Mac. Both nodes run k3s v1.36.5. Updated after the move (I5), 28 Oct evening.
 
 - Old node: Lenovo Tiny, 8 GB, 4 CPUs, `<node>`; control plane. Its root volume was 57 GiB of a 128 GB drive; George
   extended it to the whole volume group (116 GiB, none left free) on 28 Oct, and `local-path` volumes, which live on
-  the root filesystem, get the room. Runs the MCP (Tailscale Funnel) and, for now, api, worker and postgres. Memory in
-  use was 83% (6.5 GiB) at idle, 28 Oct evening; audio-brain's three pods were about 3.7 GiB of it.
+  the root filesystem, get the room. Label `size=small`, untainted. Runs the MCP (Tailscale Funnel), the `lookups`
+  lane, the backup CronJob and every other app. Before the move memory in use was 83% (6.5 GiB) at idle, of which
+  audio-brain's api, worker and postgres were about 3.7 GiB. It's the only node on the tailnet (I12).
 - New node: `<new-node>`, joined 27 Oct. 32 GB, Intel Core i5-10500T (6 cores, 12 threads, 2.3 GHz), 231 GiB
-  root disk, plus a separate NVMe partition at `/mnt/data` (234 GB, 222 GB free on 28 Oct). It has the label
-  `size=large`, which a `nodeSelector` can use without naming the host.
+  root disk, plus a separate NVMe partition at `/mnt/data` (234 GB, 222 GB free on 28 Oct). Label `size=large`, and
+  tainted `size=large:NoSchedule` since 28 Oct, so only pods with the toleration run there: audio-brain's api,
+  `main` and `sync` lanes and postgres. Not on the tailnet.
 - StorageClasses:
-  - `local-path` (default): every audio-brain volume is on it, so all of them are pinned to the old node: postgres
-    10 Gi, backups 10 Gi, data 5 Gi, mcp 100 Mi. It can't expand volumes (nor does it enforce their size), so moving
-    postgres to the new node means a new volume and a dump and restore, not a resize. It provisions on any node.
+  - `local-path` (default): provisions on any node, under its root disk. It can't expand volumes (nor does it
+    enforce their size). On the old node: backups 10 Gi, mcp 100 Mi, and the pre-move data 5 Gi and postgres 10 Gi
+    (unused, kept for rollback). On the new node: `data-root` 10 Gi (models, HF cache).
   - `data-nvme` (added 27 Oct): provisioner `rancher.io/local-path-data` (in the `local-path-data` namespace),
     which writes only to `/mnt/data/k3s-storage` on the new node, with `WaitForFirstConsumer` and expansion allowed.
-    I5's postgres volume belongs here.
+    Holds `postgres-nvme` (80 Gi).
 - Room for I6: postgres's 80 Gi and the mirror's 100 Gi leave about 40 GB of `/mnt/data`. The new node's root disk
   (256 GB, about 200 GB unused) takes the `data` volume and anything else that doesn't need the NVMe: the default
   `local-path` class provisions on every node, under `/var/lib/rancher/k3s/storage`.
@@ -416,11 +456,12 @@ Checked 28 Oct with `kubectl` from the Mac. Both nodes run k3s v1.36.5, untainte
 - [ ] I3 Memory and rate-limit measurement
 - [x] I4 Requeue after a worker death (28 Oct)
 - [x] I5a Rate-limit lanes in the database (28 Oct)
-- [ ] I5 Move to the new node (chart and runbook built 28 Oct; the move is next, by the runbook)
-- [x] I6b Worker per lane (28 Oct; `worker.perLane` off until I5)
+- [x] I5 Move to the new node (moved 28 Oct; old claims kept until a good night, then runbook step 8)
+- [x] I6b Worker per lane (28 Oct; on since I5)
 - [ ] I6 MusicBrainz mirror (decided 28 Oct: without search; searches go to the public API)
 - [ ] I7 Discogs dumps
 - [ ] I8 Scheduled backtests
 - [ ] I9 Health view and MCP tool
 - [ ] I10 Off-box backups
 - [ ] I11 More from the faster pipeline
+- [ ] I12 Tailscale operator, so the tailnet doesn't depend on the old node
