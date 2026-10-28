@@ -21,7 +21,7 @@ metadata:
   labels:
     {{- include "audio-brain.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  replicas: {{ if .Values.paused }}0{{ else }}1{{ end }}
   selector:
     matchLabels:
       app: {{ .Values.appName }}-api
@@ -32,7 +32,7 @@ spec:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
-      {{- include "audio-brain.podSpec" . | nindent 6 }}
+      {{- include "audio-brain.podSpec" (dict "root" . "node" .Values.api.node "data" true) | nindent 6 }}
       initContainers:
         # migrations run here rather than in a pre-sync hook, which on the first sync would start before Postgres
         - name: migrate
@@ -51,6 +51,8 @@ spec:
             - name: http
               containerPort: 8000
           {{- include "audio-brain.env" . | nindent 10 }}
+          env:
+            {{- include "audio-brain.threads" .Values.api.threads | nindent 12 }}
           # TCP, because /api/v1/health needs the bearer token
           startupProbe:
             tcpSocket:

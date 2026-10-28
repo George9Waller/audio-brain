@@ -1,4 +1,10 @@
-{{- $claims := list (dict "name" "data" "storage" .Values.data.storage) (dict "name" "postgres" "storage" .Values.postgresql.storage) }}
+{{- /* local-path volumes stay on the node they were made on, so a volume moving node gets a new claim name. The
+old claims stay listed in legacyClaims, so Argo CD's pruning can't delete them (local-path would delete the data with
+them); they're dropped from there, and deleted by hand, once the move is confirmed */ -}}
+{{- $claims := list (dict "name" .Values.data.claim "storage" .Values.data.storage "class" .Values.data.storageClass) (dict "name" .Values.postgresql.claim "storage" .Values.postgresql.storage "class" .Values.postgresql.storageClass) }}
+{{- range .Values.legacyClaims }}
+{{- $claims = append $claims (dict "name" .name "storage" .storage) }}
+{{- end }}
 {{- if .Values.backup.enabled }}
 {{- $claims = append $claims (dict "name" "backups" "storage" .Values.backup.storage) }}
 {{- end }}
@@ -15,9 +21,12 @@ metadata:
     {{- include "audio-brain.labels" $ | nindent 4 }}
   annotations:
     # never deleted by a sync or an uninstall: this is the database and the trained models
-    argocd.argoproj.io/sync-options: Delete=false
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
     helm.sh/resource-policy: keep
 spec:
+  {{- with .class }}
+  storageClassName: {{ . }}
+  {{- end }}
   accessModes:
     - ReadWriteOnce
   resources:
