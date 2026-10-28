@@ -137,22 +137,79 @@ anyway. Only if it still fails afterwards:
 
 ## Wave 1: move to the new node (needs I1; I2 first is safer)
 
-**I5. Run audio-brain on the 32 GB node, with room to grow.**
-- *Plan to agree with George first:* api, worker and postgres move to the new node. The MCP pod stays where Tailscale
-  Funnel serves it, since `helm/templates/mcp.yaml` already has a `nodeSelector`. It reaches the API by service
-  name, so that works across nodes. Argo CD syncs from the `George9Waller/helm` app-of-apps: find out whether values
-  are overridden there or only here.
+### The layout (agreed with George, 28 Oct)
+
+Each node has one job. The **new node** does heavy compute and holds the big data, and is kept clear of everything
+else, so models, the ranker, backtests and experiments get as much of its RAM and CPU as possible. The **old node**
+runs what's always on, light and indifferent to slow cores, and is where future small projects go by default.
+
+| New node (32 GB, 12 threads), tainted | Memory limit | Disk |
+|---|---|---|
+| worker `main` lane (models, ranker, mixes, candidates, analysis) | 12 Gi, CPU request 4 | |
+| api (loads CLAP and the scorer's catalogue for Ask and radio) | 4 Gi | |
+| worker `sync` lane (analyses the tracks it brings in) | 2 Gi | |
+| postgres: `audio_brain`, plus the `discogs` database (I7) | 4 Gi, `shared_buffers=1GB` | 80 Gi, `data-nvme` |
+| MusicBrainz mirror without search (I6): database, server, Redis | about 4 Gi | 100 Gi, `data-nvme` |
+| `data` volume (Essentia graphs, scorer, ranker, HF cache) | | 10 Gi, new node's root disk |
+| **Total** | **about 26 Gi of 31** | **180 of 222 GB NVMe** |
+
+| Old node (8 GB, 4 cores, 114 GiB root) | Memory | Disk |
+|---|---|---|
+| The other apps, Argo CD, k3s | about 2.3 GB | |
+| mcp (stays where Tailscale Funnel serves it) | 256 Mi | |
+| worker `lookups` lane (enrichment), once I5a is in | 1 Gi | |
+| backups: the dumps live on a different machine from the database | | 30 Gi |
+| **Left for future small projects** | **about 4 GB** | **about 60 GB** |
+
+Why it splits this way:
+- The api and the `main` and `sync` lanes share the `data` volume (RWO, so one node): the API reads the models the
+  `main` lane trains, and `sync` analyses with the Essentia graphs. The API runs the scorer and CLAP itself, so it
+  belongs with the heavy work anyway.
+- Postgres stays beside them. Models and the backtest clones read and write it hard, and on the old node it would put
+  that node back near 70% memory to save the new one about 4 Gi it doesn't need.
+- Enrichment's lookups are API calls and need no local files once the rate-limit lanes are in the database (I5a). It
+  mostly waits, so slow cores don't matter.
+- Postgres is kept modest on purpose: the OS file cache does most of the caching, and the kernel takes it back when
+  the worker needs memory. Raise `shared_buffers` only if I3 shows models waiting on reads.
+- Limits are ceilings. Most of the time the mirror and the `discogs` database sit idle; actual use is well under 26 Gi.
+
+How the new node is kept for the heavy work:
+- **Taint** it `size=large:NoSchedule`; audio-brain's new-node pods get the toleration and a `nodeSelector` on
+  `size=large`. Nothing else lands there unless it opts in. Before tainting, give the `local-path-data`
+  provisioner's helper pod the toleration (or it can't create volumes there); the svclb pod already running stays.
+- **CPU requests set the shares.** There are no CPU limits, so under contention CPU is shared by request: the `main`
+  lane's 4 makes it win while it runs, at no cost while it's idle. API 1, postgres 1, `sync` 0.25, `lookups` 0.1.
+- **Thread caps** (`OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `torch.set_num_threads`): `main` 8, api 2–4, the other
+  lanes 1–2.
+- **Nothing heavy in the nightly window (00:15–07:00)** except the nightly jobs: mirror replication at 12:00, the
+  Discogs import on the first Saturday of the month, backtests on Sunday at 12:00 (I8).
+- **Revise from I3:** if `main` never peaks above about 6 GB, cut its limit and the node has more spare.
+
+**I5a. Rate-limit lanes in the database.**
+- *Why:* `clients.base.SharedLane` paces Tidal, MusicBrainz and Discogs across processes with `flock`ed files under
+  `RATE_LIMIT_DIR`, which only works on one filesystem. Tidal's lane is shared by enrichment, candidates, mixes, the
+  syncs and the API's `play`, so this is what ties the `lookups` lane to the `data` volume and the new node.
+- *What:* a `ratelimit_lane` table (name, next allowed time). `wait()` locks the row (`SELECT ... FOR UPDATE`) in one
+  short transaction, reads the next slot, books the one after it and commits; it sleeps after the commit, so no lock
+  is held while sleeping. `hold_off()` is the same, pushing the time back. At about one request a second per
+  service the load is nothing. Remove `RATE_LIMIT_DIR`.
+- *Files:* `clients/base.py`, a migration, `server/settings.py`, `helm/values.yaml`.
+- *Tests:* two processes on one lane take turns and keep the interval; `hold_off` delays the other process.
+- *Done when:* tests pass and the `lookups` lane runs on the old node with Tidal still paced (no 429 bursts).
+- Not a blocker for I5: until it's in, the `lookups` lane starts on the new node and moves afterwards.
+
+**I5. Run audio-brain on the 32 GB node, as laid out above.**
+- Argo CD syncs from the `George9Waller/helm` app-of-apps: find out whether values are overridden there or only here.
 - *Chart changes (`helm/values.yaml`, templates):*
-  - a `nodeSelector` (or a `node` value) on api, worker and postgres;
-  - starting limits, to be revised from I3's numbers: worker 10 Gi (request 3 Gi), api 4 Gi (request 1.5 Gi),
-    postgres 6 Gi with `sharedBuffers: 2GB` (and `effective_cache_size`, `work_mem`, `maintenance_work_mem` passed as
-    `-c` args like `shared_buffers`);
-  - postgres storage 10 Gi → 60 Gi (the database, plus four backtest clones at 80k tracks, plus headroom), and
-    backups 10 Gi → 30 Gi;
-  - the `data` PVC (models, HF cache, rate-limit files) is RWO and shared by api and worker, so they must stay on
-    the same node: say so in a comment;
-  - thread caps for the 10th-gen i5 (6 cores if it's a desktop part; check I1's `lscpu`): `OMP_NUM_THREADS`,
-    `MKL_NUM_THREADS` and torch's threads, so models and analysis don't fight the API for cores.
+  - the `size=large` `nodeSelector` and toleration on api, the `main` and `sync` lanes and postgres; the `lookups`
+    lane, mcp and the backup CronJob pinned to the old node (a `nodeSelector` on its hostname label, as mcp has);
+  - `worker.perLane: true` (I6b), with the limits, CPU requests and thread caps in the tables above;
+  - postgres: the limits above, with `effective_cache_size=8GB`, `work_mem` and `maintenance_work_mem` passed as `-c`
+    args like `shared_buffers`; storage 80 Gi on `data-nvme` (the database, four backtest clones at about 3 GB each
+    at 80k tracks, the `discogs` database, headroom);
+  - backups 10 Gi → 30 Gi, on the old node's `local-path`;
+  - the `data` PVC at 10 Gi on a StorageClass for the new node's root disk (none exists yet: add one with the
+    `local-path-data` provisioner or a second path for it), with a comment that api, `main` and `sync` share it.
 - *Data move* (with `local-path`, volumes can't follow a pod; write this as a runbook in `deploy/KUBERNETES.md`):
   1. Pick a quiet time (after 10:00 and before 00:15, when no nightly job runs). Scale the worker to 0.
   2. Take a fresh `pg_dump -Fc` and copy it, and the `data` volume's `models/` (Essentia graphs, scorer, ranker), to
@@ -163,7 +220,7 @@ anyway. Only if it still fails afterwards:
      `/health` and `/jobs`, then scale the worker to 1.
   5. Rollback: the old PVCs and the dump are kept until a full night's run succeeds on the new node.
 - *Done when:* every nightly job succeeds two nights running on the new node, the step peaks (I3) are under 70% of
-  their limits, and the MCP `sql` tool answers (I0).
+  their limits, nothing but audio-brain runs on the new node, and the MCP `sql` tool answers (I0).
 
 **I6b. Split the worker by lane (optional, after I5).**
 - *Why:* one lane's memory spike shouldn't kill the others' runs, and limits can be set per lane.
@@ -181,30 +238,37 @@ anyway. Only if it still fails afterwards:
 
 ---
 
-## Wave 2: local copies of the rate-limited sources (I6 needs I1's decision; I7 is independent)
+## Wave 2: local copies of the rate-limited sources (after I5; I6 and I7 are independent)
 
 **I6. A local MusicBrainz mirror.**
 - *Why:* MusicBrainz's one request a second (and its 503s) is most of enrichment's 2–17 hours, and it's what makes
   enrichment overlap everything else. A local copy has no limit, so the identity stage can run in parallel and finish
   in minutes.
-- *Decision (you), after I3's numbers:*
-  - **A. Full mirror (recommended if the disk allows):** MetaBrainz's `musicbrainz-docker` stack (server in mirror
-    mode, its Postgres, Solr search and indexer, RabbitMQ, Redis), replicating hourly. It serves the same `/ws/2/` API,
-    search included, so audio-brain only changes its base URL. It needs a free MetaBrainz replication token
-    (non-commercial). Check the current RAM and disk requirements in its README before committing. With search
-    indexes it's large: likely hundreds of GB of disk and several GB of RAM, so verify the real figures.
-  - **B. Database only:** load the MusicBrainz database dump (no web server, no Solr) and query it directly: ISRC →
-    recording through `isrc`, name matching with `pg_trgm` on `recording` and `artist_credit`. Much smaller, but
-    `clients/musicbrainz.py`'s five methods need SQL rewrites, and search scoring has to be rebuilt.
-- *Deployment (A):* its own Argo CD app and namespace, with its PVCs on whichever node has the disk; reached as
-  `http://musicbrainz.musicbrainz.svc:5000/ws/2/` or similar. The initial import takes hours: run it, and the first
-  indexing, as a one-off.
+- *Decided 28 Oct: a mirror without search.* `musicbrainz-docker`'s README asks for 16 threads, 16 GB RAM and 350 GB
+  disk with indexed search, or 2 threads, 4 GB and 100 GB without. Search would take half the new node's RAM for
+  good, and audio-brain barely needs it:
+  - Plain lookups, which the mirror serves from its database: `recordings_by_isrc` (`isrc/{isrc}`, the identity
+    stage's first try), `recording/{mbid}`, `artist/{mbid}` and the `release?artist=` browse.
+  - Search (`query=`), which needs Solr: `search_recordings` (the fallback when the ISRC finds nothing) and
+    `recordings(batch)`, which fetches by ID through a `rid:` query and can become plain lookups.
+  - So: the mirror without Solr, the indexer or RabbitMQ (database, MusicBrainz server, Redis), and searches go to
+    the public API at its one request a second. They're the tracks the ISRC misses, a small share of each night's.
+  - The README doesn't say outright that lookups work without search: check it on the first run.
+  - If the share of searches turns out large, add name matching with `pg_trgm` on the mirror's `recording` and
+    `artist_credit` tables, rather than adding Solr.
+- *Deployment:* its own Argo CD app and namespace on the new node, translated from the compose file (three services),
+  with its 100 Gi volume on `data-nvme`; reached as `http://musicbrainz.musicbrainz.svc:5000/ws/2/` or similar. It
+  needs a free MetaBrainz replication token (non-commercial), kept in the AWS secret. Replication is daily: run it at
+  12:00, outside the nightly window. The initial import takes hours: run it as a one-off.
 - *audio-brain changes:*
-  - a `MUSICBRAINZ_BASE_URL` setting (default the public one) read by `MusicBrainzClient`;
-  - when it's local: `min_interval = 0`, no `shared_lane`, and the identity stage and artist profiles look up with a
-    small thread pool (`MUSICBRAINZ_WORKERS`, say 8);
+  - a `MUSICBRAINZ_BASE_URL` setting (default the public one) read by `MusicBrainzClient`, and a second client (or
+    method routing) that sends searches to the public API;
+  - against the mirror: `min_interval = 0`, no `shared_lane`, and the identity stage and artist profiles look up with
+    a small thread pool (`MUSICBRAINZ_WORKERS`, say 8); `recordings(batch)` becomes per-ID lookups;
   - keep the public API as a fallback when the mirror is down (connection refused), at the public rate;
-  - lag: the mirror is up to an hour behind, which doesn't matter for identity.
+  - lag: the mirror is up to a day behind, which doesn't matter for identity.
+- *Why it's worth 4 GB:* enrichment goes from 2–17 hours to minutes and finishes before models starts at 03:00, so
+  the two no longer overlap. That overlap is what OOM-killed the worker, so the mirror also lowers the worker's peak.
 - *Done when:* a night's enrichment of about 6k new tracks finishes in under 30 minutes, with the same resolve rate as
   before (compare `enrichment_enrichmentattempt` status counts).
 
@@ -217,10 +281,15 @@ anyway. Only if it still fails afterwards:
     release now, and keep the same matching.
   - A `discogs_import` management command: stream-parse the releases (and masters) XML with `iterparse`, and keep only
     what's used: release ID, master ID, title, year, artists, labels and catalogue numbers, genres and styles, and
-    track titles (for matching). Write them to tables in a separate `discogs` schema, or a separate database, so
-    they never enter backtest clones (they'd add GBs to each). Check the releases dump's current size first.
-  - A monthly job (`Monthly`, or `Weekly` with a check for a new dump) downloads and loads the newest dump, then
-    swaps it in.
+    track titles (for matching).
+  - *Where (decided 28 Oct):* a separate `discogs` database in audio-brain's postgres on the new node: no second
+    server, so it shares postgres's memory, and it stays out of the backtest clones, which copy only `audio_brain`.
+    The `lookups` lane on the old node reads it over the LAN.
+  - *Size:* the 1 Oct 2026 dumps are releases 10.5 GB gzipped, masters 600 MB, artists 476 MB. Stream the gzipped
+    download straight into the parser, so nothing is staged on disk. The kept columns should come to about 15–25 GB
+    of tables and indexes (an estimate: measure it on the first import; postgres's 80 Gi allows for it).
+  - A monthly job (`Monthly`, or `Weekly` with a check for a new dump), on the first Saturday of the month, outside
+    the nightly window: downloads and loads the newest dump into new tables, then swaps them in.
   - The genres stage reads locally and falls back to the API for anything newer than the dump.
 - *Done when:* the genres stage for 6k tracks takes minutes, with a match rate at least as good as the API's.
 
@@ -238,7 +307,22 @@ anyway. Only if it still fails afterwards:
   - Store each report (it's already JSON under `server/models/backtests/multi/`) in a table as well, so the API, the
     app and the MCP can show the trend: "played rate 9.6% → 10.1% since the scorer came back".
   - Check postgres's disk (I5 sized it for four clones) and drop clones older than the refresh.
-- *Done when:* two weekly reports exist and can be compared through the API.
+  - **Score Tidal's own mixes too.** The `tidal_recommendations` job already snapshots them (My Mix, My Daily
+    Discovery, My New Arrivals). Score them with the same "played rate" in each report, so every change reads as
+    "ours versus Tidal's", not only "ours versus ours". Beating Tidal is the goal, so that's the number to watch.
+  - **Branch experiments.** Today a backtest can only run deployed code. Add a way to run a branch's image as a
+    one-off Kubernetes Job on the new node (a template in `helm/` or `deploy/`, started with `kubectl`; CI has to
+    push branch images): a low `PriorityClass` so the nightly jobs win, a small memory request with a limit of about
+    10 Gi, 4 threads, the backtest clones, and its report written to the same table. Then an idea can be tried from a
+    branch and compared with the default through the API or the MCP, without touching what's live.
+- *Compute:* the scorer and context ranker are scikit-learn boosted trees, and the taste and sequence models are
+  small torch models: on one listener's history they train in seconds to minutes on the i5. Outside 00:15–07:00 the
+  node is mostly idle, enough for well over a hundred `--reuse` variants a day, two or three side by side. What it
+  can't do quickly: re-embedding the whole catalogue with a new audio model (hours to days on CPU, a weekend
+  one-off), or fine-tuning audio models and large sequence transformers (a GPU: rent one by the hour if it comes
+  to that).
+- *Done when:* two weekly reports exist, each with Tidal's mixes scored beside ours, they can be compared through the
+  API, and one branch experiment has run as a Job.
 
 **I9. A health view of the server.**
 - *Why:* this check needed curl and guesswork. A health check should be one call.
@@ -252,7 +336,9 @@ anyway. Only if it still fails afterwards:
 - *Done when:* the MCP tool answers "how is the server doing" with the table from the top of this file.
 
 **I10. Off-box backups (part you).**
-- *Why:* backups sit on the same node as the database. The off-box copy is a manual `kubectl cp` to the Mac.
+- *Why:* backups sit on the same node as the database. The off-box copy is a manual `kubectl cp` to the Mac. After
+  I5 the dumps live on the old node and the database on the new one, which covers a disk or node failure but not
+  the house: S3 is still the off-site copy.
 - *What:*
   - **(you)** an S3 bucket with a lifecycle rule (30 days, say) and an IAM key that can only write to it, added to
     the AWS secret.
@@ -275,8 +361,9 @@ anyway. Only if it still fails afterwards:
 ## Order
 
 1. I0 and I1 (George), with I2, I3 and I4 in parallel sessions. I2 alone should stop the integrity failures.
-2. I5 once I1's facts are in, ideally after a night of I3's numbers, so the limits are measured rather than guessed.
-3. I6 (decision first) and I7 in parallel; I6b if memory still causes trouble.
+2. I5a, then I5 once I1's facts are in, ideally after a night of I3's numbers, so the limits are measured rather
+   than guessed. I5 needn't wait for I5a: the `lookups` lane moves to the old node when it lands. I5 turns on I6b.
+3. I6 (a mirror without search) and I7 in parallel.
 4. I8, I9 and I10 in parallel; I11 after I6.
 
 ## Cluster facts
@@ -285,8 +372,10 @@ anyway. Only if it still fails afterwards:
 
 Checked 28 Oct with `kubectl` from the Mac. Both nodes run k3s v1.36.5, untainted.
 
-- Old node: Lenovo Tiny, 8 GB, 4 CPUs, 57 GiB root disk, `<node>`; control plane. Runs the MCP (Tailscale Funnel)
-  and, for now, api, worker and postgres. Memory in use was 83% (6.5 GiB) at idle, 28 Oct evening.
+- Old node: Lenovo Tiny, 8 GB, 4 CPUs, `<node>`; control plane. Its root volume was 57 GiB of a 128 GB drive; George
+  extended it to the whole volume group (116 GiB, none left free) on 28 Oct, and `local-path` volumes, which live on
+  the root filesystem, get the room. Runs the MCP (Tailscale Funnel) and, for now, api, worker and postgres. Memory in
+  use was 83% (6.5 GiB) at idle, 28 Oct evening; audio-brain's three pods were about 3.7 GiB of it.
 - New node: `<new-node>`, joined 27 Oct. 32 GB, Intel Core i5-10500T (6 cores, 12 threads, 2.3 GHz), 231 GiB
   root disk, plus a separate NVMe partition at `/mnt/data` (234 GB, 222 GB free on 28 Oct). It has the label
   `size=large`, which a `nodeSelector` can use without naming the host.
@@ -297,9 +386,9 @@ Checked 28 Oct with `kubectl` from the Mac. Both nodes run k3s v1.36.5, untainte
   - `data-nvme` (added 27 Oct): provisioner `rancher.io/local-path-data` (in the `local-path-data` namespace),
     which writes only to `/mnt/data/k3s-storage` on the new node, with `WaitForFirstConsumer` and expansion allowed.
     I5's postgres volume belongs here.
-- Room for I6: after I5's 60 Gi postgres volume, `/mnt/data` has about 160 GB left. A full MusicBrainz mirror
-  with search indexes may not fit there; check its real size first (I6). The new node's root disk is the fallback,
-  but no StorageClass provisions volumes onto it yet.
+- Room for I6: postgres's 80 Gi and the mirror's 100 Gi leave about 40 GB of `/mnt/data`. The new node's root disk
+  (about 200 GB unused) takes the `data` volume and anything else that doesn't need the NVMe, once a StorageClass
+  provisions onto it (I5).
 - Access: kubectl from the Mac uses k3s's kubeconfig with `server: https://<node>:6443`. The API certificate
   covers the short host name and the old node's LAN IP, not the `<node>.<tailnet>.ts.net` name. The Mac has no SSH
   key on the nodes yet.
@@ -311,9 +400,10 @@ Checked 28 Oct with `kubectl` from the Mac. Both nodes run k3s v1.36.5, untainte
 - [x] I2 Merges vs models lock (28 Oct; check a night that overlaps after deploy)
 - [ ] I3 Memory and rate-limit measurement
 - [x] I4 Requeue after a worker death (28 Oct)
-- [ ] I5 Move to the new node
+- [ ] I5a Rate-limit lanes in the database
+- [ ] I5 Move to the new node (layout agreed 28 Oct)
 - [x] I6b Worker per lane (28 Oct; `worker.perLane` off until I5)
-- [ ] I6 MusicBrainz mirror (decision: A or B)
+- [ ] I6 MusicBrainz mirror (decided 28 Oct: without search; searches go to the public API)
 - [ ] I7 Discogs dumps
 - [ ] I8 Scheduled backtests
 - [ ] I9 Health view and MCP tool
