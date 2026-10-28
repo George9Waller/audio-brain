@@ -1,3 +1,4 @@
+import threading
 from datetime import timedelta
 from unittest import mock
 
@@ -75,6 +76,38 @@ class ExecuteTests(TestCase):
             run = runner.execute(JobRun.objects.create(job="test", trigger=JobRun.CLI))
         self.assertEqual(run.state, JobRun.SUCCEEDED)
         self.assertEqual(LOCKED, [False, True, True, False])
+
+    def test_each_step_records_its_peak_memory_and_requests(self):
+        from clients.base import usage
+
+        def lookups(target, log):
+            if target == "lookups":
+                usage()["musicbrainz"].requests += 3
+                usage()["musicbrainz"].busy += 1
+                usage()["musicbrainz"].waited += 4000.4
+
+        Track.objects.create(name="Archangel", artist=Artist.objects.create(name="Burial"))
+        steps = [("Lookups", "lookups"), ("Models", "models")]
+        with mock.patch.dict(JOBS, {"test": job("test", steps=steps)}), mock.patch.object(runner, "HOLDS_TRACKS", {"models"}), \
+                mock.patch.object(runner, "call", side_effect=lookups), self.assertLogs(runner.logger) as logs:
+            run = runner.execute(JobRun.objects.create(job="test", trigger=JobRun.CLI))
+        first, second = run.steps
+        self.assertGreater(first["peak_mb"], 0)
+        self.assertEqual(first["clients"], {"musicbrainz": {"requests": 3, "busy": 1, "waited": 4000}})
+        self.assertNotIn("clients", second)  # counted afresh for each step
+        self.assertNotIn("catalogue", first)
+        self.assertEqual(second["catalogue"]["tracks"], 1)
+        self.assertIn("musicbrainz: 3 requests, 1 busy, 1h06m waiting", "\n".join(logs.output))
+
+    def test_a_peak_shared_with_another_lane_says_so(self):
+        other = threading.Thread(target=threading.Event().wait, args=(1,), name="job-mixes", daemon=True)
+        other.start()
+        with mock.patch.dict(JOBS, {"test": job("test", steps=[("Step", "step")]), "mixes": job("mixes")}), \
+                mock.patch.object(runner, "call"), mock.patch.object(runner, "reset_peak", return_value=False):
+            run = runner.execute(JobRun.objects.create(job="test", trigger=JobRun.CLI))
+        self.assertEqual(run.steps[0]["peak_shared_with"], ["mixes"])
+        self.assertTrue(run.steps[0]["peak_since_start"])
+        self.assertIn("for the whole worker, with mixes running too", runner.describe_peak(run.steps[0]))
 
 
 class QueueTests(TestCase):

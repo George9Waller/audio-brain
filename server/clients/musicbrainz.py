@@ -84,6 +84,7 @@ class MusicBrainzClient(APIClient):
 class MusicBrainzMirror(APIClient):
     """The local mirror: no rate limit, and no retries, so a failure falls back to musicbrainz.org at once."""
 
+    name = "musicbrainz mirror"
     min_interval = 0.0
 
     def __init__(self):

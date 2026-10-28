@@ -4,6 +4,10 @@ A worker runs every lane, one thread each, or only the lanes it's given (`run_jo
 run each lane in a pod of its own and one lane's memory can't kill another's runs. Workers on separate lanes share
 nothing but the database: each schedules and starts only its own lanes' jobs, claims a run by moving it from queued
 to running in one update, and keeps a heartbeat row per lane.
+
+Each step's record says what it cost (INFRA.md I3): its peak memory (`jobs.memory`), and for each service it called,
+its requests, busy answers and seconds spent waiting for its turn (`clients.base.usage`). The first step that holds
+the tracks also records the catalogue's size, so the models job's memory can be read against it.
 """
 
 import importlib
@@ -21,9 +25,13 @@ from datetime import timedelta
 
 from django.core.management import call_command
 from django.db import IntegrityError, close_old_connections, transaction
+from django.db.models import Max
 from django.utils import timezone
 
 from catalogue.deletions import holding_tracks
+from catalogue.models import AudioFeatures, Track
+from clients.base import reset_usage, usage
+from jobs.memory import peak_mb, reset_peak
 from jobs.models import JobRun, WorkerStatus
 from jobs.registry import HOLDS_TRACKS, JOBS, LANES, MAIN, steps_for
 
@@ -105,6 +113,11 @@ def execute(run: JobRun):
             if holding and i == holding[0]:
                 logger.info("Holding the tracks: enrichment's merges wait until %s is done", steps[holding[-1]][0].lower())
                 held.enter_context(holding_tracks())
+                step["catalogue"] = catalogue_size()
+                logger.info("Catalogue: {tracks:,} tracks, {analysed:,} analysed, highest ID {highest_id:,}".format(**step["catalogue"]))
+            others = other_jobs()
+            reset_usage()
+            measured = reset_peak()
             started = time.monotonic()
             try:
                 result = call(target, log)
@@ -116,7 +129,17 @@ def execute(run: JobRun):
                 step["state"] = "failed"
                 run.error = run.error or f"{name}\n{traceback.format_exc()}"
             step["seconds"] = round(time.monotonic() - started)
-            logger.info("%s %s (%ss)%s", "✓" if step["state"] == "ok" else "✗", name, step["seconds"], f": {step['result']}" if "result" in step else "")
+            step["peak_mb"] = peak_mb()
+            if not measured:
+                step["peak_since_start"] = True
+            if others := sorted(others | other_jobs()):
+                step["peak_shared_with"] = others
+            used = sorted((name, counts) for name, counts in usage().items() if counts.requests)
+            if used:
+                step["clients"] = {name: {"requests": c.requests, "busy": c.busy, "waited": round(c.waited)} for name, c in used}
+            logger.info("%s %s (%ss, %s)%s", "✓" if step["state"] == "ok" else "✗", name, step["seconds"], describe_peak(step), f": {step['result']}" if "result" in step else "")
+            for client, counts in used:
+                logger.info("  %s", counts.describe(client))
             if holding and i == holding[-1]:
                 held.close()
     finally:
@@ -127,6 +150,32 @@ def execute(run: JobRun):
         run.finished_at = timezone.now()
         run.save()
     return run
+
+
+def catalogue_size():
+    """How big the catalogue is, which is what the models job's memory grows with: some arrays are sized by the
+    highest track ID rather than the count."""
+    return {
+        "tracks": Track.objects.count(),
+        "analysed": AudioFeatures.objects.count(),
+        "highest_id": Track.objects.aggregate(top=Max("id"))["top"] or 0,
+    }
+
+
+def other_jobs():
+    """Titles of the other jobs running in this process (each lane's job runs in a thread named after it)."""
+    current = threading.current_thread()
+    keys = [t.name.removeprefix("job-") for t in threading.enumerate() if t is not current and t.name.startswith("job-")]
+    return {JOBS[key].title if key in JOBS else key for key in keys}
+
+
+def describe_peak(step):
+    text = f"peak {step['peak_mb']:,} MB"
+    if step.get("peak_since_start"):
+        text += " since the worker started"
+    if step.get("peak_shared_with"):
+        text += f" for the whole worker, with {', '.join(step['peak_shared_with'])} running too"
+    return text
 
 
 def active(key):

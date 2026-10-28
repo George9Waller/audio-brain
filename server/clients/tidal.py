@@ -48,7 +48,7 @@ class TidalClient(APIClient):
         """A write (POST, PATCH, DELETE) with a JSON:API body. Needs `user=True` and the playlists.write scope."""
         def request():
             self.wait()
-            return self.session.request(method, f"{self.base_url}{path}", json=payload, headers={"Content-Type": "application/vnd.api+json"}, timeout=30)
+            return self.counted(self.session.request(method, f"{self.base_url}{path}", json=payload, headers={"Content-Type": "application/vnd.api+json"}, timeout=30))
 
         response = request()
         if response.status_code == 401:

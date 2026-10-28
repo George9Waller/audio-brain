@@ -8,7 +8,7 @@ import requests
 from django.db import connections, transaction
 from django.test import SimpleTestCase, TestCase, override_settings
 
-from clients.base import SharedLane, close_lane_connection, retry_after
+from clients.base import SharedLane, close_lane_connection, duration, reset_usage, retry_after, usage
 from clients.models import RateLimitLane
 from clients.musicbrainz import MusicBrainzClient
 from clients import musicbrainz
@@ -96,6 +96,11 @@ class SharedLaneTests(TestCase):
         self.assertEqual(retry_after(response(503, {"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"})), 0)
 
 
+class UsageTests(SimpleTestCase):
+    def test_durations(self):
+        self.assertEqual([duration(40.4), duration(725), duration(15120)], ["40s", "12m05s", "4h12m"])
+
+
 @override_settings(API_CONTACT="me@example.com")
 class MusicBrainzBusyTests(SimpleTestCase):
     def setUp(self):
@@ -131,6 +136,21 @@ class MusicBrainzBusyTests(SimpleTestCase):
                 self.client.artist("x")
         self.assertEqual(get.call_count, 3)
 
+    def test_counts_requests_busy_answers_and_waits(self):
+        reset_usage()
+        self.client.lane.wait.side_effect = lambda: time.sleep(0.05)
+        answers = [response(503), response(200, body=b'{"id": "x"}')]
+        with mock.patch.object(self.client.session, "get", side_effect=answers), mock.patch.object(self.client.lane, "hold_off"):
+            self.client.artist("x")
+        counts = usage()["musicbrainz"]
+        self.assertEqual((counts.requests, counts.busy), (2, 1))
+        self.assertGreaterEqual(counts.waited, 0.1)
+        seen = []
+        other = threading.Thread(target=lambda: seen.append(usage()["musicbrainz"].requests))
+        other.start()
+        other.join()
+        self.assertEqual(seen, [0])  # each thread (each lane's job) counts its own
+
     def test_urllib3_no_longer_retries_busy_answers(self):
         retries = self.client.session.get_adapter("https://musicbrainz.org").max_retries
         self.assertNotIn(503, retries.status_forcelist)
@@ -149,6 +169,7 @@ class MusicBrainzMirrorTests(SimpleTestCase):
         self.mirror = mock.patch.object(self.client.mirror.session, "get", return_value=response(200, body=b'{"id": "x"}'))
 
     def test_lookups_go_to_the_mirror_and_searches_to_musicbrainz_org(self):
+        reset_usage()
         with self.public as public, self.mirror as mirror:
             self.assertEqual(self.client.artist("x"), {"id": "x"})
             self.client.search_recordings("Burial", "Archangel")
@@ -156,6 +177,7 @@ class MusicBrainzMirrorTests(SimpleTestCase):
         self.assertEqual(mirror.call_count, 1)
         self.assertTrue(public.call_args.args[0].startswith("https://musicbrainz.org/ws/2/recording"))
         self.client.lane.wait.assert_called_once()  # only the search waited its turn
+        self.assertEqual(usage()["musicbrainz mirror"].requests, 1)
 
     def test_a_mirror_thats_down_falls_back_for_a_while(self):
         with self.public as public, self.mirror as mirror:
