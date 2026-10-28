@@ -9,6 +9,26 @@ image:
 imagePullSecrets:
   - name: ecr-registry-secret
 
+# The two nodes (INFRA.md, "The layout"). large is the 32 GB node, kept for heavy compute and the big volumes: it's
+# tainted size=large:NoSchedule, so only pods with this toleration run there. small is the 8 GB control-plane node,
+# for what's always on and light.
+nodes:
+  large:
+    nodeSelector:
+      size: large
+    tolerations:
+      - key: size
+        operator: Equal
+        value: large
+        effect: NoSchedule
+  small:
+    nodeSelector:
+      size: small
+
+# true stops the API and every worker (replicas 0), for moving the database and the data volume between nodes
+# (deploy/KUBERNETES.md, "Moving to another node"); the MCP pod stays up and reports the API as down
+paused: true  # I5: merged paused; set false after the runbook's restore and copy
+
 # CI rewrites these lines on every build (.github/workflows/deploy.yaml); the MCP image is tagged mcp-<sha>
 env:
   IMAGE_TAG: 'cf038a63ae021d0898138f69a29bf6fa674ed49e'
@@ -35,44 +55,59 @@ config:
 
 api:
   nodePort: 30800  # reached over Tailscale at http://<node>.<tailnet>.ts.net:30800
+  node: large
+  threads: 4  # torch and numpy, for CLAP and the scorer
   # A playlist build (Ask, radio) loads the scorer's catalogue and CLAP and keeps them: about 1.9 GB, measured 20 Oct
+  # at 33k tracks. No CPU limits anywhere: under contention CPU is shared by request, so the main lane wins
   resources:
     requests:
-      cpu: 100m
-      memory: 1Gi
+      cpu: "1"
+      memory: 2Gi
     limits:
-      memory: 2560Mi
+      memory: 4Gi
 
 worker:
   replicas: 1  # 1 after the cut-over from the Mac; never more, or jobs run twice
+  # with perLane false, one worker runs every lane, with these
+  node: large
+  threads: 8
   resources:
     requests:
       cpu: 250m
       memory: 1Gi
     limits:
       memory: 3584Mi
-  # One Deployment per lane, each with its own limit (INFRA.md I6b), in place of the one above. Off until the move
-  # to the 32 GB node (I5): together these limits are more than the old node has free.
-  perLane: false
+  # One Deployment per lane, each with its own node, limit and thread cap (INFRA.md I6b), in place of the one above.
+  # data: whether it mounts the data volume, which ties it to the API's node. Limits to be revised from I3's peaks.
+  perLane: true
   lanes:
-    main:  # models, mixes, candidates and audio analysis: the big one
+    main:  # models, the ranker, mixes, candidates and audio analysis: the big one, so the largest CPU share
+      node: large
+      data: true
+      threads: 8
       resources:
         requests:
-          cpu: 250m
-          memory: 1Gi
+          cpu: "4"
+          memory: 3Gi
         limits:
-          memory: 3584Mi
-    lookups:  # enrichment: mostly waiting on rate limits
+          memory: 12Gi
+    lookups:  # enrichment: API calls, mostly waiting on rate limits, so no files and the small node
+      node: small
+      data: false
+      threads: 1
       resources:
         requests:
-          cpu: 50m
+          cpu: 100m
           memory: 256Mi
         limits:
           memory: 1Gi
     sync:  # Last.fm, favourites, Tidal's mixes, and provided tracklists, which analyse their new tracks
+      node: large
+      data: true
+      threads: 2
       resources:
         requests:
-          cpu: 50m
+          cpu: 250m
           memory: 256Mi
         limits:
           memory: 2Gi
@@ -81,19 +116,34 @@ postgresql:
   image: pgvector/pgvector:pg18
   database: audio_brain
   username: audio_brain
-  storage: 10Gi
-  sharedBuffers: 256MB
+  node: large
+  # On the new node's NVMe: the database, four backtest clones (about 3 GB each at 80k tracks), the discogs database
+  # (I7) and headroom. data-nvme can grow a volume in place; local-path can't
+  claim: postgres-nvme
+  storageClass: data-nvme
+  storage: 80Gi
+  # Kept modest: the OS file cache does most of the caching, and gives memory back when the worker needs it. Raise
+  # shared_buffers only if I3 shows models waiting on reads
+  settings:
+    shared_buffers: 1GB
+    effective_cache_size: 8GB
+    work_mem: 32MB
+    maintenance_work_mem: 512MB
+  shmSize: 512Mi
   resources:
     requests:
-      cpu: 100m
-      memory: 512Mi
+      cpu: "1"
+      memory: 1536Mi
     limits:
-      memory: 1Gi
+      memory: 4Gi
 
-# Essentia graphs, the trained scorer and context ranker and the Hugging Face cache; shared by the API and the worker
-# (RWO is fine on one node)
+# Essentia graphs, the trained scorer and context ranker and the Hugging Face cache; shared by the API and the main
+# and sync lanes, so they're on one node (RWO). The default local-path class puts it on that node's root disk,
+# keeping the NVMe for postgres and the MusicBrainz mirror
 data:
-  storage: 5Gi
+  claim: data-root
+  storageClass: local-path
+  storage: 10Gi
 
 # The Claude MCP server (MCP.md). Its secrets are the MCP_* keys of the AWS secret, MCP_PUBLIC_URL among them (the
 # Funnel URL, https://<node>.<tailnet>.ts.net), so the node's name stays out of this public repo
@@ -108,8 +158,19 @@ mcp:
     limits:
       memory: 256Mi
 
+# Claims from before the move to the new node (I5), on the old node: kept as they are, unused, so a rollback has
+# them. Remove them from here and delete them by hand only once a full night has run on the new node.
+legacyClaims:
+  - name: data
+    storage: 5Gi
+  - name: postgres
+    storage: 10Gi
+
 backup:
   enabled: true
   schedule: "15 0 * * *"  # before the nightly jobs (enrichment 01:00, models 03:00)
   keepDays: 7
+  # on the small node, so the dumps are on a different machine from the database. local-path doesn't enforce the
+  # size (and can't grow a volume), so this stays as first made: the dumps can use the root disk's free space
+  node: small
   storage: 10Gi

@@ -1,13 +1,14 @@
 {{- /*
 One worker running every lane, or with worker.perLane one Deployment per lane (`run_jobs --lane <lane>`), so one
-lane's memory can't kill another's runs and each has its own limit. Every worker must be on the node with the data
-PVC (RWO), which they share with the API. (Rate limits are paced through the database, so they don't tie a lane to it.)
+lane's memory can't kill another's runs and each has its own limit. A worker that mounts the data PVC (RWO) must be on
+its node, with the API; the lookups lane needs no files (rate limits are paced through the database), so it runs on
+the small node. paused stops every worker, for the move between nodes.
 */ -}}
-{{- $workers := list (dict "name" (printf "%s-worker" .Values.appName) "lanes" list "resources" .Values.worker.resources) }}
+{{- $workers := list (dict "name" (printf "%s-worker" .Values.appName) "lanes" list "resources" .Values.worker.resources "node" .Values.worker.node "threads" .Values.worker.threads "data" true) }}
 {{- if .Values.worker.perLane }}
 {{- $workers = list }}
 {{- range $lane, $config := .Values.worker.lanes }}
-{{- $workers = append $workers (dict "name" (printf "%s-worker-%s" $.Values.appName $lane) "lanes" (list $lane) "resources" $config.resources) }}
+{{- $workers = append $workers (dict "name" (printf "%s-worker-%s" $.Values.appName $lane) "lanes" (list $lane) "resources" $config.resources "node" $config.node "threads" $config.threads "data" $config.data) }}
 {{- end }}
 {{- end }}
 {{- range $worker := $workers }}
@@ -19,7 +20,7 @@ metadata:
   labels:
     {{- include "audio-brain.labels" $ | nindent 4 }}
 spec:
-  replicas: {{ $.Values.worker.replicas }}
+  replicas: {{ if $.Values.paused }}0{{ else }}{{ $.Values.worker.replicas }}{{ end }}
   strategy:
     type: Recreate  # the old worker stops before the new one starts, so no job runs twice
   selector:
@@ -32,7 +33,7 @@ spec:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") $ | sha256sum }}
     spec:
-      {{- include "audio-brain.podSpec" $ | nindent 6 }}
+      {{- include "audio-brain.podSpec" (dict "root" $ "node" $worker.node "data" $worker.data) | nindent 6 }}
       terminationGracePeriodSeconds: 60
       containers:
         - name: worker
@@ -40,9 +41,13 @@ spec:
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
           command: ["python", "manage.py", "run_jobs"{{ range $worker.lanes }}, "--lane", {{ . | quote }}{{ end }}]
           {{- include "audio-brain.env" $ | nindent 10 }}
+          env:
+            {{- include "audio-brain.threads" $worker.threads | nindent 12 }}
           resources:
             {{- toYaml $worker.resources | nindent 12 }}
+          {{- if $worker.data }}
           volumeMounts:
             - name: data
               mountPath: /app/server/models
+          {{- end }}
 {{- end }}

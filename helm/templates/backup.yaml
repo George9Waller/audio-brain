@@ -18,6 +18,7 @@ spec:
       template:
         spec:
           restartPolicy: OnFailure
+          {{- include "audio-brain.placement" (dict "root" . "node" .Values.backup.node) | nindent 10 }}
           containers:
             - name: pg-dump
               image: {{ .Values.postgresql.image }}  # the same Postgres version as the server

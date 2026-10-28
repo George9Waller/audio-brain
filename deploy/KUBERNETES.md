@@ -226,6 +226,90 @@ cluster, and loaded lists, a list and the map with nothing in logcat. Debug buil
 - [ ] Later: yt-dlp may need a JavaScript runtime (deno) for YouTube. Check the sets and audio jobs' logs after the
       cut-over.
 
+## Moving to another node (I5, written 28 Oct)
+
+The layout is INFRA.md's "The layout": the api, the `main` and `sync` lanes and postgres on the 32 GB node (label
+`size=large`, tainted so only pods with the toleration run there), and the `lookups` lane, mcp and backups on the
+old one (`size=small`). `local-path` volumes can't follow a pod to another node, so the database and the data volume
+move by copy into new claims (`audio-brain-postgres-nvme` on `data-nvme`, `audio-brain-data-root` on the new
+node's root disk). The old claims stay in `legacyClaims`, untouched, as the rollback. Argo CD syncs `main` with
+self-heal on, so `kubectl scale` is undone within minutes: the chart's `paused` value is what stops the API and the
+workers.
+
+Run it after 10:00 and before 00:15, when no nightly job runs, and with nothing running in `curl -s -H "$H" $B/jobs`
+(INFRA.md has `$B` and `$H`). The API and the MCP are down from step 2 to step 6, about half an hour.
+
+1. **Before the window.** With I5a deployed, so the `lookups` lane needs no files:
+   - Taint the new node: `kubectl taint node <new-node> size=large:NoSchedule`. Running pods stay. The provisioners'
+     helper pods are bound to their node directly (`nodeName`), which a `NoSchedule` taint doesn't stop; check it
+     with a throwaway claim on each class:
+     ```sh
+     for class in data-nvme local-path; do kubectl apply -f - <<YAML
+     apiVersion: v1
+     kind: PersistentVolumeClaim
+     metadata: {name: taint-test-$class}
+     spec: {storageClassName: $class, accessModes: [ReadWriteOnce], resources: {requests: {storage: 1Mi}}}
+     ---
+     apiVersion: v1
+     kind: Pod
+     metadata: {name: taint-test-$class}
+     spec:
+       nodeSelector: {size: large}
+       tolerations: [{key: size, operator: Equal, value: large, effect: NoSchedule}]
+       containers: [{name: c, image: busybox, command: [sh, -c, "touch /v/ok && sleep 5"], volumeMounts: [{name: v, mountPath: /v}]}]
+       restartPolicy: Never
+       volumes: [{name: v, persistentVolumeClaim: {claimName: taint-test-$class}}]
+     YAML
+     done
+     kubectl get pod taint-test-data-nvme taint-test-local-path   # both Completed, then:
+     kubectl delete pod,pvc taint-test-data-nvme taint-test-local-path
+     ```
+     If a claim stays Pending, remove the taint (`kubectl taint node <new-node> size-`) and don't go on.
+2. **Pause, and switch the chart.** Merge the I5 PR, which has `paused: true`. Argo CD scales the API and the
+   workers to 0, replaces the single worker with one per lane, and starts postgres on the new node with an empty
+   database in its new claim. The old postgres stops cleanly, so its claim holds a consistent copy. Check:
+   `kubectl get pods -o wide` shows `audio-brain-postgres-0` on the new node and no api or worker pods. If the old
+   `audio-brain-worker` Deployment is still there (the app's `SkipPrune` option), `kubectl delete deploy audio-brain-worker`.
+3. **Dump the old database.** Start postgres on the old claim in a pod of its own (it lands on the old node, where the
+   claim is), and dump it to the Mac:
+   ```sh
+   kubectl run pg-old --image=pgvector/pgvector:pg18 --restart=Never --overrides='{"spec":{"containers":[{"name":"pg-old","image":"pgvector/pgvector:pg18","volumeMounts":[{"name":"v","mountPath":"/var/lib/postgresql"}]}],"volumes":[{"name":"v","persistentVolumeClaim":{"claimName":"audio-brain-postgres"}}]}}'
+   kubectl wait --for=condition=Ready pod/pg-old --timeout=120s
+   kubectl exec pg-old -- pg_dump -Fc -U audio_brain audio_brain > ~/audio-brain-move.dump
+   ls -lh ~/audio-brain-move.dump   # about 1–2 GB
+   ```
+4. **Restore it on the new node.** `--no-privileges`, because the read-only role doesn't exist there yet: the API's
+   `migrate` creates it and grants its tables in step 6.
+   ```sh
+   kubectl exec -i audio-brain-postgres-0 -- pg_restore --no-owner --no-privileges --role=audio_brain -U audio_brain -d audio_brain < ~/audio-brain-move.dump
+   for db in pg-old audio-brain-postgres-0; do kubectl exec $db -- psql -U audio_brain -d audio_brain -Atc "select count(*) from catalogue_track"; done   # the same
+   kubectl delete pod pg-old
+   ```
+5. **Copy the data volume.** One pod on each claim. The new claim is bound to whichever node first mounts it, so its
+   pod must have the `size=large` selector, or the volume lands on the wrong node:
+   ```sh
+   kubectl run data-old --image=busybox --restart=Never --overrides='{"spec":{"containers":[{"name":"data-old","image":"busybox","command":["sleep","3600"],"volumeMounts":[{"name":"v","mountPath":"/data"}]}],"volumes":[{"name":"v","persistentVolumeClaim":{"claimName":"audio-brain-data"}}]}}'
+   kubectl run data-new --image=busybox --restart=Never --overrides='{"spec":{"nodeSelector":{"size":"large"},"tolerations":[{"key":"size","operator":"Equal","value":"large","effect":"NoSchedule"}],"containers":[{"name":"data-new","image":"busybox","command":["sleep","3600"],"volumeMounts":[{"name":"v","mountPath":"/data"}]}],"volumes":[{"name":"v","persistentVolumeClaim":{"claimName":"audio-brain-data-root"}}]}}'
+   kubectl wait --for=condition=Ready pod/data-old pod/data-new --timeout=120s
+   kubectl exec data-old -- tar cf - -C /data . > ~/audio-brain-data.tar        # a copy on the Mac too
+   kubectl exec -i data-new -- tar xf - -C /data < ~/audio-brain-data.tar
+   kubectl exec data-new -- du -sh /data; kubectl exec data-old -- du -sh /data  # the same
+   kubectl delete pod data-old data-new
+   ```
+6. **Unpause.** Commit `paused: false` to `main`. The API's `migrate` runs (I5a's table among anything new), then the
+   API and the three lanes start. Check:
+   - `kubectl get pods -o wide`: api, `worker-main`, `worker-sync` and postgres on the new node; `worker-lookups`,
+     mcp on the old one; nothing else of anyone's on the new node.
+   - `curl -s -H "$H" $B/health` and `$B/jobs`: three lanes alive.
+   - The MCP `sql` tool answers `SELECT count(*) FROM catalogue_track` (I0).
+   - `kubectl top pods`, and after the night, each step's peak in `/runs/{id}` (I3).
+7. **Rollback**, if it goes wrong before a night has run: `git revert` the I5 merge (and the unpause), so the chart
+   points at the old claims again, with the old layout. Anything written on the new node since step 6 is lost unless
+   dumped back the same way.
+8. **Tidy, after a full night's run on the new node:** with George's go-ahead, remove `legacyClaims` from the values,
+   then `kubectl delete pvc audio-brain-data audio-brain-postgres` (local-path deletes their data with them), and
+   delete the two files on the Mac once the next backup has run.
+
 ## Status, 21 Oct
 
 The server runs on the cluster. The app side of Phase 4 is built: release signing, versions from tags and the release

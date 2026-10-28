@@ -150,7 +150,7 @@ runs what's always on, light and indifferent to slow cores, and is where future 
 | worker `sync` lane (analyses the tracks it brings in) | 2 Gi | |
 | postgres: `audio_brain`, plus the `discogs` database (I7) | 4 Gi, `shared_buffers=1GB` | 80 Gi, `data-nvme` |
 | MusicBrainz mirror without search (I6): database, server, Redis | about 4 Gi | 100 Gi, `data-nvme` |
-| `data` volume (Essentia graphs, scorer, ranker, HF cache) | | 10 Gi, new node's root disk |
+| `data` volume (Essentia graphs, scorer, ranker, HF cache) | | 10 Gi, `local-path` on the new node's root disk |
 | **Total** | **about 26 Gi of 31** | **180 of 222 GB NVMe** |
 
 | Old node (8 GB, 4 cores, 114 GiB root) | Memory | Disk |
@@ -214,8 +214,8 @@ How the new node is kept for the heavy work:
     args like `shared_buffers`; storage 80 Gi on `data-nvme` (the database, four backtest clones at about 3 GB each
     at 80k tracks, the `discogs` database, headroom);
   - backups 10 Gi → 30 Gi, on the old node's `local-path`;
-  - the `data` PVC at 10 Gi on a StorageClass for the new node's root disk (none exists yet: add one with the
-    `local-path-data` provisioner or a second path for it), with a comment that api, `main` and `sync` share it.
+  - the `data` PVC at 10 Gi on `local-path`, which provisions on whichever node first mounts the claim, under that
+    node's root disk, with a comment that api, `main` and `sync` share it.
 - *Data move* (with `local-path`, volumes can't follow a pod; write this as a runbook in `deploy/KUBERNETES.md`):
   1. Pick a quiet time (after 10:00 and before 00:15, when no nightly job runs). Scale the worker to 0.
   2. Take a fresh `pg_dump -Fc` and copy it, and the `data` volume's `models/` (Essentia graphs, scorer, ranker), to
@@ -225,6 +225,13 @@ How the new node is kept for the heavy work:
   4. Restore the dump (`deploy/KUBERNETES.md` has the `pg_restore` lines), copy `models/` back, start the API, check
      `/health` and `/jobs`, then scale the worker to 1.
   5. Rollback: the old PVCs and the dump are kept until a full night's run succeeds on the new node.
+- *Built 28 Oct* (chart and runbook; the move itself is George's to start): `nodes.large`/`nodes.small` in the
+  values, and a `node` on api, each lane, postgres and the backup CronJob; `paused` stops the API and the workers,
+  since Argo CD's self-heal undoes `kubectl scale`; new claims `postgres-nvme` (80 Gi, `data-nvme`) and `data-root`
+  (10 Gi, `local-path`), with the old `data` and `postgres` claims kept in `legacyClaims` so pruning can't delete
+  them; postgres settings as `-c` args and a 512 Mi `/dev/shm`; thread caps per pod. Backups keep their 10 Gi claim
+  on the old node: local-path doesn't enforce the size. The steps are `deploy/KUBERNETES.md`, "Moving to another
+  node". The PR merges with `paused: true`: merging is step 2.
 - *Done when:* every nightly job succeeds two nights running on the new node, the step peaks (I3) are under 70% of
   their limits, nothing but audio-brain runs on the new node, and the MCP `sql` tool answers (I0).
 
@@ -387,14 +394,16 @@ Checked 28 Oct with `kubectl` from the Mac. Both nodes run k3s v1.36.5, untainte
   `size=large`, which a `nodeSelector` can use without naming the host.
 - StorageClasses:
   - `local-path` (default): every audio-brain volume is on it, so all of them are pinned to the old node: postgres
-    10 Gi, backups 10 Gi, data 5 Gi, mcp 100 Mi. It can't expand volumes, so moving postgres to the new node means
-    a new volume and a dump and restore, not a resize.
+    10 Gi, backups 10 Gi, data 5 Gi, mcp 100 Mi. It can't expand volumes (nor does it enforce their size), so moving
+    postgres to the new node means a new volume and a dump and restore, not a resize. It provisions on any node.
   - `data-nvme` (added 27 Oct): provisioner `rancher.io/local-path-data` (in the `local-path-data` namespace),
     which writes only to `/mnt/data/k3s-storage` on the new node, with `WaitForFirstConsumer` and expansion allowed.
     I5's postgres volume belongs here.
 - Room for I6: postgres's 80 Gi and the mirror's 100 Gi leave about 40 GB of `/mnt/data`. The new node's root disk
-  (about 200 GB unused) takes the `data` volume and anything else that doesn't need the NVMe, once a StorageClass
-  provisions onto it (I5).
+  (256 GB, about 200 GB unused) takes the `data` volume and anything else that doesn't need the NVMe: the default
+  `local-path` class provisions on every node, under `/var/lib/rancher/k3s/storage`.
+- Taints and provisioning: both provisioners bind their helper pods to the node directly (`nodeName`), so the
+  scheduler, and a `NoSchedule` taint, don't apply to them. The runbook checks it with a throwaway claim anyway.
 - Access: kubectl from the Mac uses k3s's kubeconfig with `server: https://<node>:6443`. The API certificate
   covers the short host name and the old node's LAN IP, not the `<node>.<tailnet>.ts.net` name. The Mac has no SSH
   key on the nodes yet.
@@ -407,7 +416,7 @@ Checked 28 Oct with `kubectl` from the Mac. Both nodes run k3s v1.36.5, untainte
 - [ ] I3 Memory and rate-limit measurement
 - [x] I4 Requeue after a worker death (28 Oct)
 - [x] I5a Rate-limit lanes in the database (28 Oct)
-- [ ] I5 Move to the new node (layout agreed 28 Oct)
+- [ ] I5 Move to the new node (chart and runbook built 28 Oct; the move is next, by the runbook)
 - [x] I6b Worker per lane (28 Oct; `worker.perLane` off until I5)
 - [ ] I6 MusicBrainz mirror (decided 28 Oct: without search; searches go to the public API)
 - [ ] I7 Discogs dumps

@@ -28,10 +28,15 @@ spec:
       labels:
         app: {{ .Values.appName }}-postgres
     spec:
+      {{- include "audio-brain.placement" (dict "root" . "node" .Values.postgresql.node) | nindent 6 }}
       containers:
         - name: postgres
           image: {{ .Values.postgresql.image }}
-          args: ["-c", "shared_buffers={{ .Values.postgresql.sharedBuffers }}"]
+          args:
+            {{- range $name, $value := .Values.postgresql.settings }}
+            - "-c"
+            - "{{ $name }}={{ $value }}"
+            {{- end }}
           ports:
             - containerPort: 5432
           env:
@@ -54,7 +59,14 @@ spec:
             # from Postgres 18 the image keeps its data in /var/lib/postgresql/18/docker, so mount the parent
             - name: postgres-storage
               mountPath: /var/lib/postgresql
+            # parallel queries share memory through /dev/shm, which is 64 MB in a container by default
+            - name: shm
+              mountPath: /dev/shm
       volumes:
         - name: postgres-storage
           persistentVolumeClaim:
-            claimName: {{ .Values.appName }}-postgres
+            claimName: {{ .Values.appName }}-{{ .Values.postgresql.claim }}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.postgresql.shmSize }}
