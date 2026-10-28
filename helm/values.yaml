@@ -27,7 +27,7 @@ nodes:
 
 # true stops the API and every worker (replicas 0), for moving the database and the data volume between nodes
 # (deploy/KUBERNETES.md, "Moving to another node"); the MCP pod stays up and reports the API as down
-paused: true  # I5: merged paused; set false after the runbook's restore and copy
+paused: false
 
 # CI rewrites these lines on every build (.github/workflows/deploy.yaml); the MCP image is tagged mcp-<sha>
 env:
