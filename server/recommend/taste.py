@@ -23,6 +23,7 @@ import numpy as np
 from django.db import transaction
 from django.utils import timezone
 
+from catalogue.deletions import still_there
 from catalogue.models import ArtistTag, AudioFeatures, Track, TrackTag
 from catalogue.vectors import rows_with_arrays
 from history.intent import play_weight
@@ -237,7 +238,8 @@ def build_taste_vectors(epochs=EPOCHS):
     vectors = embed(fit(inputs, left, right, weights, epochs), inputs)
     with transaction.atomic():
         TasteVector.objects.all().delete()
-        TasteVector.objects.bulk_create((TasteVector(track_id=int(t), vector=v.tolist()) for t, v in zip(inputs.track_ids, vectors)), batch_size=2000)
+        there = still_there(int(t) for t in inputs.track_ids)
+        TasteVector.objects.bulk_create((TasteVector(track_id=int(t), vector=v.tolist()) for t, v in zip(inputs.track_ids, vectors) if int(t) in there), batch_size=2000)
     logger.info("Taste vectors for %d tracks from %d pairs", len(vectors), len(left))
     return len(vectors)
 

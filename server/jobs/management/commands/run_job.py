@@ -21,8 +21,8 @@ class Command(BaseCommand):
                 when = f"{job.schedule.describe()}, next {due:%a %d %b %H:%M}" if due else "only when asked for"
                 self.stdout.write(f"{job.key:12} {job.title:20} {when}")
             return
-        if JobRun.objects.filter(job=job, state=JobRun.RUNNING).exists():
-            raise CommandError(f"{job} is already running")
+        if active := JobRun.objects.filter(job=job, state__in=[JobRun.QUEUED, JobRun.RUNNING]).first():
+            raise CommandError(f"{job} is already {active.state} (run {active.pk})")
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
         run = execute(JobRun.objects.create(job=job, trigger=JobRun.CLI, options={"skip_enrichment": True} if skip_enrichment else {}))
         self.stdout.write(self.style.SUCCESS("Done") if run.state == JobRun.SUCCEEDED else self.style.ERROR("Finished with failures; see the log above"))

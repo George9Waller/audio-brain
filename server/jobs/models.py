@@ -28,14 +28,18 @@ class JobRun(models.Model):
     class Meta:
         ordering = ["-queued_at"]
         indexes = [models.Index(fields=["job", "-queued_at"])]
+        # A job never runs twice at once, even when the API and a worker queue it at the same moment
+        constraints = [models.UniqueConstraint(fields=["job"], condition=models.Q(state__in=["queued", "running"]), name="one_active_run_per_job")]
 
     def __str__(self):
         return f"{self.job} ({self.state}) @ {self.queued_at:%Y-%m-%d %H:%M}"
 
 
 class WorkerStatus(models.Model):
-    """The worker's heartbeat (one row), so the API can say whether queued runs will actually start."""
+    """A worker's heartbeat, one row per lane (jobs.registry.LANES), so the API can say whether queued runs will
+    actually start. A worker running every lane keeps all three rows."""
 
+    lane = models.CharField(max_length=10, unique=True)
     started_at = models.DateTimeField()
     seen_at = models.DateTimeField()
     host = models.CharField(max_length=100)

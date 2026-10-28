@@ -14,6 +14,7 @@ from difflib import SequenceMatcher
 import requests
 from django.db import transaction
 
+from catalogue.deletions import allow_track_deletion
 from catalogue.models import Artist, Track, TrackCredit
 from clients.musicbrainz import MusicBrainzClient
 from enrichment.models import EnrichmentAttempt
@@ -154,25 +155,28 @@ def claim_artist_mbid(artist, mbid):
 
 def merge_tracks(track, into):
     """Move everything from `track` onto `into` and delete it. Scrobbles under its names keep arriving at `into` via its
-    aliases. Where both rows have something only one may keep (a Tidal ID, audio analysis, a set), `into` keeps its own."""
+    aliases. Where both rows have something only one may keep (a Tidal ID, audio analysis, a set), `into` keeps its own.
+    Waits while the models job is running (catalogue.deletions)."""
     from catalogue.models import AudioFeatures, PlatformTrack, SimilarTrack, TrackCredit, TrackTag
     from discovery.models import Release
     from library.models import Favourite
 
-    Listen.objects.filter(track=track, played_at__in=into.listens.values("played_at")).delete()
-    track.listens.update(track=into)
-    track.aliases.update(track=into)
-    SetTrack.objects.filter(track=track).update(track=into)
-    Favourite.objects.filter(track=track).update(track=into)
-    for release in Release.objects.filter(tracks=track):
-        release.tracks.add(into)
-    TrackTag.objects.filter(track=track).exclude(tag__in=into.track_tags.values("tag")).update(track=into)
-    TrackCredit.objects.filter(track=track).exclude(artist__in=into.credits.values("artist")).update(track=into)
-    PlatformTrack.objects.filter(track=track).exclude(platform__in=into.platform_tracks.values("platform")).update(track=into)
-    SimilarTrack.objects.filter(track=track).exclude(external_id__in=into.similar_tracks.values("external_id")).update(track=into)
-    if not AudioFeatures.objects.filter(track=into).exists():
-        AudioFeatures.objects.filter(track=track).update(track=into)
-    track.delete()
+    with transaction.atomic():
+        allow_track_deletion()
+        Listen.objects.filter(track=track, played_at__in=into.listens.values("played_at")).delete()
+        track.listens.update(track=into)
+        track.aliases.update(track=into)
+        SetTrack.objects.filter(track=track).update(track=into)
+        Favourite.objects.filter(track=track).update(track=into)
+        for release in Release.objects.filter(tracks=track):
+            release.tracks.add(into)
+        TrackTag.objects.filter(track=track).exclude(tag__in=into.track_tags.values("tag")).update(track=into)
+        TrackCredit.objects.filter(track=track).exclude(artist__in=into.credits.values("artist")).update(track=into)
+        PlatformTrack.objects.filter(track=track).exclude(platform__in=into.platform_tracks.values("platform")).update(track=into)
+        SimilarTrack.objects.filter(track=track).exclude(external_id__in=into.similar_tracks.values("external_id")).update(track=into)
+        if not AudioFeatures.objects.filter(track=into).exists():
+            AudioFeatures.objects.filter(track=track).update(track=into)
+        track.delete()
 
 
 def artist_matches(artist_name, recording):

@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from django.conf import settings
 
 SYNC, MAIN, LOOKUP = "sync", "main", "lookups"
+LANES = [MAIN, LOOKUP, SYNC]
 
 
 def local_zone():
@@ -110,6 +111,10 @@ MODELS = [
     ("Map layout", "recommend.atlas.build_map"),
     ("Weekly researched discovery leads", "recommend.discovery.run_discovery"),
 ]
+# The steps that read every track and write a row for each; while they run, enrichment's merges wait
+# (catalogue.deletions). From the first to the last of them in a run, so `discover`'s own enrichment, which comes
+# before, doesn't wait on itself.
+HOLDS_TRACKS = {target for _, target in MODELS}
 # Its own job after the mixes: it downloads and analyses each new track, so while the catalogue catches up on what
 # your liked tracks point to (thousands a night at first) it can take hours, and the morning's mixes shouldn't wait
 CANDIDATES = [("Candidates from Tidal's similar tracks", "recommend.candidates.expand_candidates")]

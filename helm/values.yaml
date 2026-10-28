@@ -52,6 +52,31 @@ worker:
       memory: 1Gi
     limits:
       memory: 3584Mi
+  # One Deployment per lane, each with its own limit (INFRA.md I6b), in place of the one above. Off until the move
+  # to the 32 GB node (I5): together these limits are more than the old node has free.
+  perLane: false
+  lanes:
+    main:  # models, mixes, candidates and audio analysis: the big one
+      resources:
+        requests:
+          cpu: 250m
+          memory: 1Gi
+        limits:
+          memory: 3584Mi
+    lookups:  # enrichment: mostly waiting on rate limits
+      resources:
+        requests:
+          cpu: 50m
+          memory: 256Mi
+        limits:
+          memory: 1Gi
+    sync:  # Last.fm, favourites, Tidal's mixes, and provided tracklists, which analyse their new tracks
+      resources:
+        requests:
+          cpu: 50m
+          memory: 256Mi
+        limits:
+          memory: 2Gi
 
 postgresql:
   image: pgvector/pgvector:pg18

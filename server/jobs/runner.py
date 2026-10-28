@@ -1,4 +1,10 @@
-"""Running jobs: one run's steps in order (execute), and the worker loop that schedules and starts runs (Worker)."""
+"""Running jobs: one run's steps in order (execute), and the worker loop that schedules and starts runs (Worker).
+
+A worker runs every lane, one thread each, or only the lanes it's given (`run_jobs --lane main`), so the chart can
+run each lane in a pod of its own and one lane's memory can't kill another's runs. Workers on separate lanes share
+nothing but the database: each schedules and starts only its own lanes' jobs, claims a run by moving it from queued
+to running in one update, and keeps a heartbeat row per lane.
+"""
 
 import importlib
 import io
@@ -10,13 +16,16 @@ import threading
 import time
 import traceback
 from collections import deque
+from contextlib import ExitStack
+from datetime import timedelta
 
 from django.core.management import call_command
-from django.db import close_old_connections
+from django.db import IntegrityError, close_old_connections, transaction
 from django.utils import timezone
 
+from catalogue.deletions import holding_tracks
 from jobs.models import JobRun, WorkerStatus
-from jobs.registry import JOBS, steps_for
+from jobs.registry import HOLDS_TRACKS, JOBS, LANES, MAIN, steps_for
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +33,8 @@ LOG_LINES = 300
 SAVE_EVERY = 5  # seconds between saves of the log while a step runs
 POLL = 5  # seconds between looks for queued runs and due jobs
 STALE = 60  # seconds without a heartbeat before the worker counts as stopped
+RETRY_WITHIN = timedelta(hours=12)  # a scheduled run the worker died during is run again if it started this recently
+STOPPED = "The worker stopped while this was running"
 
 
 class RunLog(logging.Handler):
@@ -85,10 +96,15 @@ def execute(run: JobRun):
     log = RunLog(run)
     root = logging.getLogger()
     root.addHandler(log)
+    holding = [i for i, (_, target) in enumerate(steps) if target in HOLDS_TRACKS]
+    held = ExitStack()
     try:
-        for step, (name, target) in zip(run.steps, steps):
+        for i, (step, (name, target)) in enumerate(zip(run.steps, steps)):
             step["state"] = "running"
             log.save()
+            if holding and i == holding[0]:
+                logger.info("Holding the tracks: enrichment's merges wait until %s is done", steps[holding[-1]][0].lower())
+                held.enter_context(holding_tracks())
             started = time.monotonic()
             try:
                 result = call(target, log)
@@ -101,7 +117,10 @@ def execute(run: JobRun):
                 run.error = run.error or f"{name}\n{traceback.format_exc()}"
             step["seconds"] = round(time.monotonic() - started)
             logger.info("%s %s (%ss)%s", "✓" if step["state"] == "ok" else "✗", name, step["seconds"], f": {step['result']}" if "result" in step else "")
+            if holding and i == holding[-1]:
+                held.close()
     finally:
+        held.close()
         root.removeHandler(log)
         run.log = "\n".join(log.lines)
         run.state = JobRun.FAILED if any(s["state"] == "failed" for s in run.steps) else JobRun.SUCCEEDED
@@ -110,10 +129,20 @@ def execute(run: JobRun):
     return run
 
 
+def active(key):
+    return JobRun.objects.filter(job=key, state__in=[JobRun.QUEUED, JobRun.RUNNING]).first()
+
+
 def queue(key, trigger, options=None):
     """A queued run for this job, or the one already queued or running: a job never runs twice at once."""
-    existing = JobRun.objects.filter(job=key, state__in=[JobRun.QUEUED, JobRun.RUNNING]).first()
-    return existing or JobRun.objects.create(job=key, trigger=trigger, options=options or {})
+    existing = active(key)
+    if existing:
+        return existing
+    try:
+        with transaction.atomic():
+            return JobRun.objects.create(job=key, trigger=trigger, options=options or {})
+    except IntegrityError:  # queued by someone else since we looked
+        return active(key)
 
 
 def last_started(key):
@@ -128,43 +157,77 @@ def next_due(job, since=None):
     return job.schedule.next_after(last_started(job.key) or since or timezone.now())
 
 
-def worker_alive():
-    status = WorkerStatus.objects.filter(pk=1).first()
-    return bool(status and (timezone.now() - status.seen_at).total_seconds() < STALE)
+def lane_alive(status, now=None):
+    return ((now or timezone.now()) - status.seen_at).total_seconds() < STALE
+
+
+def lanes_alive():
+    """Lane -> whether a worker is running it: with one missing, that lane's runs wait in the queue."""
+    statuses = {s.lane: s for s in WorkerStatus.objects.all()}
+    return {lane: lane in statuses and lane_alive(statuses[lane]) for lane in LANES}
+
+
+def should_retry(run, now):
+    """A scheduled main-lane run the worker died during, recently, once: the models job shouldn't wait a whole day
+    after a death at 03:09, but a run that kills the worker every time mustn't loop."""
+    job = JOBS.get(run.job)
+    return bool(
+        job and job.lane == MAIN and run.trigger == JobRun.SCHEDULE and not run.options.get("retry_of")
+        and run.started_at and now - run.started_at < RETRY_WITHIN
+    )
 
 
 class Worker:
     """Queues jobs as their schedules come due and runs queued runs, one job per lane at a time, each in a thread."""
 
-    def __init__(self, schedule=True):
+    def __init__(self, schedule=True, lanes=None):
         self.schedule = schedule
+        self.lanes = list(lanes or LANES)
+        self.keys = [job.key for job in JOBS.values() if job.lane in self.lanes]
         self.started = timezone.now()
         self.threads = {}  # lane -> Thread
 
     def run_forever(self):
-        stopped = JobRun.objects.filter(state=JobRun.RUNNING).update(
-            state=JobRun.FAILED, finished_at=timezone.now(), error="The worker stopped while this was running")
-        if stopped:
-            logger.warning("Marked %s interrupted runs as failed", stopped)
+        self.recover()
         while True:
             self.tick()
             time.sleep(POLL)
 
+    def recover(self):
+        """Mark this worker's lanes' runs that were going when it last stopped as failed, and queue some again."""
+        now = timezone.now()
+        for run in JobRun.objects.filter(state=JobRun.RUNNING, job__in=self.keys):
+            run.state, run.finished_at, run.error = JobRun.FAILED, now, STOPPED
+            run.save(update_fields=["state", "finished_at", "error"])
+            if should_retry(run, now):
+                retry = queue(run.job, JobRun.SCHEDULE, {**run.options, "retry_of": run.pk})
+                run.error = f"{STOPPED}; queued again as run {retry.pk}"
+                run.save(update_fields=["error"])
+                logger.warning("Run %s of %s was interrupted; queued again as run %s", run.pk, run.job, retry.pk)
+            else:
+                logger.warning("Marked run %s of %s, interrupted, as failed", run.pk, run.job)
+
     def tick(self):
         now = timezone.now()
-        WorkerStatus.objects.update_or_create(pk=1, defaults={
-            "seen_at": now, "started_at": self.started, "host": socket.gethostname(), "pid": os.getpid(), "scheduling": self.schedule})
+        for lane in self.lanes:
+            WorkerStatus.objects.update_or_create(lane=lane, defaults={
+                "seen_at": now, "started_at": self.started, "host": socket.gethostname(), "pid": os.getpid(), "scheduling": self.schedule})
         if self.schedule:
             for job in JOBS.values():
+                if job.lane not in self.lanes:
+                    continue
                 due = next_due(job, since=self.started)
-                if due and due <= now and not JobRun.objects.filter(job=job.key, state__in=[JobRun.QUEUED, JobRun.RUNNING]).exists():
+                if due and due <= now and not active(job.key):
                     logger.info("Queueing %s (%s)", job.title, job.schedule.describe())
                     queue(job.key, JobRun.SCHEDULE)
         for run in JobRun.objects.filter(state=JobRun.QUEUED).order_by("queued_at"):
             job = JOBS.get(run.job)
             if job is None:
-                run.state, run.error, run.finished_at = JobRun.FAILED, f"No job called {run.job!r}", now
-                run.save()
+                if MAIN in self.lanes:  # one worker answers for runs of jobs that no longer exist
+                    run.state, run.error, run.finished_at = JobRun.FAILED, f"No job called {run.job!r}", now
+                    run.save()
+                continue
+            if job.lane not in self.lanes:
                 continue
             thread = self.threads.get(job.lane)
             if thread is None or not thread.is_alive():
@@ -176,11 +239,10 @@ class Worker:
     def run_in_thread(pk):
         close_old_connections()
         try:
-            run = JobRun.objects.get(pk=pk, state=JobRun.QUEUED)  # it may have been cancelled meanwhile
-        except JobRun.DoesNotExist:
-            return
-        try:
-            run = execute(run)
+            # Claimed in one update, so it starts once however many workers saw it queued (or none, if it was cancelled)
+            if not JobRun.objects.filter(pk=pk, state=JobRun.QUEUED).update(state=JobRun.RUNNING, started_at=timezone.now()):
+                return
+            run = execute(JobRun.objects.get(pk=pk))
             logger.info("Finished %s: %s", run.job, run.state)
         finally:
             close_old_connections()

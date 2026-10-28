@@ -11,6 +11,7 @@ import logging
 import numpy as np
 from django.db import transaction
 
+from catalogue.deletions import still_there
 from catalogue.vectors import rows_with_arrays
 from recommend.models import FusedVector, MapPoint
 
@@ -32,8 +33,9 @@ def build_map():
     Y = (Y - lo) / np.maximum(hi - lo, 1e-9)
     with transaction.atomic():
         MapPoint.objects.exclude(track_id__in=ids).delete()
-        existing = set(previous)
-        MapPoint.objects.bulk_create([MapPoint(track_id=t, x=float(x), y=float(y)) for t, (x, y) in zip(ids, Y) if t not in existing], batch_size=2000)
+        existing = set(MapPoint.objects.values_list("track_id", flat=True))
+        there = still_there(ids)
+        MapPoint.objects.bulk_create([MapPoint(track_id=t, x=float(x), y=float(y)) for t, (x, y) in zip(ids, Y) if t not in existing and t in there], batch_size=2000)
         updates = [MapPoint(track_id=t, x=float(x), y=float(y)) for t, (x, y) in zip(ids, Y) if t in existing]
         by_track = dict(MapPoint.objects.values_list("track_id", "pk"))
         for p in updates:
