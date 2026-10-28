@@ -1,0 +1,282 @@
+{{- if .Values.musicbrainz.enabled }}
+{{- /*
+A MusicBrainz mirror without search (INFRA.md I6), translated from MetaBrainz's musicbrainz-docker: its database, the
+MusicBrainz server (the /ws/2/ web service the clients call) and Valkey, with no Solr, indexer or RabbitMQ. It's
+filled once by the musicbrainz-import CronJob (suspended; started by hand, deploy/KUBERNETES.md) and then replicates
+daily with the MetaBrainz token. Everything is on the large node, the database on the NVMe.
+*/ -}}
+{{- $mb := .Values.musicbrainz }}
+{{- $env := list
+  (dict "name" "MUSICBRAINZ_POSTGRES_SERVER" "value" "musicbrainz-db")
+  (dict "name" "MUSICBRAINZ_POSTGRES_READONLY_SERVER" "value" "musicbrainz-db")
+  (dict "name" "MUSICBRAINZ_VALKEY_SERVER" "value" "musicbrainz-valkey")
+  (dict "name" "MUSICBRAINZ_SERVER_PROCESSES" "value" ($mb.serverProcesses | toString))
+  (dict "name" "MUSICBRAINZ_USE_PROXY" "value" "1")
+  (dict "name" "POSTGRES_USER" "value" "musicbrainz")
+  (dict "name" "POSTGRES_PASSWORD" "value" "musicbrainz")
+}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: musicbrainz-db
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 5432
+  selector:
+    app: musicbrainz-db
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: musicbrainz-db
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+spec:
+  serviceName: musicbrainz-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: musicbrainz-db
+  template:
+    metadata:
+      labels:
+        app: musicbrainz-db
+    spec:
+      {{- include "audio-brain.placement" (dict "root" . "node" "large") | nindent 6 }}
+      containers:
+        - name: db
+          image: {{ $mb.dbImage }}
+          args:
+            {{- range $name, $value := $mb.dbSettings }}
+            - "-c"
+            - "{{ $name }}={{ $value }}"
+            {{- end }}
+          # only reachable inside the cluster, and the data is public; these are musicbrainz-docker's defaults
+          env:
+            - name: POSTGRES_USER
+              value: musicbrainz
+            - name: POSTGRES_PASSWORD
+              value: musicbrainz
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "musicbrainz"]
+            periodSeconds: 10
+          resources:
+            {{- toYaml $mb.dbResources | nindent 12 }}
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: pgdata
+          persistentVolumeClaim:
+            claimName: musicbrainz-db
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: musicbrainz-valkey
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 6379
+  selector:
+    app: musicbrainz-valkey
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: musicbrainz-valkey
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: musicbrainz-valkey
+  template:
+    metadata:
+      labels:
+        app: musicbrainz-valkey
+    spec:
+      {{- include "audio-brain.placement" (dict "root" . "node" "large") | nindent 6 }}
+      containers:
+        - name: valkey
+          image: {{ $mb.valkeyImage }}
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+# The server's own cron runs replication.sh: once a day, at 11:00 UTC, outside the nightly jobs
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: musicbrainz-crons
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+data:
+  crons.conf: |
+    SHELL=/bin/bash
+    BASH_ENV=/noninteractive.bash_env
+    {{ $mb.replicationSchedule }} /usr/local/bin/replication.sh >> /tmp/replication.log 2>&1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: musicbrainz
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 5000
+  selector:
+    app: musicbrainz
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: musicbrainz
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $mb.serverReplicas }}
+  strategy:
+    type: Recreate  # one replication at a time
+  selector:
+    matchLabels:
+      app: musicbrainz
+  template:
+    metadata:
+      labels:
+        app: musicbrainz
+      annotations:
+        checksum/crons: {{ $mb.replicationSchedule | sha256sum }}
+    spec:
+      {{- include "audio-brain.placement" (dict "root" . "node" "large") | nindent 6 }}
+      automountServiceAccountToken: false  # its token would be mounted inside /run/secrets, where the MetaBrainz one goes
+      containers:
+        - name: musicbrainz
+          image: {{ $mb.image }}
+          env:
+            {{- toYaml $env | nindent 12 }}
+          ports:
+            - containerPort: 5000
+          startupProbe:
+            tcpSocket:
+              port: 5000
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: 5000
+            periodSeconds: 30
+          resources:
+            {{- toYaml $mb.serverResources | nindent 12 }}
+          volumeMounts:
+            - name: crons
+              mountPath: /crons.conf
+              subPath: crons.conf
+            - name: token
+              mountPath: /run/secrets
+              readOnly: true
+      volumes:
+        - name: crons
+          configMap:
+            name: musicbrainz-crons
+        # METABRAINZ_ACCESS_TOKEN in the AWS secret; optional, so the mirror serves before it's added (it just
+        # doesn't replicate)
+        - name: token
+          secret:
+            secretName: {{ .Values.appName }}-aws-secrets
+            optional: true
+            items:
+              - key: METABRAINZ_ACCESS_TOKEN
+                path: metabrainz_access_token
+---
+# The initial import: suspended, started once by hand with
+#   kubectl create job --from=cronjob/musicbrainz-import musicbrainz-import-1
+# It downloads the latest full export and loads it (hours). The download volume can be emptied afterwards.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: musicbrainz-import
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+spec:
+  suspend: true
+  schedule: "0 0 1 1 *"
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        spec:
+          restartPolicy: Never
+          {{- include "audio-brain.placement" (dict "root" . "node" "large") | nindent 10 }}
+          containers:
+            - name: import
+              image: {{ $mb.image }}
+              args: ["createdb.sh", "-fetch"]
+              env:
+                {{- toYaml $env | nindent 16 }}
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 512Mi
+                limits:
+                  memory: 2Gi
+              volumeMounts:
+                - name: dbdump
+                  mountPath: /media/dbdump
+          volumes:
+            - name: dbdump
+              persistentVolumeClaim:
+                claimName: musicbrainz-dbdump
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: musicbrainz-db
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+    helm.sh/resource-policy: keep
+spec:
+  storageClassName: data-nvme
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ $mb.dbStorage }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: musicbrainz-dbdump
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-options: Delete=false,Prune=false
+spec:
+  storageClassName: local-path  # the large node's root disk: only the download, not worth the NVMe
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ $mb.dumpStorage }}
+{{- end }}

@@ -310,6 +310,48 @@ Run it after 10:00 and before 00:15, when no nightly job runs, and with nothing 
    then `kubectl delete pvc audio-brain-data audio-brain-postgres` (local-path deletes their data with them), and
    delete the two files on the Mac once the next backup has run.
 
+## The MusicBrainz mirror (I6, written 28 Oct)
+
+The chart's `musicbrainz` section runs a mirror without search on the new node: `musicbrainz-db` (100 Gi on the
+NVMe), `musicbrainz-valkey` and the `musicbrainz` server, whose web service is `http://musicbrainz:5000/ws/2/`. The
+server starts at `serverReplicas: 0`, because its database doesn't exist until the import has run. audio-brain keeps
+asking musicbrainz.org until `config.MUSICBRAINZ_BASE_URL` is set, and even then sends it searches, which the mirror
+can't answer.
+
+1. **(you) The replication token.** Sign in at metabrainz.org, take the access token from your profile (free for
+   non-commercial use), and add it to the AWS secret `audio-brain` as `METABRAINZ_ACCESS_TOKEN`. The
+   ExternalSecret picks it up within the hour (`kubectl annotate externalsecret audio-brain-aws-secrets
+   force-sync=$(date +%s) --overwrite` for now). The import doesn't need it; replication does.
+2. **Import** (hours: it downloads the latest full export, about 7 GB, and loads and indexes it). Any time but best
+   started in the day, so the indexes are built before the nightly jobs:
+   ```sh
+   kubectl create job --from=cronjob/musicbrainz-import musicbrainz-import-1
+   kubectl logs -f job/musicbrainz-import-1
+   ```
+   It ends with the database loaded and the job `Complete`. If it fails part way, read the log, then drop the
+   half-made database before retrying: `kubectl exec musicbrainz-db-0 -- dropdb -U musicbrainz musicbrainz_db`,
+   `kubectl delete job musicbrainz-import-1`, and create it again.
+3. **Start the server:** `musicbrainz.serverReplicas: 1` in `helm/values.yaml`, committed. It takes a minute or two
+   to start (it starts a renderer before the web server). Then check that lookups work without search, from the API
+   pod:
+   ```sh
+   ISRC=$(kubectl exec audio-brain-postgres-0 -- psql -U audio_brain -d audio_brain -Atc "select isrc from catalogue_track where isrc <> '' and mbid <> '' limit 1")
+   kubectl exec deploy/audio-brain-api -- python -c "import urllib.request as u
+   for path in ['isrc/$ISRC?', 'artist/5b11f4ce-a62d-471e-81fc-a69a8278c7da?inc=genres&', 'release?artist=5b11f4ce-a62d-471e-81fc-a69a8278c7da&limit=1&']:
+       print(path, u.urlopen('http://musicbrainz:5000/ws/2/' + path + 'fmt=json', timeout=10).status)"
+   ```
+   All three should answer 200. A search (`recording?query=...`) is expected to fail.
+4. **Replication:** the server's cron runs `replication.sh` daily at 11:00 UTC. To catch up at once after the import
+   (the export is up to a few days old): `kubectl exec deploy/musicbrainz -- bash -c 'replication.sh'`, and
+   `kubectl exec deploy/musicbrainz -- tail /tmp/replication.log` after a cron run. Without the token it fails and
+   the mirror just stays at the export's date.
+5. **Switch audio-brain over:** `config.MUSICBRAINZ_BASE_URL: http://musicbrainz:5000/ws/2/`, committed. Lookups (by
+   ISRC, by ID, an artist's releases) then go to the mirror with no rate limit; searches stay on musicbrainz.org;
+   and if the mirror fails or is unreachable, the client uses musicbrainz.org for five minutes before trying it again
+   (`clients/musicbrainz.py`).
+6. **The download volume** (`musicbrainz-dbdump`, on the root disk, which has room) can stay: a re-import reuses it.
+   Argo CD would recreate the claim if it were deleted, so to free the space, empty it from a pod that mounts it.
+
 ## Status, 21 Oct
 
 The server runs on the cluster. The app side of Phase 4 is built: release signing, versions from tags and the release
