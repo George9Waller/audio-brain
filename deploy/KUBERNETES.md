@@ -36,7 +36,7 @@ Progress is tracked with the checkboxes. Tick them as you go.
 | Worker | `manage.py run_jobs`: Last.fm every 15 min; enrichment, models and mixes nightly. **Exactly one** may run, or jobs start twice. Heavy: torch, CLAP (`laion/larger_clap_general`, from Hugging Face), Essentia, UMAP, yt-dlp + ffmpeg. Peak memory not yet measured. |
 | Database | Postgres 18 + pgvector, about 1.2 GB (Postgres.app on the Mac). The Tidal OAuth token lives in it, so it moves with the dump. |
 | Files in `server/models/` | The Essentia `.pb`/`.json` graphs (23 MB, gitignored) are **baked into the image** at `/app/essentia` (`ESSENTIA_MODELS_DIR`): the build downloads them from essentia.upf.edu and checks them against `server/enrichment/essentia_models.sha256`. `scorer.joblib` + `context_ranker.joblib` are rewritten nightly by the worker and read by the API, on the data volume. |
-| Other on-disk state | Hugging Face cache (CLAP weights, ~1 GB), `RATE_LIMIT_DIR` (default `/tmp`; API and worker should share it), `server/imports/` (Spotify/Tidal exports, gitignored, only needed for re-imports). |
+| Other on-disk state | Hugging Face cache (CLAP weights, ~1 GB), `server/imports/` (Spotify/Tidal exports, gitignored, only needed for re-imports). |
 | Settings | All from environment variables (`server/server/settings.py`, every key in `server/.env.example`). `SECRET_KEY` is required from env; the server refuses to start without it. |
 | **Python 3.13** | The image runs 3.13 (the newest Python with wheels for everything: gensim has none for 3.14). The Mac's `.python-version` is still 3.12; both resolve from the same `uv.lock`. |
 | **amd64 only** | `essentia-tensorflow` has Linux wheels for x86_64 only. The Lenovo is fine; never schedule the worker on an arm64 node. |
@@ -69,7 +69,7 @@ setting its limit. If it goes past ~3.5 GB, trim the jobs rather than overcommit
   backup PVC, keeping 7.
 - One RWO data PVC mounted by both API and worker at `/app/server/models` (fine on one node: RWO is per node). That
   means no code changes for model paths: seed it once with the Mac's `server/models/` (minus `backtests/`). Set
-  `HF_HOME=/app/server/models/hf` and `RATE_LIMIT_DIR=/app/server/models/ratelimit`.
+  `HF_HOME=/app/server/models/hf`. Shared rate limits are rows in the database (`clients.RateLimitLane`), not files.
 - Exposure: the API Service is a **NodePort** (e.g. 30800), and the Lenovo itself joins the tailnet. No Tailscale
   operator needed. Probes use `tcpSocket` on 8000 (`/api/v1/health` needs the bearer token).
 - Worker Deployment: `replicas: 1`, `strategy: Recreate`, so two never overlap.

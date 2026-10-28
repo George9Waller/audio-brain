@@ -1,7 +1,7 @@
 {{- /*
 One worker running every lane, or with worker.perLane one Deployment per lane (`run_jobs --lane <lane>`), so one
 lane's memory can't kill another's runs and each has its own limit. Every worker must be on the node with the data
-PVC (RWO), which they share with the API, as they do the rate-limit flock files in RATE_LIMIT_DIR.
+PVC (RWO), which they share with the API. (Rate limits are paced through the database, so they don't tie a lane to it.)
 */ -}}
 {{- $workers := list (dict "name" (printf "%s-worker" .Values.appName) "lanes" list "resources" .Values.worker.resources) }}
 {{- if .Values.worker.perLane }}

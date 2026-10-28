@@ -193,6 +193,12 @@ How the new node is kept for the heavy work:
   short transaction, reads the next slot, books the one after it and commits; it sleeps after the commit, so no lock
   is held while sleeping. `hold_off()` is the same, pushing the time back. At about one request a second per
   service the load is nothing. Remove `RATE_LIMIT_DIR`.
+- *Built 28 Oct* (`clients.RateLimitLane`, `clients/base.py`): each booking is one `UPDATE ... RETURNING` on a
+  connection of the thread's own that autocommits, so the caller's transaction never holds a lane. Times come from
+  the database's clock, so the nodes' clocks needn't agree. A hold-off is a separate `held_until` column: a process
+  that booked a slot before the hold-off checks it after sleeping and books again, so busy answers still push back
+  every waiter, as the `flock` did. Deploying it needs nothing but the migration; the `lookups` lane can then move
+  to the old node with I5.
 - *Files:* `clients/base.py`, a migration, `server/settings.py`, `helm/values.yaml`.
 - *Tests:* two processes on one lane take turns and keep the interval; `hold_off` delays the other process.
 - *Done when:* tests pass and the `lookups` lane runs on the old node with Tidal still paced (no 429 bursts).
@@ -226,7 +232,7 @@ How the new node is kept for the heavy work:
 - *Why:* one lane's memory spike shouldn't kill the others' runs, and limits can be set per lane.
 - *What:* `run_jobs --lane main|lookups|sync` runs only that lane's jobs (with scheduling for those only); the chart
   gets one Deployment per lane, each `replicas: 1`, all on the same node (they share the `data` PVC, and the
-  rate-limit `flock` files in `RATE_LIMIT_DIR` only work on one filesystem). `jobs_workerstatus` becomes one row per
+  rate-limit `flock` files in `RATE_LIMIT_DIR` only worked on one filesystem, until I5a). `jobs_workerstatus` becomes one row per
   lane, and `/health` and `/jobs` show each.
 - *Done when:* killing one lane's pod leaves the others' runs going.
 - *Built 28 Oct:* `run_jobs --lane` (repeatable; every lane if left out). A worker recovers, schedules and starts
@@ -400,7 +406,7 @@ Checked 28 Oct with `kubectl` from the Mac. Both nodes run k3s v1.36.5, untainte
 - [x] I2 Merges vs models lock (28 Oct; check a night that overlaps after deploy)
 - [ ] I3 Memory and rate-limit measurement
 - [x] I4 Requeue after a worker death (28 Oct)
-- [ ] I5a Rate-limit lanes in the database
+- [x] I5a Rate-limit lanes in the database (28 Oct)
 - [ ] I5 Move to the new node (layout agreed 28 Oct)
 - [x] I6b Worker per lane (28 Oct; `worker.perLane` off until I5)
 - [ ] I6 MusicBrainz mirror (decided 28 Oct: without search; searches go to the public API)

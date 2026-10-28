@@ -1,10 +1,11 @@
 """HTTP clients for the services we read from, each holding to that service's rate limit.
 
-Most clients pace themselves within one process. A client that names a `shared_lane` is paced across every process on
-the machine instead, because its limit is per IP address: MusicBrainz answers 503 to everything from an address that
-goes over one request a second, so the identity stage, the artist profiles and the label check running side by side
-must take turns. The lane is a small file under `RATE_LIMIT_DIR` holding the earliest time the next request may start,
-guarded by an exclusive `flock`; a process holds the lock while it waits its turn, so requests go out one at a time.
+Most clients pace themselves within one process. A client that names a `shared_lane` is paced across every process and
+pod instead, because its limit is per IP address or per key: MusicBrainz answers 503 to everything from an address
+that goes over one request a second, so the identity stage, the artist profiles and the label check running side by
+side must take turns. The lane is a row in the database (`clients.RateLimitLane`), so workers on different nodes
+share it. A process books the next free slot in one `UPDATE` and sleeps until it, with nothing
+locked; the slots it hands out are `interval` apart, so requests still go out one at a time.
 
 Shared-lane clients also handle "busy" answers (429, 503) themselves rather than through urllib3's retries, which
 ignore the pacing (the first retry goes at once) and hide five requests behind each call. urllib3 retries any 503
@@ -13,14 +14,15 @@ switched off too. They back off exponentially
 (or for as long as `Retry-After` asks, if longer) and push the lane back, so the other processes wait too.
 """
 
-import fcntl
 import logging
+import os
+import threading
 import time
 from email.utils import parsedate_to_datetime
-from pathlib import Path
 
 import requests
 from django.conf import settings
+from django.db import InterfaceError, OperationalError, connections
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
@@ -85,55 +87,70 @@ class SharedLane:
         self.name = name
         self.interval = interval
 
-    @property
-    def path(self):
-        return Path(settings.RATE_LIMIT_DIR) / f"audio-brain-{self.name}.lane"
-
     def wait(self):
-        """Block until it's this process's turn, and book the next slot `interval` from now."""
-        with self.locked() as lane:
-            delay = read(lane) - time.time()
+        """Block until it's this process's turn, and book the next slot `interval` after it. A hold-off that arrives
+        while waiting for the slot cancels it, and the process books again after the hold-off."""
+        while True:
+            start, delay = lane_query(
+                "UPDATE clients_ratelimitlane SET next_at = GREATEST(next_at, held_until, " + NOW + ") + %s "
+                "WHERE name = %s RETURNING next_at - %s, next_at - %s - " + NOW,
+                [self.interval, self.name, self.interval, self.interval],
+                self.name,
+            )
             if delay > 0:
                 time.sleep(delay)
-            write(lane, time.time() + self.interval)
+            (held_until,) = lane_query("SELECT held_until FROM clients_ratelimitlane WHERE name = %s", [self.name], self.name)
+            if held_until <= start:
+                return
 
     def hold_off(self, seconds):
         """Push the next request back by `seconds`, for every process (the service said it's busy)."""
-        with self.locked() as lane:
-            write(lane, max(read(lane), time.time() + seconds))
-
-    def locked(self):
-        return LaneLock(self.path)
-
-
-class LaneLock:
-    def __init__(self, path):
-        self.path = path
-
-    def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.file = open(self.path, "a+")
-        fcntl.flock(self.file, fcntl.LOCK_EX)
-        return self.file
-
-    def __exit__(self, *exc):
-        fcntl.flock(self.file, fcntl.LOCK_UN)
-        self.file.close()
+        lane_query(
+            "UPDATE clients_ratelimitlane SET held_until = GREATEST(held_until, " + NOW + " + %s) WHERE name = %s RETURNING held_until",
+            [seconds, self.name],
+            self.name,
+        )
 
 
-def read(lane):
-    lane.seek(0)
-    try:
-        return float(lane.read().strip() or 0)
-    except ValueError:
-        return 0.0
+NOW = "extract(epoch FROM clock_timestamp())::float8"  # the database's clock, so the nodes' clocks needn't agree
+
+local = threading.local()
 
 
-def write(lane, next_at):
-    lane.seek(0)
-    lane.truncate()
-    lane.write(f"{next_at:.3f}")
-    lane.flush()
+def lane_query(sql, params, name):
+    """Run one statement on this thread's lane connection and return its row. The connection is its own and
+    autocommits, so a lane is never held by the caller's transaction, and each statement locks the row only while it
+    runs. It's reopened after a fork, and once if it has dropped (postgres restarted)."""
+    for attempt in range(2):
+        held = lane_connection()
+        try:
+            with held.cursor() as cursor:
+                cursor.execute(sql, params)
+                row = cursor.fetchone()
+                if row is None:  # a lane's first use
+                    cursor.execute("INSERT INTO clients_ratelimitlane (name, next_at, held_until) VALUES (%s, 0, 0) ON CONFLICT DO NOTHING", [name])
+                    cursor.execute(sql, params)
+                    row = cursor.fetchone()
+                return row
+        except (OperationalError, InterfaceError):
+            held.close()
+            local.connection = None
+            if attempt:
+                raise
+
+
+def close_lane_connection():
+    """Close this thread's lane connection (tests, so the test database can be dropped)."""
+    if getattr(local, "connection", None) is not None and local.pid == os.getpid():
+        local.connection.close()
+    local.connection = None
+
+
+def lane_connection():
+    if getattr(local, "pid", None) != os.getpid() or local.connection is None:
+        local.connection = connections.create_connection("default")
+        local.pid = os.getpid()
+    return local.connection
 
 
 def retry_after(response):

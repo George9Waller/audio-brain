@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     'discovery',
     'recommend',
     'jobs',
+    'clients',
     'api',
 ]
 
@@ -145,9 +146,6 @@ MIXES_THREADS = int(os.environ.get('MIXES_THREADS', '6'))
 # Contact sent in the User-Agent header; MusicBrainz asks for a URL or email here.
 API_CONTACT = os.environ.get('API_CONTACT', '')
 
-# Where clients rate-limited per IP address (MusicBrainz) keep the lane every process on this machine shares. /tmp
-# rather than the checkout, so worktrees and the main checkout take turns too.
-RATE_LIMIT_DIR = os.environ.get('RATE_LIMIT_DIR', '/tmp')
 # Essentia's model graphs (enrichment/essentia_models.sha256); the server image has them in /app/essentia
 ESSENTIA_MODELS_DIR = Path(os.environ.get('ESSENTIA_MODELS_DIR', BASE_DIR / 'models'))
 
