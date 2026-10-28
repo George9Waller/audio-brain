@@ -230,7 +230,10 @@ spec:
           containers:
             - name: import
               image: {{ $mb.image }}
-              args: ["createdb.sh", "-fetch"]
+              # fetch-dump.sh asks whether the data is for commercial use and waits for an answer, which a Job can't
+              # give; this marker file is musicbrainz-docker's way of answering in advance. audio-brain is personal and
+              # non-commercial (MetaBrainz's terms: https://metabrainz.org/supporters)
+              args: ["bash", "-c", "touch /media/dbdump/.for-non-commercial-use && exec createdb.sh -fetch"]
               env:
                 {{- toYaml $env | nindent 16 }}
               resources:
