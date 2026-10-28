@@ -11,7 +11,7 @@ imagePullSecrets:
 
 # CI rewrites these lines on every build (.github/workflows/deploy.yaml); the MCP image is tagged mcp-<sha>
 env:
-  IMAGE_TAG: 'be995b4d885fac2e587e711fef8516acf993e034'
+  IMAGE_TAG: 'cf038a63ae021d0898138f69a29bf6fa674ed49e'
   MCP_IMAGE_TAG: 'be995b4d885fac2e587e711fef8516acf993e034'
 
 # Every property of this AWS Secrets Manager secret becomes an environment variable: POSTGRES_PASSWORD, SECRET_KEY,
