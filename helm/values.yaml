@@ -31,7 +31,6 @@ config:
   TIDAL_COUNTRY: GB
   LISTENING_TIME_ZONE: Europe/London
   HF_HOME: /app/server/models/hf
-  RATE_LIMIT_DIR: /app/server/models/ratelimit
   OPENAI_MODEL: gpt-4.1-mini
 
 api:
@@ -91,8 +90,8 @@ postgresql:
     limits:
       memory: 1Gi
 
-# Essentia graphs, the trained scorer and context ranker, the Hugging Face cache and rate-limit state; shared by the
-# API and the worker (RWO is fine on one node)
+# Essentia graphs, the trained scorer and context ranker and the Hugging Face cache; shared by the API and the worker
+# (RWO is fine on one node)
 data:
   storage: 5Gi
 

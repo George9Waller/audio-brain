@@ -1,12 +1,15 @@
 import multiprocessing
-import tempfile
+import threading
 import time
+import uuid
 from unittest import mock
 
 import requests
-from django.test import SimpleTestCase, override_settings
+from django.db import connections, transaction
+from django.test import SimpleTestCase, TestCase, override_settings
 
-from clients.base import SharedLane, retry_after
+from clients.base import SharedLane, close_lane_connection, retry_after
+from clients.models import RateLimitLane
 from clients.musicbrainz import MusicBrainzClient
 
 
@@ -18,27 +21,37 @@ def response(status, headers=None, body=b"{}"):
     return r
 
 
-def take_turns(directory, count, out):
-    with override_settings(RATE_LIMIT_DIR=directory):
-        lane = SharedLane("test", 0.2)
-        for _ in range(count):
-            lane.wait()
-            out.put(time.time())
+def take_turns(name, count, out):
+    lane = SharedLane(name, 0.2)
+    for _ in range(count):
+        lane.wait()
+        out.put(time.time())
 
 
-class SharedLaneTests(SimpleTestCase):
+def booked(name):
+    """The lane's row as another connection sees it: only what has been committed."""
+    other = connections.create_connection("default")
+    try:
+        with other.cursor() as cursor:
+            cursor.execute("SELECT next_at, held_until FROM clients_ratelimitlane WHERE name = %s", [name])
+            return cursor.fetchone()
+    finally:
+        other.close()
+
+
+class SharedLaneTests(TestCase):
     def setUp(self):
-        self.dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.dir.cleanup)
-        self.settings = override_settings(RATE_LIMIT_DIR=self.dir.name)
-        self.settings.enable()
-        self.addCleanup(self.settings.disable)
+        self.name = f"test-{uuid.uuid4().hex[:8]}"  # the lane's row is committed outside the test's transaction
+
+    def tearDown(self):
+        close_lane_connection()
+        RateLimitLane.objects.filter(name=self.name).delete()
 
     def test_processes_take_turns(self):
         """Two processes on one lane: every request starts at least the interval after the one before, whoever sent it."""
         context = multiprocessing.get_context("fork")
         out = context.Queue()
-        workers = [context.Process(target=take_turns, args=(self.dir.name, 4, out)) for _ in range(2)]
+        workers = [context.Process(target=take_turns, args=(self.name, 4, out)) for _ in range(2)]
         for w in workers:
             w.start()
         for w in workers:
@@ -48,17 +61,33 @@ class SharedLaneTests(SimpleTestCase):
         self.assertGreaterEqual(min(gaps), 0.19)
 
     def test_hold_off_delays_the_next_request(self):
-        lane = SharedLane("test", 0.0)
+        lane = SharedLane(self.name, 0.0)
         lane.hold_off(0.3)
         started = time.time()
         lane.wait()
         self.assertGreaterEqual(time.time() - started, 0.25)
-        # A shorter hold-off never pulls a later booking forward.
+        # A shorter hold-off never pulls a later one forward.
         lane.hold_off(5)
         lane.hold_off(0.1)
-        with lane.locked() as f:
-            f.seek(0)
-            self.assertGreater(float(f.read()), time.time() + 4)
+        self.assertGreater(booked(self.name)[1], time.time() + 4)
+
+    def test_hold_off_cancels_a_slot_already_booked(self):
+        """A request waiting for its slot when the service says it's busy waits for the hold-off instead."""
+        lane = SharedLane(self.name, 0.5)
+        lane.wait()
+        started = time.time()
+        waiter = threading.Thread(target=lambda: (lane.wait(), close_lane_connection()))  # on a connection of its own
+        waiter.start()
+        time.sleep(0.1)
+        lane.hold_off(1.0)
+        waiter.join(5)
+        self.assertGreaterEqual(time.time() - started, 1.05)
+
+    def test_a_booking_isnt_part_of_the_callers_transaction(self):
+        lane = SharedLane(self.name, 30)
+        with transaction.atomic():
+            lane.wait()
+            self.assertGreater(booked(self.name)[0], time.time() + 25)
 
     def test_retry_after(self):
         self.assertEqual(retry_after(response(503, {"Retry-After": "7"})), 7)
@@ -69,13 +98,10 @@ class SharedLaneTests(SimpleTestCase):
 @override_settings(API_CONTACT="me@example.com")
 class MusicBrainzBusyTests(SimpleTestCase):
     def setUp(self):
-        self.dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.dir.cleanup)
-        self.settings = override_settings(RATE_LIMIT_DIR=self.dir.name)
-        self.settings.enable()
-        self.addCleanup(self.settings.disable)
         self.client = MusicBrainzClient()
-        self.client.min_interval = self.client.lane.interval = 0
+        waiting = mock.patch.object(self.client.lane, "wait")  # the lane itself is tested above
+        waiting.start()
+        self.addCleanup(waiting.stop)
 
     def test_user_agent_names_a_contact(self):
         self.assertEqual(self.client.session.headers["User-Agent"], "audio-brain/0.1 ( me@example.com )")
