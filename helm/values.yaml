@@ -176,7 +176,7 @@ musicbrainz:
   image: metabrainz/musicbrainz-docker-musicbrainz:v-2026-09-21.0-build0
   dbImage: metabrainz/musicbrainz-docker-db:18-build0
   valkeyImage: valkey/valkey:9-alpine
-  serverReplicas: 0  # 1 once the import has finished: before that its database doesn't exist
+  serverReplicas: 1
   serverProcesses: 4  # each a Perl process; audio-brain makes one request at a time per stage
   replicationSchedule: "0 11 * * *"  # UTC
   dbStorage: 100Gi
