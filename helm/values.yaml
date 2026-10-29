@@ -54,7 +54,7 @@ config:
   OPENAI_MODEL: gpt-4.1-mini
   # The MusicBrainz mirror below, for lookups: set to http://musicbrainz:5000/ws/2/ only once its import has finished
   # (deploy/KUBERNETES.md, "The MusicBrainz mirror"); empty asks musicbrainz.org for everything
-  MUSICBRAINZ_BASE_URL: ""
+  MUSICBRAINZ_BASE_URL: http://musicbrainz:5000/ws/2/
 
 api:
   nodePort: 30800  # reached over Tailscale at http://<node>.<tailnet>.ts.net:30800
