@@ -102,7 +102,7 @@ fun HomePage(vm: AppViewModel, padding: PaddingValues, onAsk: () -> Unit, onFocu
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding)) {
         BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            val size = minOf(maxWidth * 0.62f, 280.dp, screenHeight * (if (playing != null) 0.3f else 0.22f))
+            val size = minOf(maxWidth * 0.62f, 280.dp, screenHeight * (if (playing != null) 0.24f else 0.16f))
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Box(Modifier.clickable(remember { MutableInteractionSource() }, null, onClick = onFocus)) {
                     SoundSigil(sigil, size = size, playing = playing?.playing == true, faint = faint)
@@ -136,7 +136,7 @@ fun HomePage(vm: AppViewModel, padding: PaddingValues, onAsk: () -> Unit, onFocu
         AskBox("What do you want to hear?", onClick = onAsk)
         if (actions.isNotEmpty()) {
             SectionHeader("For now")
-            actions.take(5).forEach { a -> LeadRow(a, hour) { vm.makeFromAction(a) } }
+            actions.take(8).forEach { a -> LeadRow(a, hour) { vm.makeFromAction(a) } }
         }
         Spacer(Modifier.height(Ab.space.l))
     }

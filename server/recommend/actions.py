@@ -57,8 +57,8 @@ def for_now(count=4, now=None):
     return picked
 
 
-NOW_SLOTS = 2  # contexts that fit now, each from a different family
-LEAD_SLOTS = 3  # then the strongest leads to explore, by their own evidence
+NOW_SLOTS = 3  # contexts that fit now, each from a different family
+LEAD_SLOTS = 5  # then the strongest leads to explore, by their own evidence
 LEADS_PER_KIND = 2  # so one kind of lead (two new interests, say) can't fill them all
 FADED_LIFETIME = 200  # plays a context needs to count as one you've let fade
 

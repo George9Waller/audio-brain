@@ -497,7 +497,7 @@ class QuickActionTests(TestCase):
         with mock.patch.object(actions, "for_now", return_value=[]), \
                 mock.patch.multiple(actions, **{name: mock.Mock(return_value=value) for name, value in leads.items()}):
             labels = [a["label"] for a in actions.quick_actions(now=self.now)]
-        self.assertEqual(labels, ["interest 0.9", "fresh 0.85", "interest 0.8"])
+        self.assertEqual(labels, ["interest 0.9", "fresh 0.85", "interest 0.8", "faded 0.4"])  # a third interest is one too many
 
     def test_a_faded_context_that_suits_now_is_a_lead(self):
         from recommend import actions

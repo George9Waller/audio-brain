@@ -47,6 +47,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.StrokeJoin
@@ -150,7 +151,10 @@ private fun DrawScope.drawSigil(spec: SigilSpec, path: Path, ground: Color, fain
             drawLine(color.copy(alpha = 0.5f * alpha), c + polar(a, outer * 0.86f), c + polar(a, outer), 1.2.dp.toPx() * k, StrokeCap.Round)
         }
     }
-    drawCircle(color.copy(alpha = 0.9f * alpha), outer * 0.72f, c, style = Stroke((0.8f + spec.energy * 3.2f).dp.toPx() * k))
+    // a track only near its context (not in it yet) has a dashed ring: "sounds like", not "is part of"
+    val ring = (0.8f + spec.energy * 3.2f).dp.toPx() * k
+    val dashes = if (spec.near) PathEffect.dashPathEffect(floatArrayOf(ring * 1.6f + 2.dp.toPx() * k, 2.6.dp.toPx() * k)) else null
+    drawCircle(color.copy(alpha = 0.9f * alpha), outer * 0.72f, c, style = Stroke(ring, pathEffect = dashes))
     val n = spec.moods.size
     val turn = if (key != null) ((key - 1) * PI / 6).toFloat() else 0f
     val points = spec.moods.mapIndexed { i, m -> c + polar((2 * PI * i / n - PI / 2).toFloat() + turn, outer * (0.17f + 0.44f * m.coerceIn(0f, 1f))) }
@@ -357,7 +361,8 @@ fun ListRow(title: String, meta: String, hues: List<TrackHue?>, modifier: Modifi
 
 /**
  * A list's colours as a small square: its tracks' context colours in a 4×4 grid, most common first, so a list's
- * make-up reads at a glance without a full-width strip. Tracks only near a context show its colour paler.
+ * make-up reads at a glance without a full-width strip. Tracks only near a context (unplayed) are hollow cells
+ * in its colour, so a list of new music reads as outlines and one you know as solid.
  */
 @Composable
 fun ListSwatch(hues: List<TrackHue?>, modifier: Modifier = Modifier, size: Dp = 36.dp) {
@@ -367,7 +372,11 @@ fun ListSwatch(hues: List<TrackHue?>, modifier: Modifier = Modifier, size: Dp = 
         val gap = 1.dp.toPx()
         val cell = (this.size.width - gap * 3) / 4
         cells.forEachIndexed { i, h ->
-            drawRect(if (h == null) faint else contextColor(h.hue, near = h.near), Offset((i % 4) * (cell + gap), (i / 4) * (cell + gap)), Size(cell, cell))
+            val at = Offset((i % 4) * (cell + gap), (i / 4) * (cell + gap))
+            if (h != null && h.near) {
+                val w = 1.5.dp.toPx()
+                drawRect(contextColor(h.hue), at + Offset(w / 2, w / 2), Size(cell - w, cell - w), style = Stroke(w))
+            } else drawRect(if (h == null) faint else contextColor(h.hue), at, Size(cell, cell))
         }
     }
 }
@@ -377,7 +386,7 @@ fun ListSwatch(hues: List<TrackHue?>, modifier: Modifier = Modifier, size: Dp = 
 fun <T : Any> swatchCells(hues: List<T?>, count: Int): List<T?> {
     val coloured = hues.filterNotNull()
     if (coloured.isEmpty()) return List(count) { null }
-    val shares = coloured.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
+    val shares = coloured.groupingBy { it }.eachCount().entries.sortedWith(compareBy({ (it.key as? TrackHue)?.near == true }, { -it.value }))
     val cells = shares.flatMap { (hue, n) -> List(((n.toFloat() / coloured.size) * count).roundToInt()) { hue } }
     return (cells + List(count) { shares.first().key }).take(count)
 }
