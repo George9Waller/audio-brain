@@ -70,6 +70,7 @@ fun ListDetail(vm: AppViewModel, key: String, padding: PaddingValues, onMenu: (L
     val verdicts by vm.verdicts.collectAsStateWithLifecycle()
     val decided by vm.queueStates.collectAsStateWithLifecycle()
     val list = state.lists.firstOrNull { it.key == key }
+    if (key == "releases" || key.startsWith("releases:")) return ReleaseInbox(vm, key, padding)
     if (list == null) {
         EmptyState("This list has gone", "It may have been rebuilt; go back and pick it again.")
         return

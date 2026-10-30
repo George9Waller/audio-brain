@@ -9,6 +9,7 @@ import com.georgewaller.audiobrain.data.DataGraph
 import com.georgewaller.audiobrain.data.ListItem
 import com.georgewaller.audiobrain.data.MixList
 import com.georgewaller.audiobrain.data.QuickAction
+import com.georgewaller.audiobrain.data.QueueSummary
 import com.georgewaller.audiobrain.data.TrackDto
 import com.georgewaller.audiobrain.data.TrackRef
 import com.georgewaller.audiobrain.data.Verdict
@@ -84,6 +85,9 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
         .flatMapLatest { ref -> if (ref == null) flowOf(null) else graph.feedback.latestFor(ref).map { Verdict.fromApi(it?.verdict) } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    private val _queue = MutableStateFlow(QueueSummary())
+    val queue: StateFlow<QueueSummary> = _queue.asStateFlow()
+
     private val _actions = MutableStateFlow<List<QuickAction>>(emptyList())
     val actions: StateFlow<List<QuickAction>> = _actions.asStateFlow()
 
@@ -100,6 +104,7 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
 
     init {
         viewModelScope.launch { graph.lists.load() }
+        refreshQueue()
         // fetch again once connected, or when the server or token changes
         viewModelScope.launch {
             graph.settings.settings.map { it.serverUrl to it.token }.distinctUntilChanged().drop(1).collect { if (it.first.isNotBlank()) refresh() }
@@ -134,6 +139,11 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
         refreshedAt = System.currentTimeMillis()
         viewModelScope.launch { graph.lists.refresh() }
         refreshActions()
+        refreshQueue()
+    }
+
+    fun refreshQueue() {
+        viewModelScope.launch { runCatching { graph.api.releaseSummary() }.onSuccess { _queue.value = it } }
     }
 
     fun refreshActions() {

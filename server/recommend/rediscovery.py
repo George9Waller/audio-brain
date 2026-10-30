@@ -81,7 +81,7 @@ def rediscovery(length=40, exclude=()):
                 songs.add(song)
                 picks.append(Pick(
                     audio=audio.get(track_id), track=tracks[track_id], score=score,
-                    signals={"plays": plays, "peak": peak, "dormant_days": (now - last).days}, novel=False,
+                    signals={"plays": plays, "peak": peak, "dormant_days": (now - last).days, "peak_at": f"{peak_at:%Y-%m}", "last_at": f"{last:%Y-%m}"}, novel=False,
                     reason=f"{peak} plays around {peak_at:%b %Y}, {plays} in all; not since {last:%b %Y}",
                 ))
                 break

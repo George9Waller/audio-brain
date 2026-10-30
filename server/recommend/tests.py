@@ -550,3 +550,37 @@ class QuickActionTests(TestCase):
         self.assertGreater(strength[faded.pk], 0.9)
         detail = next(lead["detail"] for _, lead in leads if lead["context_id"] == faded.pk)
         self.assertEqual(detail, "Suits Friday evenings · 0 plays lately, 1,500 in all")
+
+
+class ReleaseQueueTests(TestCase):
+    """Discover's release queue: one row per artist, the rest folded in, and the queue's size."""
+
+    def release(self, artist, title, day, score=None, source="artist", state="new"):
+        from datetime import date
+        from discovery.models import Release
+        r = Release.objects.create(tidal_id=f"t-{title}", title=title, kind="SINGLE", release_date=date(2026, 10, day), score=score, source=source, state=state,
+                                   state_changed_at=datetime.now(UTC) if state != "new" else None)
+        r.artists.add(artist)
+        return r
+
+    def test_an_artists_releases_fold_under_their_best(self):
+        from recommend.lists import release_items
+        armin, other = Artist.objects.create(name="Armin van Buuren"), Artist.objects.create(name="Essel")
+        best = self.release(armin, "UNFILTERED 008", 1, score=0.9)
+        for day, title in [(3, "ASOT 1293"), (20, "ASOT 1297"), (10, "ASOT 1295")]:
+            self.release(armin, title, day, score=0.5)
+        self.release(other, "All In My Head", 22, score=0.7)
+        items = release_items()
+        self.assertEqual([i["title"] for i in items], ["UNFILTERED 008", "All In My Head"])
+        self.assertEqual(items[0]["release_id"], best.pk)
+        self.assertEqual(([o["title"] for o in items[0]["others"]], items[0]["others_count"]), (["ASOT 1297", "ASOT 1295", "ASOT 1293"], 3))
+        self.assertEqual(items[1]["others"], [])
+
+    def test_the_summary_counts_the_whole_queue(self):
+        artist = Artist.objects.create(name="Someone")
+        for i, (source, state) in enumerate([("artist", "new"), ("artist", "new"), ("remixer", "new"), ("label", "saved"), ("artist", "dismissed")]):
+            self.release(artist, f"R{i}", i + 1, source=source, state=state)
+        from django.test import override_settings
+        with override_settings(API_TOKEN="secret"):
+            got = self.client.get("/api/v1/releases/summary", headers={"Authorization": "Bearer secret"}).json()
+        self.assertEqual(got, {"waiting": {"artist": 2, "remixer": 1}, "decided": 2, "decided_this_week": 2})
