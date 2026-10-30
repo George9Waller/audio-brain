@@ -8,7 +8,7 @@ from sklearn.decomposition import PCA
 
 from catalogue.deletions import still_there
 from catalogue.models import AudioFeatures
-from catalogue.vectors import rows_with_arrays
+from catalogue.vectors import rows_and_matrices
 from recommend.models import FusedVector, TrackVector
 
 SOUND_WEIGHT = 0.6
@@ -19,11 +19,10 @@ logger = logging.getLogger(__name__)
 
 
 def build_fused_vectors():
-    audio = list(rows_with_arrays(AudioFeatures.objects.values_list("track_id", "embedding"), 1))
+    audio, (sound,) = rows_and_matrices(AudioFeatures.objects.values_list("track_id", "embedding"), 1)
     if len(audio) <= SOUND_DIMENSIONS:
         return 0
     ids = [a[0] for a in audio]
-    sound = np.array([a[1] for a in audio])
     sound /= np.linalg.norm(sound, axis=1, keepdims=True)
     sound = PCA(n_components=SOUND_DIMENSIONS, random_state=0).fit_transform(sound)
     sound /= np.linalg.norm(sound, axis=1, keepdims=True)

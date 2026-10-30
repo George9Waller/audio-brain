@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 def session_features():
     """{session id: feature vector} from scrobble-visible patterns only."""
     plays = Listen.objects.exclude(session=None).order_by("played_at").values_list("session_id", "track_id", "track__artist__name", "played_at", "track__album_id")
-    vectors = {t: np.asarray(v, dtype=float) / (np.linalg.norm(v) or 1) for t, v in rows_with_arrays(AudioFeatures.objects.values_list("track_id", "embedding"), 1)}
+    vectors = {t: v / (np.linalg.norm(v) or 1) for t, v in rows_with_arrays(AudioFeatures.objects.values_list("track_id", "embedding"), 1)}  # float32: half the memory of float64
     totals = dict(Listen.objects.values("track").annotate(n=Count("id")).values_list("track", "n"))
     by_session = defaultdict(list)
     for session_id, track_id, artist, played_at, album in plays:

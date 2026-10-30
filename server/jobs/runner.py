@@ -5,6 +5,11 @@ run each lane in a pod of its own and one lane's memory can't kill another's run
 nothing but the database: each schedules and starts only its own lanes' jobs, claims a run by moving it from queued
 to running in one update, and keeps a heartbeat row per lane.
 
+Each run goes in a process of its own (`run_job --run`), which the lane's thread starts and waits for. Python seldom
+gives freed memory back to the system, so a worker that ran jobs in its threads kept the biggest job's memory for good
+(4 GB idle by late October, and growing with the catalogue). A process hands it all back when it ends, so each step's
+peak is its own job's, and a job killed for memory takes only itself down, not the worker.
+
 Each step's record says what it cost (INFRA.md I3): its peak memory (`jobs.memory`), and for each service it called,
 its requests, busy answers and seconds spent waiting for its turn (`clients.base.usage`). The first step that holds
 the tracks also records the catalogue's size, so the models job's memory can be read against it.
@@ -15,7 +20,10 @@ import io
 import logging
 import os
 import shlex
+import signal
 import socket
+import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -23,6 +31,7 @@ from collections import deque
 from contextlib import ExitStack
 from datetime import timedelta
 
+from django.conf import settings
 from django.core.management import call_command
 from django.db import IntegrityError, close_old_connections, transaction
 from django.db.models import Max
@@ -115,7 +124,6 @@ def execute(run: JobRun):
                 held.enter_context(holding_tracks())
                 step["catalogue"] = catalogue_size()
                 logger.info("Catalogue: {tracks:,} tracks, {analysed:,} analysed, highest ID {highest_id:,}".format(**step["catalogue"]))
-            others = other_jobs()
             reset_usage()
             measured = reset_peak()
             started = time.monotonic()
@@ -132,8 +140,6 @@ def execute(run: JobRun):
             step["peak_mb"] = peak_mb()
             if not measured:
                 step["peak_since_start"] = True
-            if others := sorted(others | other_jobs()):
-                step["peak_shared_with"] = others
             used = sorted((name, counts) for name, counts in usage().items() if counts.requests)
             if used:
                 step["clients"] = {name: {"requests": c.requests, "busy": c.busy, "waited": round(c.waited)} for name, c in used}
@@ -162,19 +168,10 @@ def catalogue_size():
     }
 
 
-def other_jobs():
-    """Titles of the other jobs running in this process (each lane's job runs in a thread named after it)."""
-    current = threading.current_thread()
-    keys = [t.name.removeprefix("job-") for t in threading.enumerate() if t is not current and t.name.startswith("job-")]
-    return {JOBS[key].title if key in JOBS else key for key in keys}
-
-
 def describe_peak(step):
     text = f"peak {step['peak_mb']:,} MB"
     if step.get("peak_since_start"):
-        text += " since the worker started"
-    if step.get("peak_shared_with"):
-        text += f" for the whole worker, with {', '.join(step['peak_shared_with'])} running too"
+        text += " since the run started"
     return text
 
 
@@ -217,8 +214,8 @@ def lanes_alive():
 
 
 def should_retry(run, now):
-    """A scheduled main-lane run the worker died during, recently, once: the models job shouldn't wait a whole day
-    after a death at 03:09, but a run that kills the worker every time mustn't loop."""
+    """A scheduled main-lane run that died (its process or the worker), recently, once: the models job shouldn't wait
+    a whole day after a death at 03:09, but a run that dies every time mustn't loop."""
     job = JOBS.get(run.job)
     return bool(
         job and job.lane == MAIN and run.trigger == JobRun.SCHEDULE and not run.options.get("retry_of")
@@ -226,8 +223,40 @@ def should_retry(run, now):
     )
 
 
+def interrupted(run, reason):
+    """Mark a run that stopped part-way as failed, and queue it again if it should be."""
+    now = timezone.now()
+    run.state, run.finished_at, run.error = JobRun.FAILED, now, reason
+    run.save(update_fields=["state", "finished_at", "error"])
+    if should_retry(run, now):
+        retry = queue(run.job, JobRun.SCHEDULE, {**run.options, "retry_of": run.pk})
+        run.error = f"{reason}; queued again as run {retry.pk}"
+        run.save(update_fields=["error"])
+        logger.warning("Run %s of %s was interrupted; queued again as run %s", run.pk, run.job, retry.pk)
+    else:
+        logger.warning("Marked run %s of %s, interrupted, as failed", run.pk, run.job)
+
+
+def run_in_process(pk):
+    """Run a claimed run in a process of its own (`run_job --run`) and wait for it; its exit code. Its log goes to the
+    worker's output, as before."""
+    return subprocess.run([sys.executable, "manage.py", "run_job", "--run", str(pk)], cwd=settings.BASE_DIR).returncode
+
+
+def describe_exit(code):
+    """'exit code 1', or 'killed by SIGKILL, likely for memory'."""
+    if code >= 0:
+        return f"exit code {code}"
+    try:
+        name = signal.Signals(-code).name
+    except ValueError:
+        name = f"signal {-code}"
+    return f"killed by {name}, likely for memory" if -code == signal.SIGKILL else f"killed by {name}"
+
+
 class Worker:
-    """Queues jobs as their schedules come due and runs queued runs, one job per lane at a time, each in a thread."""
+    """Queues jobs as their schedules come due and runs queued runs, one job per lane at a time: each in a process of
+    its own, started and waited for by a thread for its lane."""
 
     def __init__(self, schedule=True, lanes=None):
         self.schedule = schedule
@@ -244,17 +273,8 @@ class Worker:
 
     def recover(self):
         """Mark this worker's lanes' runs that were going when it last stopped as failed, and queue some again."""
-        now = timezone.now()
         for run in JobRun.objects.filter(state=JobRun.RUNNING, job__in=self.keys):
-            run.state, run.finished_at, run.error = JobRun.FAILED, now, STOPPED
-            run.save(update_fields=["state", "finished_at", "error"])
-            if should_retry(run, now):
-                retry = queue(run.job, JobRun.SCHEDULE, {**run.options, "retry_of": run.pk})
-                run.error = f"{STOPPED}; queued again as run {retry.pk}"
-                run.save(update_fields=["error"])
-                logger.warning("Run %s of %s was interrupted; queued again as run %s", run.pk, run.job, retry.pk)
-            else:
-                logger.warning("Marked run %s of %s, interrupted, as failed", run.pk, run.job)
+            interrupted(run, STOPPED)
 
     def tick(self):
         now = timezone.now()
@@ -291,7 +311,10 @@ class Worker:
             # Claimed in one update, so it starts once however many workers saw it queued (or none, if it was cancelled)
             if not JobRun.objects.filter(pk=pk, state=JobRun.QUEUED).update(state=JobRun.RUNNING, started_at=timezone.now()):
                 return
-            run = execute(JobRun.objects.get(pk=pk))
+            code = run_in_process(pk)
+            run = JobRun.objects.get(pk=pk)
+            if run.state == JobRun.RUNNING:  # the process ended before it could record the end: killed for memory, say
+                interrupted(run, f"The job's process stopped ({describe_exit(code)}) while this was running")
             logger.info("Finished %s: %s", run.job, run.state)
         finally:
             close_old_connections()

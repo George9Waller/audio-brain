@@ -1,4 +1,5 @@
 import logging
+import threading
 
 from django.core.management.base import BaseCommand, CommandError
 
@@ -13,8 +14,17 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("job", nargs="?", choices=list(JOBS))
         parser.add_argument("--skip-enrichment", action="store_true", help="For discover: only find new things")
+        parser.add_argument("--run", type=int, help="Carry out this run, already claimed by the worker (which starts each run this way, in a process of its own)")
 
-    def handle(self, *args, job, skip_enrichment, **options):
+    def handle(self, *args, job, skip_enrichment, run, **options):
+        if run is not None:
+            claimed = JobRun.objects.filter(pk=run, state=JobRun.RUNNING).first()
+            if claimed is None:
+                raise CommandError(f"Run {run} isn't running")
+            threading.current_thread().name = f"job-{claimed.job}"  # named as the worker's lane threads were, for its log
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s %(threadName)s %(message)s", datefmt="%H:%M:%S")
+            execute(claimed)
+            return
         if job is None:
             for job in JOBS.values():
                 due = next_due(job)

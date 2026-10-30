@@ -129,6 +129,14 @@ anyway. Only if it still fails afterwards:
   in `peak_shared_with` any other job running in its worker (none since I6b's per-lane pods, except locally).
   `peak_since_start` marks a peak that couldn't be reset (macOS). The first step that holds the tracks records
   `catalogue`: tracks, analysed tracks and the highest track ID. The measuring is `jobs/memory.py`.
+- *Follow-up, 30 Oct:* worker-main sat at 4.3 GB idle, the previous day's biggest peak, because Python keeps freed
+  memory, and each step's peak started from about 2.9 GB of it. Now each run goes in a process of its own
+  (`run_job --run`, started and waited for by the lane's thread), so the worker idles small, a step's peak is only its
+  own run's (`peak_shared_with` is gone, kept in the API for older runs), and a run killed for memory fails on its own
+  and is queued again like one the worker died during (I4). The vector loaders (taste, scorer, fused, map, intent)
+  fill one float32 matrix as rows stream in (`catalogue.vectors.rows_and_matrices`) and normalise it in place,
+  instead of holding a list of arrays, a matrix and a normalised copy: the taste inputs peaked at 663 MB rather than
+  948 MB at 33k tracks.
 
 **I4. Requeue a run the worker died during.**
 - *Why:* after a death at 03:09 the models job waits a whole day, and mixes are built on stale models.

@@ -1,10 +1,12 @@
+import os
 import threading
 from datetime import timedelta
 from unittest import mock
 
 import numpy as np
+from django.core.management import CommandError, call_command
 from django.db import IntegrityError, OperationalError, connection, transaction
-from django.test import TestCase, override_settings
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
 from catalogue.deletions import TRACK_DELETIONS, holding_tracks, still_there
@@ -99,15 +101,12 @@ class ExecuteTests(TestCase):
         self.assertEqual(second["catalogue"]["tracks"], 1)
         self.assertIn("musicbrainz: 3 requests, 1 busy, 1h06m waiting", "\n".join(logs.output))
 
-    def test_a_peak_shared_with_another_lane_says_so(self):
-        other = threading.Thread(target=threading.Event().wait, args=(1,), name="job-mixes", daemon=True)
-        other.start()
-        with mock.patch.dict(JOBS, {"test": job("test", steps=[("Step", "step")]), "mixes": job("mixes")}), \
+    def test_a_peak_that_couldnt_be_reset_says_so(self):
+        with mock.patch.dict(JOBS, {"test": job("test", steps=[("Step", "step")])}), \
                 mock.patch.object(runner, "call"), mock.patch.object(runner, "reset_peak", return_value=False):
             run = runner.execute(JobRun.objects.create(job="test", trigger=JobRun.CLI))
-        self.assertEqual(run.steps[0]["peak_shared_with"], ["mixes"])
         self.assertTrue(run.steps[0]["peak_since_start"])
-        self.assertIn("for the whole worker, with mixes running too", runner.describe_peak(run.steps[0]))
+        self.assertIn("since the run started", runner.describe_peak(run.steps[0]))
 
 
 class QueueTests(TestCase):
@@ -118,15 +117,71 @@ class QueueTests(TestCase):
             JobRun.objects.create(job="mixes", trigger=JobRun.APP)
 
     def test_a_run_starts_only_if_still_queued(self):
+        def finish(pk):
+            JobRun.objects.filter(pk=pk).update(state=JobRun.SUCCEEDED)
+            return 0
+
         run = JobRun.objects.create(job="mixes", trigger=JobRun.APP, state=JobRun.CANCELLED)
-        with mock.patch.object(runner, "execute") as execute, mock.patch.object(runner, "close_old_connections"):  # it would close the test's
+        with mock.patch.object(runner, "run_in_process", side_effect=finish) as started, \
+                mock.patch.object(runner, "close_old_connections"):  # it would close the test's
             runner.Worker.run_in_thread(run.pk)
-            execute.assert_not_called()
+            started.assert_not_called()
             queued = JobRun.objects.create(job="mixes", trigger=JobRun.APP)
             runner.Worker.run_in_thread(queued.pk)
             runner.Worker.run_in_thread(queued.pk)  # a second worker that also saw it queued
-        execute.assert_called_once()
-        self.assertEqual(JobRun.objects.get(pk=queued.pk).state, JobRun.RUNNING)
+        started.assert_called_once_with(queued.pk)
+        self.assertEqual(JobRun.objects.get(pk=queued.pk).state, JobRun.SUCCEEDED)
+
+
+class ProcessTests(TestCase):
+    def test_a_run_whose_process_is_killed_fails_and_is_queued_again(self):
+        run = JobRun.objects.create(job="models", trigger=JobRun.SCHEDULE)
+        with mock.patch.object(runner, "run_in_process", return_value=-9), mock.patch.object(runner, "close_old_connections"):
+            runner.Worker.run_in_thread(run.pk)
+        run.refresh_from_db()
+        retry = JobRun.objects.get(state=JobRun.QUEUED)
+        self.assertEqual((run.state, retry.options), (JobRun.FAILED, {"retry_of": run.pk}))
+        self.assertIn("killed by SIGKILL, likely for memory", run.error)
+
+    def test_a_run_its_process_finished_is_left_as_recorded(self):
+        run = JobRun.objects.create(job="mixes", trigger=JobRun.APP)
+
+        def failed(pk):
+            JobRun.objects.filter(pk=pk).update(state=JobRun.FAILED, error="Mixes\nTraceback")
+            return 0
+
+        with mock.patch.object(runner, "run_in_process", side_effect=failed), mock.patch.object(runner, "close_old_connections"):
+            runner.Worker.run_in_thread(run.pk)
+        run.refresh_from_db()
+        self.assertEqual((run.state, run.error), (JobRun.FAILED, "Mixes\nTraceback"))
+        self.assertFalse(JobRun.objects.filter(state=JobRun.QUEUED).exists())
+
+    def test_run_job_carries_out_only_a_claimed_run(self):
+        queued = JobRun.objects.create(job="mixes", trigger=JobRun.APP)
+        with self.assertRaises(CommandError):
+            call_command("run_job", run=queued.pk)
+        JobRun.objects.filter(pk=queued.pk).update(state=JobRun.RUNNING)
+        with mock.patch("jobs.management.commands.run_job.execute") as execute:
+            call_command("run_job", run=queued.pk)
+        self.assertEqual(execute.call_args.args[0].pk, queued.pk)
+        self.assertEqual(threading.current_thread().name, "job-mixes")
+        threading.current_thread().name = "MainThread"
+
+    def test_describing_an_exit(self):
+        self.assertEqual(runner.describe_exit(1), "exit code 1")
+        self.assertEqual(runner.describe_exit(-15), "killed by SIGTERM")
+
+
+class SeparateProcessTests(TransactionTestCase):
+    """A real run in a process of its own, against the test database (so not inside a test's transaction)."""
+
+    def test_the_worker_runs_a_job_in_another_process(self):
+        run = JobRun.objects.create(job="discovery_summary", trigger=JobRun.APP)
+        with mock.patch.dict(os.environ, {"POSTGRES_DB": connection.settings_dict["NAME"]}):
+            runner.Worker.run_in_thread(run.pk)
+        run.refresh_from_db()
+        self.assertEqual(run.state, JobRun.SUCCEEDED, run.error)
+        self.assertGreater(run.steps[0]["peak_mb"], 0)
 
 
 class RecoverTests(TestCase):

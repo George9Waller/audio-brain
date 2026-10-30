@@ -25,7 +25,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from catalogue.models import AudioFeatures, PlatformTrack, SimilarArtist, Track, TrackCredit, TrackTag
-from catalogue.vectors import rows_with_arrays
+from catalogue.vectors import rows_and_matrices
 from sets.models import SetTrack
 from enrichment.identity import normalise, primary_artist
 from enrichment.models import EnrichmentAttempt
@@ -75,11 +75,11 @@ class Catalogue:
     """Everything the features need, loaded once into arrays: plays, sound vectors, styles, artists."""
 
     def __init__(self):
-        audio = list(rows_with_arrays(AudioFeatures.objects.values_list("track_id", "embedding", "bpm", "danceability", "instrumental", "happy", "sad", "aggressive", "relaxed", "party", "loudness"), 1))
+        audio, (vectors,) = rows_and_matrices(AudioFeatures.objects.values_list("track_id", "embedding", "bpm", "danceability", "instrumental", "happy", "sad", "aggressive", "relaxed", "party", "loudness"), 1)
         self.track_ids = np.array([a[0] for a in audio])
         self.row = {track_id: i for i, track_id in enumerate(self.track_ids)}
-        vectors = np.array([a[1] for a in audio])
-        self.vectors = vectors / np.linalg.norm(vectors, axis=1, keepdims=True)
+        vectors /= np.linalg.norm(vectors, axis=1, keepdims=True)
+        self.vectors = vectors
         self.audio = np.array([a[2:] for a in audio], dtype=np.float32)
         loud = np.clip((self.audio[:, 8] + 20) / 14, 0, 1)
         self.energy = (self.audio[:, 1] + self.audio[:, 5] + self.audio[:, 7] + loud) / 4

@@ -12,20 +12,20 @@ import numpy as np
 from django.db import transaction
 
 from catalogue.deletions import still_there
-from catalogue.vectors import rows_with_arrays
+from catalogue.vectors import rows_and_matrices
 from recommend.models import FusedVector, MapPoint
 
 logger = logging.getLogger(__name__)
 
 
 def build_map():
-    rows = list(rows_with_arrays(FusedVector.objects.values_list("track_id", "vector"), 1))
+    rows, (vectors,) = rows_and_matrices(FusedVector.objects.values_list("track_id", "vector"), 1)
     if len(rows) < 50:
         return "too few tracks to lay out"
     import umap
 
     ids = [t for t, _ in rows]
-    X = fill_listening(np.array([v for _, v in rows]), [t in placed_by_sound() for t in ids])
+    X = fill_listening(vectors, [t in placed_by_sound() for t in ids])
     Y = umap.UMAP(n_neighbors=20, min_dist=0.12, metric="cosine", random_state=7).fit_transform(X)
     previous = dict((t, (x, y)) for t, x, y in MapPoint.objects.values_list("track_id", "x", "y"))
     Y = align(ids, Y, previous)
