@@ -18,7 +18,7 @@ from history.models import Listen
 from library.models import OAuthToken
 from recommend import editorial
 from recommend.lists import save, track_items
-from recommend.mixes import context_mix, contexts_for_now, fresh_picks
+from recommend.mixes import context_mix, contexts_for_now, fresh_picks, play_stats
 from recommend.models import Context, DraftOutcome, Mix, Playlist
 from recommend.playlists import append_playlist, log_recommendations, push_playlist
 from recommend.retrieve import Filters, Pick, recommend
@@ -43,10 +43,8 @@ def for_now(count=4, now=None):
     top_activity = max((c.activity for c in contexts), default=1) or 1
 
     def fit(c):
-        hour = (c.hours[now.hour] + 0.5 * c.hours[(now.hour + 1) % 24]) * 24 / 1.5 if any(c.hours) else 0
-        day = c.weekdays[now.weekday()] * 7 if c.weekdays else 1
         model = ranked.get(c.pk, 0) * len(contexts)
-        return 0.5 * model + 0.3 * hour * day + 0.2 * (c.activity / top_activity) * 3
+        return 0.5 * model + 0.3 * time_lift(c, now) + 0.2 * (c.activity / top_activity) * 3
 
     picked, families = [], set()
     for c in sorted(contexts, key=fit, reverse=True):
@@ -59,34 +57,146 @@ def for_now(count=4, now=None):
     return picked
 
 
+NOW_SLOTS = 2  # contexts that fit now, each from a different family
+LEAD_SLOTS = 3  # then the strongest leads to explore, by their own evidence
+LEADS_PER_KIND = 2  # so one kind of lead (two new interests, say) can't fill them all
+FADED_LIFETIME = 200  # plays a context needs to count as one you've let fade
+
+
 def quick_actions(playing_track_id=None, now=None):
-    """[{label, detail, recipe, list_key}], best first: what's likely wanted right now, from what you play and when.
-    list_key is set when a ready-made list already covers the action, so it opens at once."""
+    """[{label, detail, recipe, list_key, kind, context_id}], best first: what's likely wanted right now.
+
+    More like what's playing, if something is; then the contexts that fit this hour and day; then the leads to explore
+    with the most behind them: an artist you've suddenly been playing, an explore list you haven't worked through, a
+    context that suits now but has faded, this week's new releases, this month in your busiest past year. Each lead
+    has a strength from 0 to 1 from its own data, so which appear changes as your listening does, not by rotation.
+    `detail` says why, with the numbers. list_key is set when a ready-made list covers it, so it opens at once."""
     now = now or timezone.localtime()
     lists = set(Mix.objects.filter(section=Mix.LISTS).values_list("key", flat=True))
     actions = []
-    # a new interest leads: what you've suddenly been playing, ready as its own list
-    for mix in Mix.objects.filter(kind="interest").order_by("-built_at")[:2]:
-        actions.append({"label": mix.title, "detail": "You've been playing this a lot lately", "recipe": {"type": "fresh"}, "list_key": mix.key})
     if playing_track_id:
         track = Track.objects.filter(pk=playing_track_id, audio__isnull=False).select_related("artist").first()
         if track:
-            actions.append({"label": f"More like {track.name}", "detail": f"Sounds and plays like it · {track.artist.name}", "recipe": {"type": "seed", "track_id": track.pk}})
-    best = for_now(4, now)
-    for i, context in enumerate(best[:3]):
+            actions.append({"label": f"More like {track.name}", "detail": f"Sounds and plays like it · {track.artist.name}", "recipe": {"type": "seed", "track_id": track.pk}, "kind": "seed"})
+    best = for_now(NOW_SLOTS, now)
+    stats = play_stats({c.pk for c in Context.objects.filter(active=True)})
+    for context in best:
         key = f"context:{context.pk}"
-        actions.append({"label": context.name.split(" (")[0], "detail": ("Fits now" if i == 0 else "Also fits now") + (f" · {context.description}" if context.description else ""),
-                        "recipe": {"type": "context", "context_id": context.pk}, "list_key": key if key in lists else None})
-    if best:
-        actions.append({"label": f"New in {short(best[0].name)}", "detail": "Only tracks you haven't played", "recipe": {"type": "context", "context_id": best[0].pk, "new": True}})
-    if "new" in lists:
-        actions.append({"label": "New to you", "detail": "Never played, from the contexts you're into", "recipe": {"type": "fresh"}, "list_key": "new"})
-    year = busiest_year_this_month(now)
-    if year:
-        actions.append({"label": f"{calendar.month_name[now.month]} {year}", "detail": "What you played this month that year", "recipe": {"type": "era", "year": year, "month": now.month}})
-        actions.append({"label": f"Not since {year}", "detail": "Big then, unplayed since", "recipe": {"type": "era", "year": year, "month": None, "not_since": True}})
-    actions.append({"label": "Fresh releases", "detail": "Best new music from artists, remixers and labels you play", "recipe": {"type": "fresh"}, "list_key": "fresh" if "fresh" in lists else None})
+        recent = stats.get(context.pk, {}).get("recent", 0)
+        lift = time_lift(context, now)
+        why = f"{lift:.1f}× your usual on {when(now)}" if lift >= 1.1 else f"One of your most played on {when(now)}"
+        actions.append({"label": short(context.name), "detail": f"{why} · {plays(recent)} lately", "recipe": {"type": "context", "context_id": context.pk},
+                        "list_key": key if key in lists else None, "kind": "now", "context_id": context.pk})
+    leads = sorted(interest_leads(now) + explore_leads(now) + faded_leads(now, stats, exclude={c.pk for c in best}, lists=lists)
+                   + fresh_leads(now, lists) + era_leads(now), key=lambda lead: -lead[0])
+    per_kind = {}
+    for strength, action in leads:
+        if strength <= 0 or per_kind.get(action["kind"], 0) >= LEADS_PER_KIND:
+            continue
+        per_kind[action["kind"]] = per_kind.get(action["kind"], 0) + 1
+        actions.append(action)
+        if sum(per_kind.values()) >= LEAD_SLOTS:
+            break
     return actions
+
+
+def time_lift(context, now):
+    """How many times its usual share of plays a context gets at this hour (and the next, half as much) on this day."""
+    if not any(context.hours):
+        return 0.0
+    hour = (context.hours[now.hour] + 0.5 * context.hours[(now.hour + 1) % 24]) * 24 / 1.5
+    day = context.weekdays[now.weekday()] * 7 if context.weekdays else 1
+    return hour * day
+
+
+def when(now):
+    """"Friday evenings", from the day and the part of the day."""
+    part = "mornings" if 5 <= now.hour < 12 else "afternoons" if now.hour < 17 else "evenings" if now.hour < 22 else "nights"
+    return f"{calendar.day_name[now.weekday()]} {part}"
+
+
+def plays(n):
+    return f"{n:,} play" + ("" if n == 1 else "s")
+
+
+def interest_leads(now):
+    """Artists you've suddenly been playing: stronger the more you've played them this fortnight."""
+    from recommend.explore import NEW_INTEREST_DAYS
+
+    out = []
+    for mix in Mix.objects.filter(kind="interest").order_by("-built_at")[:3]:
+        artist_id = int(mix.key.split(":")[1])
+        n = Listen.objects.filter(track__artist_id=artist_id, played_at__gte=now - timedelta(days=NEW_INTEREST_DAYS)).count()
+        out.append((min(1.0, n / 30), {"label": mix.title, "detail": f"{plays(n)} in the last fortnight, few before", "recipe": {"type": "fresh"}, "list_key": mix.key, "kind": "interest"}))
+    return out
+
+
+def explore_leads(now):
+    """Explore lists you asked for and haven't worked through: stronger the less of it you've played, fading over
+    three weeks."""
+    out = []
+    for mix in Mix.objects.filter(kind="explore"):
+        ids = [i["track_id"] for i in mix.items if i.get("kind") == "track"]
+        if not ids:
+            continue
+        played = Listen.objects.filter(track__in=ids, played_at__gte=mix.built_at).values("track").distinct().count()
+        days = (now - mix.built_at).days
+        strength = (1 - played / len(ids)) * max(0.0, 1 - days / 21)
+        started = "today" if days == 0 else "yesterday" if days == 1 else f"{days} days ago"
+        out.append((strength, {"label": mix.title, "detail": f"Started {started} · {played} of {len(ids)} played", "recipe": {"type": "fresh"}, "list_key": mix.key, "kind": "explore"}))
+    return out
+
+
+def faded_leads(now, stats, exclude, lists):
+    """Contexts that suit this hour and day but you've hardly played lately, for all you once did: stronger the
+    better the fit and the further they've fallen from their usual rate."""
+    from recommend.mixes import RECENT
+
+    out = []
+    for context in Context.objects.filter(active=True).exclude(pk__in=exclude):
+        played = stats.get(context.pk, {})
+        lifetime, recent = played.get("lifetime", 0), played.get("recent", 0)
+        if lifetime < FADED_LIFETIME or not context.era_start:
+            continue
+        span = max(365, (now.date() - context.era_start).days)
+        expected = lifetime * RECENT.days / span  # its plays in a window that long, at its average rate
+        faded = max(0.0, 1 - recent / expected)
+        lift = time_lift(context, now)
+        key = f"context:{context.pk}"
+        out.append((min(1.0, lift / 2) * faded, {"label": short(context.name), "detail": f"Suits {when(now)} · {plays(recent)} lately, {lifetime:,} in all",
+                                                 "recipe": {"type": "context", "context_id": context.pk}, "list_key": key if key in lists else None,
+                                                 "kind": "faded", "context_id": context.pk}))
+    return out
+
+
+def fresh_leads(now, lists):
+    """New releases found this week from artists, remixers and labels you play: stronger the more there are than in
+    a usual week (the median of the weeks before), so a busy week stands out and an ordinary one doesn't."""
+    from discovery.models import Release
+    from django.db.models.functions import TruncWeek
+
+    count = Release.objects.filter(state=Release.NEW, discovered_at__gte=now - timedelta(days=7)).count()
+    weeks = sorted(Release.objects.filter(discovered_at__lt=now - timedelta(days=7)).annotate(week=TruncWeek("discovered_at")).values("week")
+                   .annotate(n=Count("pk")).values_list("n", flat=True))
+    usual = weeks[len(weeks) // 2] if weeks else count
+    return [(min(1.0, count / (2 * usual)) if usual else 0.0, {"label": "Fresh releases", "detail": f"{count} new this week from artists, remixers and labels you play",
+                                    "recipe": {"type": "fresh"}, "list_key": "fresh" if "fresh" in lists else None, "kind": "fresh"})] if count else []
+
+
+def era_leads(now):
+    """This month in the past year you played most in it: stronger the further that month was above your usual
+    month (the median), so only a month that really stood out leads."""
+    from django.db.models.functions import TruncMonth
+
+    year = busiest_year_this_month(now)
+    if not year:
+        return []
+    then = Listen.objects.filter(played_at__year=year, played_at__month=now.month).count()
+    months = sorted(Listen.objects.annotate(month=TruncMonth("played_at")).values("month").annotate(n=Count("pk")).values_list("n", flat=True))
+    usual = months[len(months) // 2] or 1
+    return [(max(0.0, min(1.0, (then / usual - 1) / 2)), {"label": f"{calendar.month_name[now.month]} {year}",
+                                                         "detail": f"{then:,} plays that month, {then / usual:.1f}× a usual month",
+                                     "recipe": {"type": "era", "year": year, "month": now.month}, "kind": "era"})]
 
 
 def short(name):

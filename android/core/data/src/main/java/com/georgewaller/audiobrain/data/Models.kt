@@ -300,7 +300,15 @@ data class MixList(
 data class ListsResponse(val lists: List<MixList>)
 
 @Serializable
-data class QuickAction(val label: String, val detail: String, val recipe: kotlinx.serialization.json.JsonObject, @SerialName("list_key") val listKey: String? = null)
+data class QuickAction(
+    val label: String,
+    val detail: String,  // why, with the numbers behind it
+    val recipe: kotlinx.serialization.json.JsonObject,
+    @SerialName("list_key") val listKey: String? = null,
+    val kind: String = "",  // seed, now, interest, explore, faded, fresh, era
+    val hue: Float? = null,  // a context's colour, and its share of plays in each local hour
+    val hours: List<Float> = emptyList(),
+)
 
 @Serializable
 data class MakeRequest(

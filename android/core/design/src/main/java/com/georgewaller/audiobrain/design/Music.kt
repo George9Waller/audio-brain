@@ -335,31 +335,72 @@ fun TrackRow(
 /** A list (playlist or discovery list): title, a mono meta line, its colour strip, and whether it's synced to Tidal. */
 @Composable
 fun ListRow(title: String, meta: String, hues: List<Float?>, modifier: Modifier = Modifier, synced: Boolean = false, tag: AgeTag? = null, onClick: () -> Unit) {
-    Column(
-        modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = Ab.space.m),
-        verticalArrangement = Arrangement.spacedBy(Ab.space.s),
+    Row(
+        modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 56.dp).padding(vertical = Ab.space.s),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            AbText(title, Modifier.weight(1f), style = Ab.type.heading, maxLines = 1)
-            if (tag == null) AbText(meta, style = Ab.type.number, color = Ab.colors.textFaint, maxLines = 1)
-            else AgeTagPill(tag)
-            Spacer(Modifier.width(Ab.space.s))
-            SyncMark(synced)
+        ListSwatch(hues)
+        Spacer(Modifier.width(Ab.space.m))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Ab.space.xxs)) {
+            AbText(title, style = Ab.type.heading, maxLines = 1)
+            AbText(meta, style = Ab.type.number, color = Ab.colors.textMuted, maxLines = 1)
         }
-        // with a tag, the meta (plays lately, an era) gets a line of its own
-        if (tag != null) AbText(meta, style = Ab.type.number, color = Ab.colors.textMuted, maxLines = 1)
-        ColourStrip(hues)
+        if (tag != null) {
+            Spacer(Modifier.width(Ab.space.s))
+            AgeTagPill(tag)
+        }
+        Spacer(Modifier.width(Ab.space.s))
+        SyncMark(synced)
     }
 }
 
-/** How recent a list is, as its row says: "Now" stands out, older ones recede. */
+/**
+ * A list's colours as a small square: its tracks' context colours in a 4×4 grid, most common first, so a list's
+ * make-up reads at a glance without a full-width strip.
+ */
+@Composable
+fun ListSwatch(hues: List<Float?>, modifier: Modifier = Modifier, size: Dp = 36.dp) {
+    val faint = Ab.colors.textFaint.copy(alpha = 0.5f)
+    val cells = remember(hues) { swatchCells(hues, 16) }
+    Canvas(modifier.size(size).clip(Ab.shapes.small)) {
+        val gap = 1.dp.toPx()
+        val cell = (this.size.width - gap * 3) / 4
+        cells.forEachIndexed { i, h ->
+            drawRect(if (h == null) faint else contextColor(h), Offset((i % 4) * (cell + gap), (i / 4) * (cell + gap)), Size(cell, cell))
+        }
+    }
+}
+
+/** [count] cells shared out among the colours by how often each appears, most common first. Tracks outside your
+ * contexts (no colour) don't take cells unless no track has a colour, when it's all faint. */
+fun swatchCells(hues: List<Float?>, count: Int): List<Float?> {
+    val coloured = hues.filterNotNull()
+    if (coloured.isEmpty()) return List(count) { null }
+    val shares = coloured.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }
+    val cells = shares.flatMap { (hue, n) -> List(((n.toFloat() / coloured.size) * count).roundToInt()) { hue } }
+    return (cells + List(count) { shares.first().key }).take(count)
+}
+
+/** How recent a list is, or what kind of lead it is; each [tone] has its own colour (Ab.colors.age*). */
 @Immutable
-data class AgeTag(val label: String, val current: Boolean = false)
+data class AgeTag(val label: String, val tone: AgeTone)
+
+enum class AgeTone { Now, Lately, Era, New, Habit, Retired }
+
+@Composable
+fun AgeTone.color(): Color = when (this) {
+    AgeTone.Now -> Ab.colors.ageNow
+    AgeTone.Lately -> Ab.colors.ageLately
+    AgeTone.Era -> Ab.colors.ageEra
+    AgeTone.New -> Ab.colors.ageNew
+    AgeTone.Habit -> Ab.colors.ageHabit
+    AgeTone.Retired -> Ab.colors.ageRetired
+}
 
 @Composable
 fun AgeTagPill(tag: AgeTag) {
-    val color = if (tag.current) Ab.colors.text else Ab.colors.textMuted
-    Box(Modifier.clip(Ab.shapes.small).background(if (tag.current) Ab.colors.overlay else Ab.colors.raised).padding(horizontal = 6.dp, vertical = 2.dp)) {
+    val color = tag.tone.color()
+    Box(Modifier.clip(Ab.shapes.small).background(color.copy(alpha = 0.14f)).padding(horizontal = 6.dp, vertical = 2.dp)) {
         AbText(tag.label.uppercase(), style = Ab.type.overline, color = color, maxLines = 1)
     }
 }
@@ -369,15 +410,15 @@ fun AgeTagPill(tag: AgeTag) {
  * colour, so it's plain whether now is when you usually play it.
  */
 @Composable
-fun HourBars(hours: List<Float>, color: Color, highlight: Int?, description: String, modifier: Modifier = Modifier, height: Dp = 28.dp) {
+fun HourBars(hours: List<Float>, color: Color, highlight: Int?, description: String, modifier: Modifier = Modifier) {
     val now = Ab.colors.text
-    Canvas(modifier.fillMaxWidth().height(height).semantics { contentDescription = description }) {
+    Canvas(modifier.semantics { contentDescription = description }) {
         val max = hours.maxOrNull()?.takeIf { it > 0f } ?: return@Canvas
-        val gap = 2.dp.toPx()
+        val gap = 1.dp.toPx()
         val w = (size.width - gap * (hours.size - 1)) / hours.size
         hours.forEachIndexed { i, v ->
             val h = (v / max * size.height).coerceAtLeast(1.dp.toPx())
-            drawRect(if (i == highlight) now else color.copy(alpha = 0.55f), Offset(i * (w + gap), size.height - h), Size(w.coerceAtLeast(0.5f), h))
+            drawRect(if (i == highlight) now else color, Offset(i * (w + gap), size.height - h), Size(w.coerceAtLeast(0.5f), h))
         }
     }
 }

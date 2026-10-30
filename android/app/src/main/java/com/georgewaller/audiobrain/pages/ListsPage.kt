@@ -97,9 +97,8 @@ fun ListsPage(vm: AppViewModel, padding: PaddingValues, onOpenList: (String) -> 
 @Composable
 fun AgeHeader(age: ListAge) {
     Column(Modifier.padding(top = Ab.space.xl, bottom = Ab.space.xs)) {
-        Overline(age.title, color = Ab.colors.textMuted)
-        Spacer(Modifier.height(Ab.space.xxs))
-        AbText(age.caption, style = Ab.type.caption, color = Ab.colors.textFaint, maxLines = 2)
+        AbText(age.title, style = Ab.type.title, maxLines = 1)
+        AbText(age.caption, style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 2)
     }
 }
 

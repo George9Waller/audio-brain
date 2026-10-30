@@ -4,15 +4,14 @@ show them. Track items share one shape everywhere (see recommend.lists), so the 
 from datetime import date, datetime
 from typing import Any
 
-from django.db.models import Count, Max, Q
+from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
 from ninja import Router, Schema
 
 from api.music import all_hues, hue, playlist_out
 from catalogue.models import Artist, Track
 from recommend.lists import track_items
-from recommend.mixes import RECENT
+from recommend.mixes import play_stats
 from recommend.models import Context, ContextTrack, Feedback, ListSync, Mix, Playlist
 from recommend.retrieve import Pick
 from recommend.sigil import shapes
@@ -133,15 +132,6 @@ def context_out(context, stats=None):
         "era_start": context.era_start, "era_end": context.era_end, "hours": context.hours or [], "weekdays": context.weekdays or [],
     }
 
-
-def play_stats(context_ids):
-    """Context ID -> its tracks' plays lately and in all, and the last one, in one query. A retired context has no
-    tracks any more, so it isn't in the result."""
-    since = timezone.now() - RECENT
-    rows = ContextTrack.objects.filter(context__in=context_ids).values("context").annotate(
-        recent=Count("track__listens", filter=Q(track__listens__played_at__gte=since)), lifetime=Count("track__listens"), last=Max("track__listens__played_at"),
-    )
-    return {row.pop("context"): row for row in rows}
 
 
 def picks_for(tracks, reason=lambda t: ""):

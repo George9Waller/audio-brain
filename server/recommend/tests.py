@@ -477,3 +477,38 @@ class DraftRefineTests(TestCase):
         for op in [{"op": "shuffle"}, {"op": "remove"}, {"op": "move", "track_id": self.i.pk}, {"op": "length", "length": 200}]:
             with self.assertRaises(RefineError):
                 self.refine(op)
+
+
+class QuickActionTests(TestCase):
+    """Home's "For now": the contexts that fit, then the leads with the most behind them."""
+
+    def setUp(self):
+        from zoneinfo import ZoneInfo
+        self.now = datetime(2026, 10, 30, 21, 40, tzinfo=ZoneInfo("Europe/London"))
+
+    def lead(self, kind, strength):
+        return strength, {"label": f"{kind} {strength}", "detail": "", "recipe": {}, "kind": kind}
+
+    def test_leads_go_strongest_first_and_no_kind_fills_them_all(self):
+        from recommend import actions
+        leads = {"interest_leads": [self.lead("interest", 0.9), self.lead("interest", 0.8), self.lead("interest", 0.7)],
+                 "explore_leads": [self.lead("explore", 0.0)], "faded_leads": [self.lead("faded", 0.4)],
+                 "fresh_leads": [self.lead("fresh", 0.85)], "era_leads": []}
+        with mock.patch.object(actions, "for_now", return_value=[]), \
+                mock.patch.multiple(actions, **{name: mock.Mock(return_value=value) for name, value in leads.items()}):
+            labels = [a["label"] for a in actions.quick_actions(now=self.now)]
+        self.assertEqual(labels, ["interest 0.9", "fresh 0.85", "interest 0.8"])
+
+    def test_a_faded_context_that_suits_now_is_a_lead(self):
+        from recommend import actions
+        hours = [0.0] * 24
+        hours[21] = hours[22] = 0.5
+        faded = Context.objects.create(name="Late night neo-classical", centroid=[0.0] * 1280, hours=hours, weekdays=[1 / 7] * 7, era_start=datetime(2020, 1, 1).date())
+        playing = Context.objects.create(name="Played lately", centroid=[0.0] * 1280, hours=hours, weekdays=[1 / 7] * 7, era_start=datetime(2020, 1, 1).date())
+        stats = {faded.pk: {"recent": 0, "lifetime": 1500}, playing.pk: {"recent": 200, "lifetime": 1500}}
+        leads = actions.faded_leads(self.now, stats, exclude=set(), lists=set())
+        strength = {lead["context_id"]: s for s, lead in leads}
+        self.assertEqual(strength[playing.pk], 0)
+        self.assertGreater(strength[faded.pk], 0.9)
+        detail = next(lead["detail"] for _, lead in leads if lead["context_id"] == faded.pk)
+        self.assertEqual(detail, "Suits Friday evenings · 0 plays lately, 1,500 in all")

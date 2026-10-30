@@ -2,11 +2,10 @@ package com.georgewaller.audiobrain
 
 import com.georgewaller.audiobrain.data.MixList
 import com.georgewaller.audiobrain.design.AgeTag
+import com.georgewaller.audiobrain.design.AgeTone
 import java.time.Instant
-import java.time.LocalDateTime
 import java.text.NumberFormat
 import java.util.Locale
-import kotlin.math.ln
 
 /** The Lists page's sections, in order, from what you're playing now to what's older. */
 enum class ListAge(val title: String, val caption: String) {
@@ -46,16 +45,17 @@ fun byAge(lists: List<MixList>): List<Pair<ListAge, List<MixList>>> {
     return ListAge.entries.mapNotNull { age -> sections[age]?.takeIf { it.isNotEmpty() }?.let { age to it } }
 }
 
-/** The tag on a list's row in its section: "Now", "Lately", the era's years ("2018–24"), "Retired"... */
-fun ListAge.tag(list: MixList): AgeTag = when (this) {
-    ListAge.Yours -> AgeTag(list.kindLabel())
-    ListAge.Now -> AgeTag("Now", current = true)
-    ListAge.Lately -> AgeTag("Lately")
-    ListAge.Era -> AgeTag(eraSpan(list.context?.eraStart, list.context?.eraEnd) ?: "Era")
-    ListAge.Kept -> AgeTag("Retired")
-    ListAge.New -> AgeTag("New")
-    ListAge.Habit -> AgeTag("Habit")
-    ListAge.Year -> AgeTag("Year")
+/** The tag on a list's row in its section: "Now", "Lately", the era's years ("2018–24"), "Retired"... None under
+ * Yours, whose titles already say what they are. */
+fun ListAge.tag(list: MixList): AgeTag? = when (this) {
+    ListAge.Yours -> null
+    ListAge.Now -> AgeTag("Now", AgeTone.Now)
+    ListAge.Lately -> AgeTag("Lately", AgeTone.Lately)
+    ListAge.Era -> AgeTag(eraSpan(list.context?.eraStart, list.context?.eraEnd) ?: "Era", AgeTone.Era)
+    ListAge.Kept -> AgeTag("Retired", AgeTone.Retired)
+    ListAge.New -> AgeTag("New", AgeTone.New)
+    ListAge.Habit -> AgeTag("Habit", AgeTone.Habit)
+    ListAge.Year -> null
 }
 
 /** The line under a list's title in its section: how much you've played it lately, or when its era was. */
@@ -77,39 +77,15 @@ fun eraSpan(start: String?, end: String?): String? {
     return if (from == to) "$from" else "$from–${"%02d".format(to % 100)}"
 }
 
-/** A context list that suits the moment, and why: Home's "Fits now". */
-data class Fit(val list: MixList, val lift: Float, val reason: String)
-
-/**
- * Context lists ranked by how much more than usual you play them at this hour (and on this day), weighted by how
- * much you've played them lately, so a context you only played twice at 10:00 doesn't top a favourite. The hour is
- * smoothed with its neighbours, as a single hour's share is noisy.
- */
-fun fitsNow(lists: List<MixList>, at: LocalDateTime, count: Int = 3): List<Fit> {
-    val hour = at.hour
-    val day = at.dayOfWeek.value - 1  // Monday first, as the server sends them
-    return lists.filter { it.kind == "mix" && it.context?.active == true && it.context?.hours?.size == 24 }
-        .map { list ->
-            val c = list.context!!
-            val hours = c.hours
-            val hourLift = (hours[(hour + 23) % 24] + hours[hour] + hours[(hour + 1) % 24]) / 3f * 24f
-            val dayLift = c.weekdays.getOrNull(day)?.let { it * 7f } ?: 1f
-            val lift = hourLift * dayLift
-            Triple(list, lift, lift * ln(1f + c.recentPlays))
-        }
-        .sortedByDescending { it.third }
-        .take(count)
-        .map { (list, lift, _) -> Fit(list, lift, reason(list, lift, at)) }
-}
-
-private fun reason(list: MixList, lift: Float, at: LocalDateTime): String {
-    val c = list.context!!
-    val time = "%02d:00".format(at.hour)
-    val day = at.dayOfWeek.getDisplayName(java.time.format.TextStyle.FULL, Locale.UK)
-    val dayLift = c.weekdays.getOrNull(at.dayOfWeek.value - 1)?.let { it * 7f } ?: 1f
-    val usual = if (lift >= 1.05f) "%.1f× your usual around $time".format(Locale.UK, lift) else "As much as usual around $time"
-    val onDay = if (dayLift >= 1.15f) ", more on ${day}s" else ""
-    return "$usual$onDay · ${count(c.recentPlays)} plays lately"
+/** The tag on a Home lead, by the kind the server gives it (recommend.actions.quick_actions); none for the rest. */
+fun leadTag(kind: String): AgeTag? = when (kind) {
+    "now" -> AgeTag("Now", AgeTone.Now)
+    "interest" -> AgeTag("Interest", AgeTone.New)
+    "explore" -> AgeTag("Explore", AgeTone.New)
+    "faded" -> AgeTag("Faded", AgeTone.Lately)
+    "fresh" -> AgeTag("New", AgeTone.New)
+    "era" -> AgeTag("Then", AgeTone.Era)
+    else -> null
 }
 
 private fun count(n: Int) = NumberFormat.getIntegerInstance(Locale.UK).format(n)
