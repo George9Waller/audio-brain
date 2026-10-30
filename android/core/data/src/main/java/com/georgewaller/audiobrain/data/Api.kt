@@ -85,6 +85,9 @@ class ApiClient(private val settings: SettingsStore) {
 
     private fun enc(key: String) = java.net.URLEncoder.encode(key, "UTF-8")
 
+    /** Close pooled connections, after the network changes: they were opened over the old route. */
+    fun dropConnections() = http.connectionPool.evictAll()
+
     /** Raw body, for the cache: [now] is stored as the server sent it. */
     suspend fun getRaw(path: String): String = call(path, null)
 

@@ -26,6 +26,7 @@ class DataGraph(context: Context) {
     private val app = context.applicationContext
     val settings = SettingsStore(app)
     val api = ApiClient(settings)
+    val network = NetworkWatch(app, api)
     val db = OutboxDatabase.create(app)
     val feedback = FeedbackRepository(app, db.feedback(), db.queue(), db.ratings(), db.comparisons(), db.listEdits())
     val now = NowRepository(app, api)
