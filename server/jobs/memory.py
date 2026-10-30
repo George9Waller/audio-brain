@@ -1,10 +1,10 @@
-"""The worker's peak memory during one step of a run, so the pods' limits can be set from measurements (INFRA.md I3).
+"""A run's peak memory during one of its steps, so the pods' limits can be set from measurements (INFRA.md I3).
 
 On Linux the kernel keeps a high-water mark of the process's resident memory (`VmHWM` in /proc/self/status), and
 writing 5 to /proc/self/clear_refs resets it to what's resident now. So the runner resets it before each step and
-reads it after. The mark is the whole process's: with every lane in one worker, a step's peak includes whatever the
-other lanes' jobs held at the time, and the runner says so. Where the mark can't be reset (macOS, or a kernel that
-refuses), the peak is the process's since it started (`getrusage`), which is only an upper bound for the step.
+reads it after. Each run has a process of its own, so the mark is that run's alone. Where it can't be reset (macOS,
+or a kernel that refuses), the peak is the process's since it started (`getrusage`), which is only an upper bound for
+the step.
 """
 
 import resource
