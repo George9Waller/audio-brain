@@ -6,6 +6,7 @@ from datetime import date, datetime
 from functools import lru_cache
 
 import numpy as np
+from django.db import connection
 from django.db.models import Count, Max
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -148,6 +149,21 @@ def all_hues():
 
 def hue(context_id):
     return all_hues().get(context_id, 0.0)
+
+
+def nearest_contexts(track_ids):
+    """{track id: the context it sounds closest to}: its embedding against each centroid, by cosine distance, worked
+    out in the database so only the ids come back. For tracks that aren't in a context (unplayed ones, mostly), so
+    they can show the colour of what they're like, marked as near rather than in."""
+    if not track_ids:
+        return {}
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT a.track_id, (SELECT c.id FROM recommend_context c WHERE c.active ORDER BY c.centroid <=> a.embedding LIMIT 1) "
+            "FROM catalogue_audiofeatures a WHERE a.track_id = ANY(%s)",
+            [list(track_ids)],
+        )
+        return {track: context for track, context in cursor.fetchall() if context is not None}
 
 
 def playlist_out(playlist):

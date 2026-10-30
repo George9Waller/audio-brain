@@ -251,6 +251,7 @@ data class ListItem(
     val styles: List<String> = emptyList(),
     val sound: ItemSound? = null,
     val hue: Float? = null,
+    @SerialName("hue_near") val hueNear: Boolean = false,  // hue is the context it sounds closest to, not one it's in
     val verdict: String? = null,
     val state: String? = null,
     val url: String? = null,

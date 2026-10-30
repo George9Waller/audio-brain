@@ -88,6 +88,7 @@ import kotlin.math.sin
 data class SigilSpec(
     val moods: List<Float>, val energy: Float, val bpm: Float, val hue: Float?,
     val camelot: String? = null, val vocal: Boolean = false,
+    val near: Boolean = false,  // the hue is the context it sounds closest to, not one it's in: drawn paler
 ) {
     val keyNumber: Int? get() = camelot?.dropLast(1)?.toIntOrNull()
     val minor: Boolean get() = camelot?.endsWith("A") == true
@@ -131,8 +132,8 @@ fun sigilBitmap(spec: SigilSpec, px: Int, density: Float, faint: Boolean = false
 fun sigilColor(spec: SigilSpec): Color {
     val key = spec.keyNumber
     return if (spec.hue != null && key != null)
-        Color.hsl(((spec.hue + (key - 6.5f) / 5.5f * 16f) % 360f + 360f) % 360f, 0.58f, if (spec.minor) 0.59f else 0.66f)
-    else contextColor(spec.hue)
+        Color.hsl(((spec.hue + (key - 6.5f) / 5.5f * 16f) % 360f + 360f) % 360f, contextSaturation(spec.near), if (spec.minor) 0.59f else 0.66f)
+    else contextColor(spec.hue, near = spec.near)
 }
 
 private fun DrawScope.drawSigil(spec: SigilSpec, path: Path, ground: Color, faint: Boolean) {
@@ -334,7 +335,7 @@ fun TrackRow(
 
 /** A list (playlist or discovery list): title, a mono meta line, its colour strip, and whether it's synced to Tidal. */
 @Composable
-fun ListRow(title: String, meta: String, hues: List<Float?>, modifier: Modifier = Modifier, synced: Boolean = false, tag: AgeTag? = null, onClick: () -> Unit) {
+fun ListRow(title: String, meta: String, hues: List<TrackHue?>, modifier: Modifier = Modifier, synced: Boolean = false, tag: AgeTag? = null, onClick: () -> Unit) {
     Row(
         modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 56.dp).padding(vertical = Ab.space.s),
         verticalAlignment = Alignment.CenterVertically,
@@ -356,24 +357,24 @@ fun ListRow(title: String, meta: String, hues: List<Float?>, modifier: Modifier 
 
 /**
  * A list's colours as a small square: its tracks' context colours in a 4×4 grid, most common first, so a list's
- * make-up reads at a glance without a full-width strip.
+ * make-up reads at a glance without a full-width strip. Tracks only near a context show its colour paler.
  */
 @Composable
-fun ListSwatch(hues: List<Float?>, modifier: Modifier = Modifier, size: Dp = 36.dp) {
+fun ListSwatch(hues: List<TrackHue?>, modifier: Modifier = Modifier, size: Dp = 36.dp) {
     val faint = Ab.colors.textFaint.copy(alpha = 0.5f)
     val cells = remember(hues) { swatchCells(hues, 16) }
     Canvas(modifier.size(size).clip(Ab.shapes.small)) {
         val gap = 1.dp.toPx()
         val cell = (this.size.width - gap * 3) / 4
         cells.forEachIndexed { i, h ->
-            drawRect(if (h == null) faint else contextColor(h), Offset((i % 4) * (cell + gap), (i / 4) * (cell + gap)), Size(cell, cell))
+            drawRect(if (h == null) faint else contextColor(h.hue, near = h.near), Offset((i % 4) * (cell + gap), (i / 4) * (cell + gap)), Size(cell, cell))
         }
     }
 }
 
 /** [count] cells shared out among the colours by how often each appears, most common first. Tracks outside your
  * contexts (no colour) don't take cells unless no track has a colour, when it's all faint. */
-fun swatchCells(hues: List<Float?>, count: Int): List<Float?> {
+fun <T : Any> swatchCells(hues: List<T?>, count: Int): List<T?> {
     val coloured = hues.filterNotNull()
     if (coloured.isEmpty()) return List(count) { null }
     val shares = coloured.groupingBy { it }.eachCount().entries.sortedByDescending { it.value }

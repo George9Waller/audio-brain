@@ -8,7 +8,7 @@ from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from ninja import Router, Schema
 
-from api.music import all_hues, hue, playlist_out
+from api.music import all_hues, hue, nearest_contexts, playlist_out
 from catalogue.models import Artist, Track
 from recommend.lists import track_items
 from recommend.mixes import play_stats
@@ -72,9 +72,11 @@ class SearchOut(Schema):
 
 
 def decorate(items):
-    """Add what changes between builds: each track's colour (its context's hue) and its latest verdict."""
+    """Add what changes between builds: each track's colour (its context's hue, or for a track in no context, the hue
+    of the one it sounds closest to, flagged `hue_near` so the app can show it paler) and its latest verdict."""
     ids = [i["track_id"] for i in items if i.get("kind") == "track"]
     colours = all_hues()
+    near = nearest_contexts([i["track_id"] for i in items if i.get("kind") == "track" and not colours.get(i.get("context_id"))])
     verdicts = {}
     for track_id, verdict in Feedback.objects.filter(track__in=ids).order_by("given_at").values_list("track_id", "verdict"):
         verdicts[track_id] = verdict
@@ -82,6 +84,10 @@ def decorate(items):
     for item in items:
         if item.get("kind") == "track":
             item["hue"] = colours.get(item["context_id"]) if item.get("context_id") else None
+            near_hue = colours.get(near.get(item["track_id"]))
+            item["hue_near"] = item["hue"] is None and near_hue is not None
+            if item["hue_near"]:
+                item["hue"] = near_hue
             item["verdict"] = verdicts.get(item["track_id"])
             if item.get("sound") and item["track_id"] in shaped:
                 item["sound"] = {**item["sound"], "shape": shaped[item["track_id"]]}

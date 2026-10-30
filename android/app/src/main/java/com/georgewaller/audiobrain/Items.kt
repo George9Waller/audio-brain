@@ -16,6 +16,7 @@ import com.georgewaller.audiobrain.design.Ab
 import com.georgewaller.audiobrain.design.AbButton
 import com.georgewaller.audiobrain.design.AbText
 import com.georgewaller.audiobrain.design.AgeTag
+import com.georgewaller.audiobrain.design.TrackHue
 import com.georgewaller.audiobrain.design.ButtonKind
 import com.georgewaller.audiobrain.design.ListRow
 import com.georgewaller.audiobrain.design.SigilSpec
@@ -31,8 +32,8 @@ fun VerdictStyle.verdict() = Verdict.valueOf(name)
 /** A list item's sigil: from its measured sound, else a faint stand-in from its names. Second is "faint". */
 fun ListItem.sigil(): Pair<SigilSpec, Boolean> {
     val s = sound
-    return if (s != null && s.moods.size == 6) SigilSpec(s.shape?.takeIf { it.size == 6 } ?: s.moods, s.energy, s.bpm, hue, s.camelot, s.instrumental < 0.5f) to false
-    else SigilSpec.fromSeed(ref.key, hue) to true
+    return if (s != null && s.moods.size == 6) SigilSpec(s.shape?.takeIf { it.size == 6 } ?: s.moods, s.energy, s.bpm, hue, s.camelot, s.instrumental < 0.5f, near = hueNear) to false
+    else SigilSpec.fromSeed(ref.key, hue).copy(near = hueNear) to true
 }
 
 /** The sigil for what's playing: from the catalogue's measured sound when it has it. */
@@ -123,7 +124,8 @@ fun MixRow(list: MixList, onOpen: () -> Unit) = MixRow(list, list.meta(), null, 
 /** A list's row with its own [meta] line and age [tag] (the Lists page's sections). */
 @Composable
 fun MixRow(list: MixList, meta: String, tag: AgeTag?, onOpen: () -> Unit) {
-    ListRow(shortName(list.title), meta, list.tracks.map { it.hue }.ifEmpty { list.items.map { null } }, synced = list.synced, tag = tag, onClick = onOpen)
+    val hues = list.tracks.map { t -> t.hue?.let { TrackHue(it, t.hueNear) } }.ifEmpty { list.items.map { null } }
+    ListRow(shortName(list.title), meta, hues, synced = list.synced, tag = tag, onClick = onOpen)
 }
 
 fun openUrl(context: Context, url: String?): Boolean {

@@ -75,9 +75,18 @@ val DarkColors = AbColors(
     scrim = Color(0x8C000000),
 )
 
-/** A context's colour from its hue (the server's: its angle in your taste, so it's the same on every screen). */
-fun contextColor(hue: Float?, colors: AbColors = DarkColors): Color =
-    if (hue == null) colors.textFaint else Color.hsl(((hue % 360f) + 360f) % 360f, 0.58f, 0.62f)
+/**
+ * A context's colour from its hue (the server's: its angle in your taste, so it's the same on every screen). [near]
+ * is for a track that isn't in the context but sounds closest to it (unplayed ones): the same hue at half saturation.
+ */
+fun contextColor(hue: Float?, colors: AbColors = DarkColors, near: Boolean = false): Color =
+    if (hue == null) colors.textFaint else Color.hsl(((hue % 360f) + 360f) % 360f, contextSaturation(near), 0.62f)
+
+fun contextSaturation(near: Boolean) = if (near) 0.29f else 0.58f
+
+/** A track's colour in a list: its context's hue, and whether it's only near that context rather than in it. */
+@Immutable
+data class TrackHue(val hue: Float, val near: Boolean = false)
 
 @OptIn(ExperimentalTextApi::class)
 private fun archivo(weight: Int, width: Float) =

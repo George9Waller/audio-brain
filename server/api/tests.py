@@ -176,6 +176,22 @@ class ListAndSetTests(TestCase):
         self.assertEqual((kept["active"], kept["recent_plays"], kept["last_played"]), (False, 0, None))
         self.assertIsNone(lists["explore:1"])
 
+    def test_a_track_in_no_context_takes_the_colour_of_the_nearest_flagged_near(self):
+        from api.lists import decorate
+        from api.music import all_hues
+        from catalogue.models import AudioFeatures
+        from recommend.models import Context, ContextTrack
+        rock, house = ([1.0] + [0.0] * 1279), ([0.0, 1.0] + [0.0] * 1278)
+        contexts = [Context.objects.create(name=n, centroid=c) for n, c in [("Rock", rock), ("House", house), ("Jazz", [0.0, 0.0, 1.0] + [0.0] * 1277)]]
+        member, unplayed, unanalysed = (Track.objects.create(name=n, artist=self.artist) for n in ("Member", "Unplayed", "Unanalysed"))
+        for track, embedding in [(member, rock), (unplayed, [0.1, 0.9] + [0.0] * 1278)]:
+            AudioFeatures.objects.create(track=track, preview_source="tidal", model="m", bpm=120, bpm_confidence=3, key="C", scale="major", key_strength=0.5,
+                                         loudness=-8, danceability=1, instrumental=0.2, happy=0.4, sad=0.1, aggressive=0.1, relaxed=0.1, party=0.5, embedding=embedding)
+        ContextTrack.objects.create(context=contexts[0], track=member, distance=0)
+        items = decorate([{"kind": "track", "track_id": t.pk, "context_id": contexts[0].pk if t == member else None} for t in (member, unplayed, unanalysed)])
+        hues = all_hues()
+        self.assertEqual([(i["hue"], i["hue_near"]) for i in items], [(hues[contexts[0].pk], False), (hues[contexts[1].pk], True), (None, False)])
+
     def test_rename(self):
         response = self.post("/api/v1/mixes/explore:1/rename", {"title": "  Late night  "})
         self.assertEqual(response.json()["title"], "Late night")
