@@ -55,6 +55,9 @@ config:
   # The MusicBrainz mirror below, for lookups: set to http://musicbrainz:5000/ws/2/ only once its import has finished
   # (deploy/KUBERNETES.md, "The MusicBrainz mirror"); empty asks musicbrainz.org for everything
   MUSICBRAINZ_BASE_URL: http://musicbrainz:5000/ws/2/
+  # Its database, for the searches its web service can't do (clients/musicbrainz_db.py); read-only, and its
+  # credentials are musicbrainz-docker's defaults, reachable only inside the cluster. Empty searches musicbrainz.org
+  MUSICBRAINZ_DATABASE_URL: postgresql://musicbrainz:musicbrainz@musicbrainz-db:5432/musicbrainz_db
 
 api:
   nodePort: 30800  # reached over Tailscale at http://<node>.<tailnet>.ts.net:30800

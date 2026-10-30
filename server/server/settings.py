@@ -149,6 +149,9 @@ API_CONTACT = os.environ.get('API_CONTACT', '')
 # The local MusicBrainz mirror's web service (INFRA.md I6), e.g. http://musicbrainz:5000/ws/2/; empty for musicbrainz.org.
 # Set it only once the mirror has its data: an empty mirror would answer "not found" for everything.
 MUSICBRAINZ_BASE_URL = os.environ.get('MUSICBRAINZ_BASE_URL', '')
+# The mirror's database, for searches (clients.musicbrainz_db), e.g.
+# postgresql://musicbrainz:musicbrainz@musicbrainz-db:5432/musicbrainz_db; empty searches musicbrainz.org.
+MUSICBRAINZ_DATABASE_URL = os.environ.get('MUSICBRAINZ_DATABASE_URL', '')
 
 # Essentia's model graphs (enrichment/essentia_models.sha256); the server image has them in /app/essentia
 ESSENTIA_MODELS_DIR = Path(os.environ.get('ESSENTIA_MODELS_DIR', BASE_DIR / 'models'))

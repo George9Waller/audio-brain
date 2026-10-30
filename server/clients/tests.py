@@ -2,8 +2,10 @@ import multiprocessing
 import threading
 import time
 import uuid
+from datetime import date
 from unittest import mock
 
+import psycopg
 import requests
 from django.db import connections, transaction
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -11,6 +13,7 @@ from django.test import SimpleTestCase, TestCase, override_settings
 from clients.base import SharedLane, close_lane_connection, duration, reset_usage, retry_after, usage
 from clients.models import RateLimitLane
 from clients.musicbrainz import MusicBrainzClient
+from clients.musicbrainz_db import MirrorDatabase
 from clients import musicbrainz
 
 
@@ -211,3 +214,62 @@ class MusicBrainzMirrorTests(SimpleTestCase):
             mirror.side_effect = [response(200, body=b'{"id": "a"}'), response(404), response(200, body=b'{"id": "c"}')]
             self.assertEqual(self.client.recordings(["a", "b", "c"]), [{"id": "a"}, {"id": "c"}])
         public.assert_not_called()
+
+
+@override_settings(MUSICBRAINZ_DATABASE_URL="postgresql://musicbrainz@mirror-db/musicbrainz_db")
+class MusicBrainzDatabaseTests(SimpleTestCase):
+    """Searches answered from the mirror's database (its SQL was checked against the mirror itself: INFRA.md I6)."""
+
+    def setUp(self):
+        self.client = MusicBrainzClient()
+        self.public = mock.patch.object(self.client.session, "get", return_value=response(200, body=b'{"recordings": [], "labels": [], "releases": []}'))
+        waiting = mock.patch.object(self.client.lane, "wait")
+        waiting.start()
+        self.addCleanup(waiting.stop)
+
+    def test_searches_go_to_the_database_not_musicbrainz_org(self):
+        reset_usage()
+        found = [{"id": "r", "title": "Archangel", "score": 100}]
+        with self.public as public, mock.patch.object(self.client.database, "search_recordings", return_value=found) as search:
+            self.assertEqual(self.client.search_recordings("Burial", "Archangel", credited="Burial & Four Tet"), found)
+        search.assert_called_once_with(["Burial & Four Tet", "Burial"], "Archangel")
+        public.assert_not_called()
+        self.client.lane.wait.assert_not_called()
+        self.assertEqual(usage()["musicbrainz database"].requests, 1)
+
+    def test_a_database_thats_down_falls_back_for_a_while(self):
+        with self.public as public, mock.patch.object(self.client.database, "labels", side_effect=psycopg.OperationalError("refused")) as labels:
+            self.client.labels("Hyperdub")
+            self.client.labels("Hyperdub")
+        self.assertEqual((labels.call_count, public.call_count), (1, 2))
+        with self.public as public, mock.patch.object(self.client.database, "labels", return_value=[]) as labels, \
+                mock.patch.object(musicbrainz.time, "monotonic", return_value=time.monotonic() + musicbrainz.MIRROR_RETRY_AFTER + 1):
+            self.client.labels("Hyperdub")
+        labels.assert_called_once()
+        public.assert_not_called()
+
+    def test_one_slow_search_falls_back_alone(self):
+        with self.public as public, mock.patch.object(self.client.database, "label_releases", side_effect=[psycopg.errors.QueryCanceled(), []]):
+            self.client.label_releases("l", date(2026, 10, 1), date(2026, 10, 30))
+            self.assertEqual(self.client.label_releases("l", date(2026, 10, 1), date(2026, 10, 30)), [])
+        public.assert_called_once()
+        self.assertIn("laid:l AND date:[2026-10-01 TO 2026-10-30]", public.call_args.kwargs["params"]["query"])
+
+
+class MirrorDatabaseTests(SimpleTestCase):
+    def test_a_search_tries_the_whole_credit_then_the_artist_then_the_main_title(self):
+        database = MirrorDatabase("postgresql://mirror-db/musicbrainz_db")
+        tried = []
+
+        def query(sql, params):
+            tried.append(("credited" if "phraseto_tsquery" in sql else "artist", params["artist"], params["title"]))
+            return [{"id": "r", "title": "You’re in a Bad Way", "isrcs": None, "first-release-date": None}] if len(tried) == 5 else []
+
+        with mock.patch.object(database, "query", side_effect=query):
+            found = database.search_recordings(["Saint Etienne & Friends", "Saint Etienne"], "You’re in a Bad Way (Remastered)")
+        self.assertEqual(tried, [
+            ("artist", "Saint Etienne & Friends", "You're in a Bad Way (Remastered)"), ("artist", "Saint Etienne & Friends", "You're in a Bad Way"),
+            ("artist", "Saint Etienne", "You're in a Bad Way (Remastered)"), ("artist", "Saint Etienne", "You're in a Bad Way"),
+            ("credited", "Saint Etienne", "You're in a Bad Way (Remastered)"),
+        ])
+        self.assertEqual(found, [{"id": "r", "title": "You’re in a Bad Way", "isrcs": [], "first-release-date": "", "score": 100}])
