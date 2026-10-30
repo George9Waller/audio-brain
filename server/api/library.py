@@ -1,22 +1,28 @@
 """Your library, browsed like a music library: tracks, artists, albums and sets, each searchable and sortable, and
-pages for an artist, an album and a set's tracklist.
+pages for an artist, an album and a set's tracklist. Everything says when as well as how much: plays lately (the
+last RECENT), in the past year and before, so the library leads with what you're into now, not only your past.
 
-"Your library" is what you've played or favourited; tracks the system knows only as candidates stay in Discover.
+"Your library" is what you've played or favourited; tracks the system knows only as candidates stay in Discover,
+except in the "never played" view, which is every catalogue track you haven't played, by what it sounds like.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from django.db.models import Count, Exists, F, Max, OuterRef, Q, Sum
+from django.db.models.functions import ExtractYear
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from ninja import Router, Schema
 
 from api.lists import decorate, picks_for
+from api.music import nearest_contexts
 from catalogue.models import Album, Artist, Track
 from history.models import Listen
 from library.models import Favourite
 from recommend.lists import track_items
-from recommend.models import ContextTrack
+from recommend.mixes import RECENT, play_stats
+from recommend.models import Context, ContextTrack, Mix
 from sets.models import Set, SetTrack
 
 router = Router(tags=["library"])
@@ -48,25 +54,124 @@ class Page(Schema):
     items: list[dict[str, Any]]
 
 
+When = Literal["", "lately", "year", "older", "never"]
+
+
+def windows(now=None):
+    """The start of "lately" and of "the past year"."""
+    now = now or timezone.now()
+    return now - RECENT, now - timedelta(days=365)
+
+
 @router.get("/library/tracks", response=Page)
-def tracks(request, q: str = "", sort: Sort = "plays", offset: int = 0):
-    qs = library_tracks()
+def tracks(request, q: str = "", sort: Sort = "plays", offset: int = 0, when: When = ""):
+    """Library tracks; `when` narrows them to played lately, in the past year (not lately), before that, or never
+    (every catalogue track you haven't played, newest first), each sorted the way that view needs unless `sort` is
+    given: most played lately, most recently played, most played back then."""
+    lately, year = windows()
+    if when == "never":
+        qs = Track.objects.exclude(Exists(Listen.objects.filter(track=OuterRef("pk"))))
+    else:
+        qs = library_tracks()
     if q.strip():
         qs = qs.filter(words(q, "name", "artist__name", "album__name"))
-    if sort == "recent":
-        qs = qs.annotate(last=Max("listens__played_at")).order_by(F("last").desc(nulls_last=True), "name")
+    if when in ("lately", "year", "older"):
+        qs = qs.annotate(last=Max("listens__played_at"), recent=Count("listens", filter=Q(listens__played_at__gte=lately)))
+        qs = {"lately": qs.filter(last__gte=lately), "year": qs.filter(last__lt=lately, last__gte=year), "older": qs.filter(last__lt=year)}[when]
+    if when == "never":
+        qs = qs.order_by("-pk")
+    elif sort == "recent" or when == "year":
+        qs = qs.annotate(last_play=Max("listens__played_at")).order_by(F("last_play").desc(nulls_last=True), "name")
     elif sort == "az":
         qs = qs.order_by("name")
+    elif when == "lately":
+        qs = qs.order_by("-recent", "-intent_plays", "name")
     else:
         qs = qs.order_by("-intent_plays", "name")
     total = qs.count()
     page = list(qs.select_related("artist", "album")[offset:offset + PAGE])
-    stats = dict((pk, (n, last)) for pk, n, last in Track.objects.filter(pk__in=[t.pk for t in page]).annotate(n=Count("listens"), last=Max("listens__played_at")).values_list("pk", "n", "last"))
+    stats = {pk: (n, recent, last) for pk, n, recent, last in Track.objects.filter(pk__in=[t.pk for t in page])
+             .annotate(n=Count("listens"), recent=Count("listens", filter=Q(listens__played_at__gte=lately)), last=Max("listens__played_at")).values_list("pk", "n", "recent", "last")}
     items = decorate(track_items(picks_for(page)))
+    near = dict(Context.objects.filter(pk__in={i.get("near_context_id") for i in items if i.get("near_context_id")}).values_list("pk", "name"))
     for item in items:
-        n, last = stats.get(item["track_id"], (0, None))
-        item["reason"] = f"{n} plays" + (f" · last {last:%b %Y}" if last else "") if n else "Favourite, not played"
+        n, recent, last = stats.get(item["track_id"], (0, 0, None))
+        item["plays"], item["recent"], item["last_played"] = n, recent, last
+        item["age"] = age(recent, last, year)
+        if n:
+            item["reason"] = (f"{recent} lately · " if recent else "") + f"{n} in all · last {last:%-d %b}" if last >= year else f"{n} in all · last {last:%b %Y}"
+        elif item.get("hue_near") and near.get(item.get("near_context_id")):
+            item["reason"] = f"Sounds like {near[item['near_context_id']]}"
+        else:
+            item["reason"] = "Favourite, not played" if when != "never" else "Not played yet"
     return {"total": total, "offset": offset, "items": items}
+
+
+def age(recent, last, year):
+    """How recent a track is, as the app tags it."""
+    if recent:
+        return "lately"
+    if last is None:
+        return "never"
+    return "year" if last >= year else "older"
+
+
+class Shelf(Schema):
+    kind: str  # album, set, context
+    id: int
+    title: str
+    detail: str
+    hues: list[float] = []
+
+
+class LibrarySummary(Schema):
+    tracks: int  # every track in the catalogue
+    recency: dict[str, int]  # tracks played lately, in the past year (not lately), before that, and never
+    artists: int
+    albums: int
+    sets: dict[str, int]  # played, saved, new
+    contexts: int
+    recent: list[Shelf]  # what you've been in lately: albums, sets and contexts
+
+
+@router.get("/library/summary", response=LibrarySummary)
+def summary(request):
+    """The Library home: how the catalogue splits by when you played it, how big each part is, and what you've been
+    in lately. A few grouped queries; the play history is grouped by track once."""
+    lately, year = windows()
+    last = Listen.objects.values("track").annotate(last=Max("played_at"))
+    played = last.count()
+    in_lately = last.filter(last__gte=lately).count()
+    in_year = last.filter(last__lt=lately, last__gte=year).count()
+    total = Track.objects.count()
+    lib = library_tracks()
+    sets = dict(Set.objects.exclude(status=Set.REJECTED).values_list("source").annotate(n=Count("pk")))
+    return {
+        "tracks": total, "recency": {"lately": in_lately, "year": in_year, "older": played - in_lately - in_year, "never": total - played},
+        "artists": Artist.objects.filter(tracks__in=lib).distinct().count(), "albums": Album.objects.filter(tracks__in=lib).distinct().count(),
+        "sets": {"played": sets.get(Set.SCROBBLE, 0), "saved": sets.get(Set.PLAYLIST, 0) + sets.get(Set.PROVIDED, 0), "new": sets.get(Set.CHANNEL, 0)},
+        "contexts": Context.objects.filter(active=True).count(),
+        "recent": recent_shelf(lately),
+    }
+
+
+def recent_shelf(since):
+    """Albums and sets you've played most since `since`, and the context you've played most from."""
+    from api.music import all_hues
+
+    hues = all_hues()
+    shelf = []
+    for row in Listen.objects.filter(played_at__gte=since, track__album__isnull=False).values("track__album", "track__album__name", "track__album__artist__name").annotate(n=Count("pk")).order_by("-n")[:3]:
+        album_hues = [hues[c] for c in ContextTrack.objects.filter(track__album=row["track__album"]).values_list("context_id", flat=True) if c in hues]
+        shelf.append({"kind": "album", "id": row["track__album"], "title": row["track__album__name"], "detail": f"{row['track__album__artist__name']} · {row['n']} plays lately", "hues": album_hues[:16]})
+    for s in Set.objects.filter(track__listens__played_at__gte=since).annotate(last=Max("track__listens__played_at")).order_by("-last").select_related("track")[:2]:
+        shelf.append({"kind": "set", "id": s.pk, "title": s.track.name, "detail": f"Played {timezone.localtime(s.last):%-d %b}", "hues": []})
+    stats = play_stats(set(Context.objects.filter(active=True).values_list("pk", flat=True)))
+    top = max(stats.items(), key=lambda kv: kv[1]["recent"], default=None)
+    if top and top[1]["recent"]:
+        context = Context.objects.get(pk=top[0])
+        shelf.append({"kind": "context", "id": context.pk, "title": context.name, "detail": f"{top[1]['recent']} plays lately", "hues": [hues.get(context.pk, 0.0)]})
+    return shelf
 
 
 class ArtistRow(Schema):
@@ -74,15 +179,42 @@ class ArtistRow(Schema):
     name: str
     tracks: int
     plays: float
+    listens: int = 0  # plays counted one by one (plays above are intent-weighted)
+    this_year: int = 0
+    years: dict[str, int] = {}  # plays per year, for the then-and-now bars
+
+
+ArtistSort = Literal["plays", "recent", "az", "year"]
 
 
 @router.get("/library/artists", response=list[ArtistRow])
-def artists(request, q: str = "", sort: Sort = "plays", offset: int = 0):
+def artists(request, q: str = "", sort: ArtistSort = "plays", offset: int = 0):
+    """Artists in your library; `year` sorts by plays this year, the rest as before. Each row has its plays per year."""
     qs = Artist.objects.filter(tracks__in=library_tracks()).annotate(n=Count("tracks", distinct=True), plays=Sum("tracks__intent_plays"))
     if q.strip():
         qs = qs.filter(words(q, "name"))
-    qs = qs.order_by("name") if sort == "az" else qs.order_by("-plays", "name")
-    return [{"id": a.pk, "name": a.name, "tracks": a.n, "plays": round(a.plays or 0, 1)} for a in qs[offset:offset + PAGE]]
+    if sort == "year":
+        start = timezone.now().replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        qs = Artist.objects.filter(pk__in=qs.values("pk")).annotate(
+            n=Count("tracks", distinct=True), plays=Sum("tracks__intent_plays"),
+            this_year=Count("tracks__listens", filter=Q(tracks__listens__played_at__gte=start)),
+        ).order_by("-this_year", "-plays", "name")
+    else:
+        qs = qs.order_by("name") if sort == "az" else qs.order_by("-plays", "name")
+    page = list(qs[offset:offset + PAGE])
+    years = years_of([a.pk for a in page])
+    now = str(timezone.now().year)
+    return [{"id": a.pk, "name": a.name, "tracks": a.n, "plays": round(a.plays or 0, 1), "years": years.get(a.pk, {}),
+             "listens": sum(years.get(a.pk, {}).values()), "this_year": years.get(a.pk, {}).get(now, 0)} for a in page]
+
+
+def years_of(artist_ids):
+    """{artist id: {"2018": plays, ...}} in one grouped query."""
+    out = {}
+    for artist, year, n in (Listen.objects.filter(track__artist__in=artist_ids).annotate(year=ExtractYear("played_at"))
+                            .values("track__artist", "year").annotate(n=Count("pk")).values_list("track__artist", "year", "n")):
+        out.setdefault(artist, {})[str(year)] = n
+    return out
 
 
 class AlbumRow(Schema):
