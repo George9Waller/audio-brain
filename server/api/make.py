@@ -10,10 +10,10 @@ from ninja.errors import HttpError
 from api.lists import ListOut, decorate, detail, list_out
 from recommend.lists import track_items
 from api.matching import match
-from api.music import TrackRef
+from api.music import TrackRef, hue
 from catalogue.models import AudioFeatures, Track
 from recommend.actions import USER_MADE, discard, remove_list, edit_list, extend_radio, keep, make, play, playlist_url, quick_actions, start_radio, suggestions, sync_list
-from recommend.models import Mix, Playlist
+from recommend.models import Context, Mix, Playlist
 
 router = Router(tags=["make"])
 
@@ -23,6 +23,10 @@ class Action(Schema):
     detail: str
     recipe: dict[str, Any]
     list_key: str | None = None  # a ready-made list that covers it: open that instead of making a draft
+    kind: str = ""  # seed, now (fits now), interest, explore, faded, fresh, era
+    context_id: int | None = None
+    hue: float | None = None  # the context's colour, and its share of plays in each local hour, for Home's graph
+    hours: list[float] = []
 
 
 class MakeIn(Schema):
@@ -80,7 +84,13 @@ class Played(Schema):
 @router.get("/actions", response=list[Action])
 def actions(request, playing: int | None = None):
     """Quick actions for right now; `playing` is the catalogue ID of what's playing, if known."""
-    return quick_actions(playing_track_id=playing)
+    out = quick_actions(playing_track_id=playing)
+    contexts = Context.objects.in_bulk([a["context_id"] for a in out if a.get("context_id")])
+    for action in out:
+        context = contexts.get(action.get("context_id"))
+        if context:
+            action.update(hue=hue(context.pk), hours=context.hours or [])
+    return out
 
 
 @router.post("/make", response=Draft)

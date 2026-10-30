@@ -1,16 +1,17 @@
 """Lists (mixes and discovery), search and browsing the catalogue, as the app's Discover, Lists and Catalogue spaces
 show them. Track items share one shape everywhere (see recommend.lists), so the app draws them with one row."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from ninja import Router, Schema
 
-from api.music import all_hues, hue, playlist_out
+from api.music import all_hues, hue, nearest_contexts, playlist_out
 from catalogue.models import Artist, Track
 from recommend.lists import track_items
+from recommend.mixes import play_stats
 from recommend.models import Context, ContextTrack, Feedback, ListSync, Mix, Playlist
 from recommend.retrieve import Pick
 from recommend.sigil import shapes
@@ -23,6 +24,15 @@ class ListContext(Schema):
     name: str
     hue: float
     family: str = ""
+    # how recent a context is, for the Lists page's sections and Home's "fits now" (only on lists, not search)
+    active: bool = True  # False once retired: its list is kept as it last was
+    recent_plays: int = 0  # plays of its tracks in the last RECENT (recommend.mixes)
+    lifetime_plays: int = 0
+    last_played: datetime | None = None
+    era_start: date | None = None
+    era_end: date | None = None
+    hours: list[float] = []  # share of its plays in each hour of the day, local time (LISTENING_TIME_ZONE)
+    weekdays: list[float] = []  # and on each day, Monday first
 
 
 class ListOut(Schema):
@@ -62,9 +72,11 @@ class SearchOut(Schema):
 
 
 def decorate(items):
-    """Add what changes between builds: each track's colour (its context's hue) and its latest verdict."""
+    """Add what changes between builds: each track's colour (its context's hue, or for a track in no context, the hue
+    of the one it sounds closest to, flagged `hue_near` so the app can show it paler) and its latest verdict."""
     ids = [i["track_id"] for i in items if i.get("kind") == "track"]
     colours = all_hues()
+    near = nearest_contexts([i["track_id"] for i in items if i.get("kind") == "track" and not colours.get(i.get("context_id"))])
     verdicts = {}
     for track_id, verdict in Feedback.objects.filter(track__in=ids).order_by("given_at").values_list("track_id", "verdict"):
         verdicts[track_id] = verdict
@@ -72,6 +84,10 @@ def decorate(items):
     for item in items:
         if item.get("kind") == "track":
             item["hue"] = colours.get(item["context_id"]) if item.get("context_id") else None
+            near_hue = colours.get(near.get(item["track_id"]))
+            item["hue_near"] = item["hue"] is None and near_hue is not None
+            if item["hue_near"]:
+                item["hue"] = near_hue
             item["verdict"] = verdicts.get(item["track_id"])
             if item.get("sound") and item["track_id"] in shaped:
                 item["sound"] = {**item["sound"], "shape": shaped[item["track_id"]]}
@@ -98,18 +114,30 @@ def lists(request):
     """Every list in one go, so the app can cache them all for offline."""
     playlists = {p.key: p for p in Playlist.objects.all()}
     synced = {row.key: row for row in ListSync.objects.all()}
-    return {"lists": [list_out(mix, playlists, synced) for mix in Mix.objects.exclude(section=Mix.DRAFTS).select_related("context")]}
+    mixes = list(Mix.objects.exclude(section=Mix.DRAFTS).select_related("context"))
+    stats = play_stats({mix.context_id for mix in mixes if mix.context_id})
+    return {"lists": [list_out(mix, playlists, synced, stats) for mix in mixes]}
 
 
-def list_out(mix, playlists=None, synced=None):
+def list_out(mix, playlists=None, synced=None, stats=None):
     playlist = playlists.get(mix.key) if playlists is not None else Playlist.objects.filter(key=mix.key).first()
     sync_row = synced.get(mix.key) if synced is not None else ListSync.objects.filter(key=mix.key).first()
     sync = bool(sync_row)
     return {
         "key": mix.key, "kind": mix.kind, "section": mix.section, "title": mix.title, "subtitle": mix.subtitle, "built_at": mix.built_at,
-        "context": {"id": mix.context_id, "name": mix.context.name, "hue": hue(mix.context_id), "family": mix.context.family} if mix.context else None,
+        "context": context_out(mix.context, stats) if mix.context else None,
         "playlist": playlist_out(playlist), "sync": sync, "pinned": bool(sync_row and sync_row.pinned), "items": decorate(mix.items),
     }
+
+
+def context_out(context, stats=None):
+    played = (stats if stats is not None else play_stats({context.pk})).get(context.pk, {})
+    return {
+        "id": context.pk, "name": context.name, "hue": hue(context.pk), "family": context.family, "active": context.active,
+        "recent_plays": played.get("recent", 0), "lifetime_plays": played.get("lifetime", 0), "last_played": played.get("last"),
+        "era_start": context.era_start, "era_end": context.era_end, "hours": context.hours or [], "weekdays": context.weekdays or [],
+    }
+
 
 
 def picks_for(tracks, reason=lambda t: ""):

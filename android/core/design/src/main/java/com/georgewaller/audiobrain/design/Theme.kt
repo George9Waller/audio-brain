@@ -26,7 +26,8 @@ import androidx.compose.ui.unit.sp
 
 /**
  * Every colour the app uses. There's no fixed accent: primary actions use the text colour, and the only hues are a
- * context's colour (as a flat mark: a dot, a strip, a sigil) and the four verdicts. Components read these, never literals.
+ * context's colour (as a flat mark: a dot, a strip, a sigil), the four verdicts and the age tags on lists (now,
+ * lately, an era...), each kept clear of the verdicts'. Components read these, never literals.
  */
 @Immutable
 data class AbColors(
@@ -46,6 +47,13 @@ data class AbColors(
     val never: Color,
     val warning: Color,
     val scrim: Color,
+    // age tags: how recent a list is, or what kind of lead it is on Home
+    val ageNow: Color = Color(0xFFFF9F5A),
+    val ageLately: Color = Color(0xFFD9A27A),
+    val ageEra: Color = Color(0xFF8FB3FF),
+    val ageNew: Color = Color(0xFF5FD4C4),
+    val ageHabit: Color = Color(0xFFE59AD0),
+    val ageRetired: Color = Color(0xFF8B9198),
 )
 
 val DarkColors = AbColors(
@@ -67,9 +75,18 @@ val DarkColors = AbColors(
     scrim = Color(0x8C000000),
 )
 
-/** A context's colour from its hue (the server's: its angle in your taste, so it's the same on every screen). */
-fun contextColor(hue: Float?, colors: AbColors = DarkColors): Color =
-    if (hue == null) colors.textFaint else Color.hsl(((hue % 360f) + 360f) % 360f, 0.58f, 0.62f)
+/**
+ * A context's colour from its hue (the server's: its angle in your taste, so it's the same on every screen). [near]
+ * is for a track that isn't in the context but sounds closest to it (unplayed ones): the same hue at half saturation.
+ */
+fun contextColor(hue: Float?, colors: AbColors = DarkColors, near: Boolean = false): Color =
+    if (hue == null) colors.textFaint else Color.hsl(((hue % 360f) + 360f) % 360f, contextSaturation(near), 0.62f)
+
+fun contextSaturation(near: Boolean) = if (near) 0.29f else 0.58f
+
+/** A track's colour in a list: its context's hue, and whether it's only near that context rather than in it. */
+@Immutable
+data class TrackHue(val hue: Float, val near: Boolean = false)
 
 @OptIn(ExperimentalTextApi::class)
 private fun archivo(weight: Int, width: Float) =

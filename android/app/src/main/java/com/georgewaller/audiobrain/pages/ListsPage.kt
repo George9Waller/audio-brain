@@ -1,6 +1,8 @@
 package com.georgewaller.audiobrain.pages
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,7 +20,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.georgewaller.audiobrain.AppViewModel
 import com.georgewaller.audiobrain.ItemRow
+import com.georgewaller.audiobrain.ListAge
 import com.georgewaller.audiobrain.MixRow
+import com.georgewaller.audiobrain.byAge
+import com.georgewaller.audiobrain.meta
+import com.georgewaller.audiobrain.tag
+import com.georgewaller.audiobrain.design.AbChip
 import com.georgewaller.audiobrain.data.ListItem
 import com.georgewaller.audiobrain.design.AbTextField
 import com.georgewaller.audiobrain.shortName
@@ -34,7 +41,10 @@ import com.georgewaller.audiobrain.design.Overline
 import com.georgewaller.audiobrain.design.Spinner
 import com.georgewaller.audiobrain.design.contextColor
 
-/** Your playlists: radios and asked mixes first, then the rest grouped by family, each family under its colour. */
+/**
+ * Your playlists by how recent they are: yours first, then the contexts you're playing now, older eras, lists kept
+ * from retired contexts, new music, habits and your years. Each row is tagged with its age.
+ */
 @Composable
 fun ListsPage(vm: AppViewModel, padding: PaddingValues, onOpenList: (String) -> Unit, onMenu: (ListItem, String) -> Unit) {
     val state by vm.lists.collectAsStateWithLifecycle()
@@ -47,12 +57,7 @@ fun ListsPage(vm: AppViewModel, padding: PaddingValues, onOpenList: (String) -> 
     // in search, tracks inside your lists that match, each saying which list it's in
     val found = if (words.isEmpty()) emptyList() else all.flatMap { l -> l.tracks.filter { matches(it.title, it.artist, it.album) }.map { it.copy(reason = "in ${shortName(l.title)}") } }
         .distinctBy { it.trackId }.take(40)
-    val yours = mixes.filter { it.kind in setOf("radio", "asked", "explore", "interest", "set") }
-    // one group per family, marked with its first context's colour; Fresh and Rediscovery last
-    val groups: List<Pair<Pair<String, Float?>, List<MixList>>> = mixes.filter { it !in yours }
-        .groupBy { l -> l.context?.family?.takeIf { it.isNotBlank() } ?: if (l.kind == "year") "Your years" else "From your listening" }
-        .map { (family, ls) -> (family to ls.firstNotNullOfOrNull { it.context?.hue }) to ls }
-        .sortedBy { (k, _) -> if (k.second == null) 1 else 0 }
+    val sections = byAge(mixes)
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
         item(key = "title") {
@@ -73,17 +78,27 @@ fun ListsPage(vm: AppViewModel, padding: PaddingValues, onOpenList: (String) -> 
         if (mixes.isEmpty() && words.isEmpty()) item(key = "empty") {
             EmptyState(if (state.loading) "Fetching your lists" else "No lists yet", state.error ?: "They're built by the Mixes job each morning; run it from More › Jobs.")
         }
-        if (yours.isNotEmpty()) {
-            item(key = "yours") { GroupHeader("Yours", null) }
-            items(yours, key = { it.key }) { l -> MixRow(l) { onOpenList(l.key) } }
-        }
-        groups.forEach { (group, ls) ->
-            item(key = "g-${group.first}") { GroupHeader(group.first, group.second) }
-            items(ls, key = { it.key }) { l -> MixRow(l) { onOpenList(l.key) } }
+        sections.forEach { (age, ls) ->
+            item(key = "s-${age.name}") { AgeHeader(age) }
+            if (age == ListAge.Year) item(key = "years") {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(Ab.space.s), verticalArrangement = Arrangement.spacedBy(Ab.space.s)) {
+                    ls.forEach { l -> AbChip(l.key.substringAfter(":"), onClick = { onOpenList(l.key) }) }
+                }
+            }
+            else items(ls, key = { it.key }) { l -> MixRow(l, age.meta(l), age.tag(l)) { onOpenList(l.key) } }
         }
         if (state.error != null && mixes.isNotEmpty()) item(key = "error") {
             AbText("Showing saved lists: ${state.error}", style = Ab.type.caption, color = Ab.colors.textFaint, modifier = Modifier.padding(top = Ab.space.m))
         }
+    }
+}
+
+/** A section's name, and a line on what puts a list in it. */
+@Composable
+fun AgeHeader(age: ListAge) {
+    Column(Modifier.padding(top = Ab.space.xl, bottom = Ab.space.xs)) {
+        AbText(age.title, style = Ab.type.title, maxLines = 1)
+        AbText(age.caption, style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 2)
     }
 }
 

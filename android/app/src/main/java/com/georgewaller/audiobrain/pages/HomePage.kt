@@ -50,10 +50,8 @@ import com.georgewaller.audiobrain.overlays.Transport
 import com.georgewaller.audiobrain.style
 import com.georgewaller.audiobrain.verdict
 import kotlinx.coroutines.delay
-import com.georgewaller.audiobrain.MixRow
 import com.georgewaller.audiobrain.design.Ab
 import com.georgewaller.audiobrain.design.AbText
-import com.georgewaller.audiobrain.design.ActionRow
 import com.georgewaller.audiobrain.design.AskBox
 import com.georgewaller.audiobrain.design.SectionHeader
 import com.georgewaller.audiobrain.design.SigilSpec
@@ -61,11 +59,22 @@ import com.georgewaller.audiobrain.design.SoundSigil
 import com.georgewaller.audiobrain.shortName
 import com.georgewaller.audiobrain.sigil
 import com.georgewaller.audiobrain.sigilFor
+import com.georgewaller.audiobrain.data.QuickAction
+import com.georgewaller.audiobrain.leadTag
+import com.georgewaller.audiobrain.design.AgeTagPill
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.platform.LocalConfiguration
+import com.georgewaller.audiobrain.design.HourBars
+import com.georgewaller.audiobrain.design.contextColor
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
+import java.time.LocalTime
 import kotlin.math.roundToInt
 
 /**
- * Home: the sigil of what's playing, a box to ask for a playlist, three quick actions and the top lists. Tap the
- * sigil for focus mode. With nothing playing, the sigil shows the first track of your top list, faintly.
+ * Home: the sigil of what's playing, a box to ask for a playlist and the leads for now (recommend.actions): the
+ * contexts that fit this hour and day, then whatever has most behind it to explore. All of it fits on one screen.
+ * Tap the sigil for focus mode. With nothing playing, the sigil shows the first lead's list, faintly.
  */
 @Composable
 fun HomePage(vm: AppViewModel, padding: PaddingValues, onAsk: () -> Unit, onFocus: () -> Unit, onMenu: (ListItem, String) -> Unit, onTracklist: (Long) -> Unit, onOpenList: (String) -> Unit) {
@@ -77,7 +86,9 @@ fun HomePage(vm: AppViewModel, padding: PaddingValues, onAsk: () -> Unit, onFocu
     val lists by vm.lists.collectAsStateWithLifecycle()
     val listening by vm.listening.collectAsStateWithLifecycle()
     val playing = np?.takeIf { it.hasTrack }
-    val topLists = lists.lists.filter { it.kind == "mix" }.take(3)
+    val hour = LocalTime.now().hour
+    // the list behind the first lead, for the faint sigil when nothing's playing
+    val topLists = listOfNotNull(actions.firstNotNullOfOrNull { a -> lists.lists.find { it.key == a.listKey } }) + lists.lists.filter { it.kind == "mix" }.take(1)
     val setTrack = setNow?.line?.track
     val (sigil, faint) = remember(playing?.ref?.key, track, setTrack, topLists.firstOrNull()?.key) {
         when {
@@ -87,9 +98,11 @@ fun HomePage(vm: AppViewModel, padding: PaddingValues, onAsk: () -> Unit, onFocu
         }
     }
 
+    // sized so the leads fit on screen below it without scrolling
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding)) {
         BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            val size = (maxWidth * 0.62f).coerceAtMost(280.dp)
+            val size = minOf(maxWidth * 0.62f, 280.dp, screenHeight * (if (playing != null) 0.24f else 0.16f))
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Box(Modifier.clickable(remember { MutableInteractionSource() }, null, onClick = onFocus)) {
                     SoundSigil(sigil, size = size, playing = playing?.playing == true, faint = faint)
@@ -119,17 +132,36 @@ fun HomePage(vm: AppViewModel, padding: PaddingValues, onAsk: () -> Unit, onFocu
             setNow?.let { now -> SetLine(now, { onMenu(it, "set") }, { onTracklist(now.tracklist.set.id) }, Modifier.padding(top = Ab.space.m)) }
             Transport(playing.playing, Modifier.fillMaxWidth().padding(top = Ab.space.s), size = 52.dp)
         }
-        Spacer(Modifier.height(Ab.space.l))
+        Spacer(Modifier.height(Ab.space.m))
         AskBox("What do you want to hear?", onClick = onAsk)
         if (actions.isNotEmpty()) {
             SectionHeader("For now")
-            actions.take(4).forEach { a -> ActionRow(a.label, a.detail) { vm.makeFromAction(a) } }
+            actions.take(8).forEach { a -> LeadRow(a, hour) { vm.makeFromAction(a) } }
         }
-        if (topLists.isNotEmpty()) {
-            SectionHeader("Top lists")
-            topLists.forEach { l -> MixRow(l) { onOpenList(l.key) } }
+        Spacer(Modifier.height(Ab.space.l))
+    }
+}
+
+/**
+ * A lead on Home: what it is, why now (with the numbers), its tag and, for a context, the day's listening as a small
+ * graph with this hour lit. Opens its list, or makes a draft from its recipe.
+ */
+@Composable
+private fun LeadRow(action: QuickAction, hour: Int, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 52.dp).padding(vertical = Ab.space.xs), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Ab.space.xxs)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                AbText(action.label, Modifier.weight(1f, fill = false), style = Ab.type.label, maxLines = 1)
+                leadTag(action.kind)?.let { Spacer(Modifier.width(Ab.space.s)); AgeTagPill(it) }
+            }
+            AbText(action.detail, style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 1)
         }
-        Spacer(Modifier.height(Ab.space.xl))
+        Spacer(Modifier.width(Ab.space.m))
+        if (action.hours.size == 24) {
+            HourBars(action.hours, contextColor(action.hue), hour, "Your plays of this by hour of the day", Modifier.width(56.dp).height(22.dp))
+        } else {
+            AbText("→", style = Ab.type.number, color = Ab.colors.textMuted)
+        }
     }
 }
 

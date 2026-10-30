@@ -151,6 +151,47 @@ class ListAndSetTests(TestCase):
         self.assertEqual(self.client.delete("/api/v1/mixes/fresh", headers=self.headers).status_code, 400)
         self.assertTrue(Mix.objects.filter(key="fresh").exists())
 
+    def test_context_lists_say_how_recently_they_were_played(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from history.models import Listen
+        from recommend.models import Context, ContextTrack, Mix
+        hours = [0.0] * 24
+        hours[16] = 1.0
+        playing = Context.objects.create(name="Afternoon rock", centroid=[0.0] * 1280, hours=hours, era_start=date(2018, 5, 1), era_end=date(2026, 8, 1))
+        retired = Context.objects.create(name="Old peak hour", centroid=[0.0] * 1280, active=False)
+        track = Track.objects.create(name="Song", artist=self.artist)
+        ContextTrack.objects.create(context=playing, track=track, distance=0)
+        now = timezone.now()
+        for days in (2, 10, 200):
+            Listen.objects.create(track=track, played_at=now - timedelta(days=days), source="lastfm")
+        for context in (playing, retired):
+            Mix.objects.create(key=f"context:{context.pk}", kind="mix", section=Mix.LISTS, title=context.name, context=context)
+
+        lists = {l["key"]: l["context"] for l in self.client.get("/api/v1/lists", headers=self.headers).json()["lists"]}
+        now_playing, kept = lists[f"context:{playing.pk}"], lists[f"context:{retired.pk}"]
+        self.assertEqual((now_playing["recent_plays"], now_playing["lifetime_plays"], now_playing["active"]), (2, 3, True))
+        self.assertEqual((now_playing["hours"][16], now_playing["era_start"], now_playing["era_end"]), (1.0, "2018-05-01", "2026-08-01"))
+        self.assertEqual(now_playing["last_played"][:10], (now - timedelta(days=2)).date().isoformat())
+        self.assertEqual((kept["active"], kept["recent_plays"], kept["last_played"]), (False, 0, None))
+        self.assertIsNone(lists["explore:1"])
+
+    def test_a_track_in_no_context_takes_the_colour_of_the_nearest_flagged_near(self):
+        from api.lists import decorate
+        from api.music import all_hues
+        from catalogue.models import AudioFeatures
+        from recommend.models import Context, ContextTrack
+        rock, house = ([1.0] + [0.0] * 1279), ([0.0, 1.0] + [0.0] * 1278)
+        contexts = [Context.objects.create(name=n, centroid=c) for n, c in [("Rock", rock), ("House", house), ("Jazz", [0.0, 0.0, 1.0] + [0.0] * 1277)]]
+        member, unplayed, unanalysed = (Track.objects.create(name=n, artist=self.artist) for n in ("Member", "Unplayed", "Unanalysed"))
+        for track, embedding in [(member, rock), (unplayed, [0.1, 0.9] + [0.0] * 1278)]:
+            AudioFeatures.objects.create(track=track, preview_source="tidal", model="m", bpm=120, bpm_confidence=3, key="C", scale="major", key_strength=0.5,
+                                         loudness=-8, danceability=1, instrumental=0.2, happy=0.4, sad=0.1, aggressive=0.1, relaxed=0.1, party=0.5, embedding=embedding)
+        ContextTrack.objects.create(context=contexts[0], track=member, distance=0)
+        items = decorate([{"kind": "track", "track_id": t.pk, "context_id": contexts[0].pk if t == member else None} for t in (member, unplayed, unanalysed)])
+        hues = all_hues()
+        self.assertEqual([(i["hue"], i["hue_near"]) for i in items], [(hues[contexts[0].pk], False), (hues[contexts[1].pk], True), (None, False)])
+
     def test_rename(self):
         response = self.post("/api/v1/mixes/explore:1/rename", {"title": "  Late night  "})
         self.assertEqual(response.json()["title"], "Late night")

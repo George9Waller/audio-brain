@@ -66,8 +66,8 @@ fun DesignCatalog(modifier: Modifier = Modifier) {
         TrackRow("I Know Where I've Been", "Queen Latifah · New to you", sigil = BALLAD, facts = "84\n3A", verdict = VerdictStyle.Keep, onSwipeRight = {}, onSwipeLeft = {})
         TrackRow("An unanalysed track", "Somebody · 2 plays", sigil = SigilSpec.fromSeed("x"), sigilFaint = true, verdict = VerdictStyle.No)
         AbDivider()
-        ListRow("House: Dom Dolla", "40 · 35% new", (0 until 40).map { if (it % 5 == 0) null else 173.7f }, synced = true) {}
-        ListRow("Rediscovery", "40 · 0% new", (0 until 40).map { (it * 37f) % 360 }) {}
+        ListRow("House: Dom Dolla", "40 · 35% new", (0 until 40).map { if (it % 5 == 0) TrackHue(173.7f, near = true) else TrackHue(173.7f) }, synced = true) {}
+        ListRow("Rediscovery", "40 · 0% new", (0 until 40).map { TrackHue((it * 37f) % 360) }) {}
         SectionHeader("Verdicts")
         VerdictBar(verdict, { verdict = if (verdict == it) null else it })
         SectionHeader("Controls")

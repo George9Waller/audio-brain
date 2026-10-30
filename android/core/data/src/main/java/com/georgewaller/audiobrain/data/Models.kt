@@ -251,6 +251,7 @@ data class ListItem(
     val styles: List<String> = emptyList(),
     val sound: ItemSound? = null,
     val hue: Float? = null,
+    @SerialName("hue_near") val hueNear: Boolean = false,  // hue is the context it sounds closest to, not one it's in
     val verdict: String? = null,
     val state: String? = null,
     val url: String? = null,
@@ -260,7 +261,21 @@ data class ListItem(
 }
 
 @Serializable
-data class ListContext(val id: Long, val name: String, val hue: Float, val family: String = "")
+data class ListContext(
+    val id: Long,
+    val name: String,
+    val hue: Float,
+    val family: String = "",
+    // how recent it is (lists only): for the Lists page's sections and Home's "Fits now"
+    val active: Boolean = true,
+    @SerialName("recent_plays") val recentPlays: Int = 0,  // in the server's RECENT window (45 days)
+    @SerialName("lifetime_plays") val lifetimePlays: Int = 0,
+    @SerialName("last_played") val lastPlayed: String? = null,
+    @SerialName("era_start") val eraStart: String? = null,  // "2018-05-13"
+    @SerialName("era_end") val eraEnd: String? = null,
+    val hours: List<Float> = emptyList(),  // share of its plays in each local hour, 24 values
+    val weekdays: List<Float> = emptyList(),  // Monday first
+)
 
 @Serializable
 data class MixList(
@@ -286,7 +301,15 @@ data class MixList(
 data class ListsResponse(val lists: List<MixList>)
 
 @Serializable
-data class QuickAction(val label: String, val detail: String, val recipe: kotlinx.serialization.json.JsonObject, @SerialName("list_key") val listKey: String? = null)
+data class QuickAction(
+    val label: String,
+    val detail: String,  // why, with the numbers behind it
+    val recipe: kotlinx.serialization.json.JsonObject,
+    @SerialName("list_key") val listKey: String? = null,
+    val kind: String = "",  // seed, now, interest, explore, faded, fresh, era
+    val hue: Float? = null,  // a context's colour, and its share of plays in each local hour
+    val hours: List<Float> = emptyList(),
+)
 
 @Serializable
 data class MakeRequest(

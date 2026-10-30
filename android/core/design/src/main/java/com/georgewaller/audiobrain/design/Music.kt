@@ -47,6 +47,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.StrokeJoin
@@ -64,6 +65,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -86,6 +89,7 @@ import kotlin.math.sin
 data class SigilSpec(
     val moods: List<Float>, val energy: Float, val bpm: Float, val hue: Float?,
     val camelot: String? = null, val vocal: Boolean = false,
+    val near: Boolean = false,  // the hue is the context it sounds closest to, not one it's in: drawn paler
 ) {
     val keyNumber: Int? get() = camelot?.dropLast(1)?.toIntOrNull()
     val minor: Boolean get() = camelot?.endsWith("A") == true
@@ -129,8 +133,8 @@ fun sigilBitmap(spec: SigilSpec, px: Int, density: Float, faint: Boolean = false
 fun sigilColor(spec: SigilSpec): Color {
     val key = spec.keyNumber
     return if (spec.hue != null && key != null)
-        Color.hsl(((spec.hue + (key - 6.5f) / 5.5f * 16f) % 360f + 360f) % 360f, 0.58f, if (spec.minor) 0.59f else 0.66f)
-    else contextColor(spec.hue)
+        Color.hsl(((spec.hue + (key - 6.5f) / 5.5f * 16f) % 360f + 360f) % 360f, contextSaturation(spec.near), if (spec.minor) 0.59f else 0.66f)
+    else contextColor(spec.hue, near = spec.near)
 }
 
 private fun DrawScope.drawSigil(spec: SigilSpec, path: Path, ground: Color, faint: Boolean) {
@@ -147,7 +151,10 @@ private fun DrawScope.drawSigil(spec: SigilSpec, path: Path, ground: Color, fain
             drawLine(color.copy(alpha = 0.5f * alpha), c + polar(a, outer * 0.86f), c + polar(a, outer), 1.2.dp.toPx() * k, StrokeCap.Round)
         }
     }
-    drawCircle(color.copy(alpha = 0.9f * alpha), outer * 0.72f, c, style = Stroke((0.8f + spec.energy * 3.2f).dp.toPx() * k))
+    // a track only near its context (not in it yet) has a dashed ring: "sounds like", not "is part of"
+    val ring = (0.8f + spec.energy * 3.2f).dp.toPx() * k
+    val dashes = if (spec.near) PathEffect.dashPathEffect(floatArrayOf(ring * 1.6f + 2.dp.toPx() * k, 2.6.dp.toPx() * k)) else null
+    drawCircle(color.copy(alpha = 0.9f * alpha), outer * 0.72f, c, style = Stroke(ring, pathEffect = dashes))
     val n = spec.moods.size
     val turn = if (key != null) ((key - 1) * PI / 6).toFloat() else 0f
     val points = spec.moods.mapIndexed { i, m -> c + polar((2 * PI * i / n - PI / 2).toFloat() + turn, outer * (0.17f + 0.44f * m.coerceIn(0f, 1f))) }
@@ -332,18 +339,97 @@ fun TrackRow(
 
 /** A list (playlist or discovery list): title, a mono meta line, its colour strip, and whether it's synced to Tidal. */
 @Composable
-fun ListRow(title: String, meta: String, hues: List<Float?>, modifier: Modifier = Modifier, synced: Boolean = false, onClick: () -> Unit) {
-    Column(
-        modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = Ab.space.m),
-        verticalArrangement = Arrangement.spacedBy(Ab.space.s),
+fun ListRow(title: String, meta: String, hues: List<TrackHue?>, modifier: Modifier = Modifier, synced: Boolean = false, tag: AgeTag? = null, onClick: () -> Unit) {
+    Row(
+        modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 56.dp).padding(vertical = Ab.space.s),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            AbText(title, Modifier.weight(1f), style = Ab.type.heading, maxLines = 1)
-            AbText(meta, style = Ab.type.number, color = Ab.colors.textFaint, maxLines = 1)
-            Spacer(Modifier.width(Ab.space.s))
-            SyncMark(synced)
+        ListSwatch(hues)
+        Spacer(Modifier.width(Ab.space.m))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Ab.space.xxs)) {
+            AbText(title, style = Ab.type.heading, maxLines = 1)
+            AbText(meta, style = Ab.type.number, color = Ab.colors.textMuted, maxLines = 1)
         }
-        ColourStrip(hues)
+        if (tag != null) {
+            Spacer(Modifier.width(Ab.space.s))
+            AgeTagPill(tag)
+        }
+        Spacer(Modifier.width(Ab.space.s))
+        SyncMark(synced)
+    }
+}
+
+/**
+ * A list's colours as a small square: its tracks' context colours in a 4×4 grid, most common first, so a list's
+ * make-up reads at a glance without a full-width strip. Tracks only near a context (unplayed) are hollow cells
+ * in its colour, so a list of new music reads as outlines and one you know as solid.
+ */
+@Composable
+fun ListSwatch(hues: List<TrackHue?>, modifier: Modifier = Modifier, size: Dp = 36.dp) {
+    val faint = Ab.colors.textFaint.copy(alpha = 0.5f)
+    val cells = remember(hues) { swatchCells(hues, 16) }
+    Canvas(modifier.size(size).clip(Ab.shapes.small)) {
+        val gap = 1.dp.toPx()
+        val cell = (this.size.width - gap * 3) / 4
+        cells.forEachIndexed { i, h ->
+            val at = Offset((i % 4) * (cell + gap), (i / 4) * (cell + gap))
+            if (h != null && h.near) {
+                val w = 1.5.dp.toPx()
+                drawRect(contextColor(h.hue), at + Offset(w / 2, w / 2), Size(cell - w, cell - w), style = Stroke(w))
+            } else drawRect(if (h == null) faint else contextColor(h.hue), at, Size(cell, cell))
+        }
+    }
+}
+
+/** [count] cells shared out among the colours by how often each appears, most common first. Tracks outside your
+ * contexts (no colour) don't take cells unless no track has a colour, when it's all faint. */
+fun <T : Any> swatchCells(hues: List<T?>, count: Int): List<T?> {
+    val coloured = hues.filterNotNull()
+    if (coloured.isEmpty()) return List(count) { null }
+    val shares = coloured.groupingBy { it }.eachCount().entries.sortedWith(compareBy({ (it.key as? TrackHue)?.near == true }, { -it.value }))
+    val cells = shares.flatMap { (hue, n) -> List(((n.toFloat() / coloured.size) * count).roundToInt()) { hue } }
+    return (cells + List(count) { shares.first().key }).take(count)
+}
+
+/** How recent a list is, or what kind of lead it is; each [tone] has its own colour (Ab.colors.age*). */
+@Immutable
+data class AgeTag(val label: String, val tone: AgeTone)
+
+enum class AgeTone { Now, Lately, Era, New, Habit, Retired }
+
+@Composable
+fun AgeTone.color(): Color = when (this) {
+    AgeTone.Now -> Ab.colors.ageNow
+    AgeTone.Lately -> Ab.colors.ageLately
+    AgeTone.Era -> Ab.colors.ageEra
+    AgeTone.New -> Ab.colors.ageNew
+    AgeTone.Habit -> Ab.colors.ageHabit
+    AgeTone.Retired -> Ab.colors.ageRetired
+}
+
+@Composable
+fun AgeTagPill(tag: AgeTag) {
+    val color = tag.tone.color()
+    Box(Modifier.clip(Ab.shapes.small).background(color.copy(alpha = 0.14f)).padding(horizontal = 6.dp, vertical = 2.dp)) {
+        AbText(tag.label.uppercase(), style = Ab.type.overline, color = color, maxLines = 1)
+    }
+}
+
+/**
+ * A day of listening as 24 bars, one per hour, in the context's colour; [highlight] (the hour now) in the text
+ * colour, so it's plain whether now is when you usually play it.
+ */
+@Composable
+fun HourBars(hours: List<Float>, color: Color, highlight: Int?, description: String, modifier: Modifier = Modifier) {
+    val now = Ab.colors.text
+    Canvas(modifier.semantics { contentDescription = description }) {
+        val max = hours.maxOrNull()?.takeIf { it > 0f } ?: return@Canvas
+        val gap = 1.dp.toPx()
+        val w = (size.width - gap * (hours.size - 1)) / hours.size
+        hours.forEachIndexed { i, v ->
+            val h = (v / max * size.height).coerceAtLeast(1.dp.toPx())
+            drawRect(if (i == highlight) now else color, Offset(i * (w + gap), size.height - h), Size(w.coerceAtLeast(0.5f), h))
+        }
     }
 }
 

@@ -5,12 +5,12 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
-from django.db.models import Count, Q
+from django.db.models import Count, Max, Q
 from django.utils import timezone
 
 from discovery.models import Release
 from recommend.contexts import PAST_ERA
-from recommend.models import Context
+from recommend.models import Context, ContextTrack
 from recommend.playlists import log_recommendations, push_playlist
 from recommend.retrieve import RESURFACE_SHARE, Pick, recommend
 
@@ -42,6 +42,16 @@ def dormant_contexts(count=DORMANT_MIXES):
         return []
     week = timezone.now().isocalendar().week
     return [quiet[(week * count + i) % len(quiet)] for i in range(min(count, len(quiet)))]
+
+
+def play_stats(context_ids):
+    """Context ID -> its tracks' plays lately and in all, and the last one, in one query. A retired context has no
+    tracks any more, so it isn't in the result."""
+    since = timezone.now() - RECENT
+    rows = ContextTrack.objects.filter(context__in=context_ids).values("context").annotate(
+        recent=Count("track__listens", filter=Q(track__listens__played_at__gte=since)), lifetime=Count("track__listens"), last=Max("track__listens__played_at"),
+    )
+    return {row.pop("context"): row for row in rows}
 
 
 def active_contexts(count):
