@@ -61,11 +61,22 @@ import com.georgewaller.audiobrain.design.SoundSigil
 import com.georgewaller.audiobrain.shortName
 import com.georgewaller.audiobrain.sigil
 import com.georgewaller.audiobrain.sigilFor
+import com.georgewaller.audiobrain.Fit
+import com.georgewaller.audiobrain.design.HourBars
+import com.georgewaller.audiobrain.design.SyncMark
+import com.georgewaller.audiobrain.design.contextColor
+import com.georgewaller.audiobrain.fitsNow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
- * Home: the sigil of what's playing, a box to ask for a playlist, three quick actions and the top lists. Tap the
- * sigil for focus mode. With nothing playing, the sigil shows the first track of your top list, faintly.
+ * Home: the sigil of what's playing, a box to ask for a playlist, three quick actions and the lists that fit now
+ * (this hour and day). Tap the sigil for focus mode. With nothing playing, the sigil shows the first track of the
+ * list that fits best, faintly.
  */
 @Composable
 fun HomePage(vm: AppViewModel, padding: PaddingValues, onAsk: () -> Unit, onFocus: () -> Unit, onMenu: (ListItem, String) -> Unit, onTracklist: (Long) -> Unit, onOpenList: (String) -> Unit) {
@@ -77,7 +88,10 @@ fun HomePage(vm: AppViewModel, padding: PaddingValues, onAsk: () -> Unit, onFocu
     val lists by vm.lists.collectAsStateWithLifecycle()
     val listening by vm.listening.collectAsStateWithLifecycle()
     val playing = np?.takeIf { it.hasTrack }
-    val topLists = lists.lists.filter { it.kind == "mix" }.take(3)
+    val now = LocalDateTime.now()
+    // context lists that suit this hour and day; the top three by plays when the server hasn't sent hours (old cache)
+    val fits = remember(lists.lists, now.hour, now.dayOfWeek) { fitsNow(lists.lists, now) }
+    val topLists = fits.map { it.list }.ifEmpty { lists.lists.filter { it.kind == "mix" }.take(3) }
     val setTrack = setNow?.line?.track
     val (sigil, faint) = remember(playing?.ref?.key, track, setTrack, topLists.firstOrNull()?.key) {
         when {
@@ -125,11 +139,34 @@ fun HomePage(vm: AppViewModel, padding: PaddingValues, onAsk: () -> Unit, onFocu
             SectionHeader("For now")
             actions.take(4).forEach { a -> ActionRow(a.label, a.detail) { vm.makeFromAction(a) } }
         }
-        if (topLists.isNotEmpty()) {
+        if (fits.isNotEmpty()) {
+            SectionHeader("Fits now") { AbText(CLOCK_HOUR.format(now), style = Ab.type.number, color = Ab.colors.textFaint) }
+            fits.forEach { f -> FitRow(f, now.hour) { onOpenList(f.list.key) } }
+        } else if (topLists.isNotEmpty()) {
             SectionHeader("Top lists")
             topLists.forEach { l -> MixRow(l) { onOpenList(l.key) } }
         }
         Spacer(Modifier.height(Ab.space.xl))
+    }
+}
+
+private val CLOCK_HOUR = DateTimeFormatter.ofPattern("EEE HH:00", Locale.UK)
+
+/** A list that fits now, two rows tall: its name, the day's listening by hour with this hour lit, and why. */
+@Composable
+private fun FitRow(fit: Fit, hour: Int, onOpen: () -> Unit) {
+    val context = fit.list.context ?: return
+    Column(Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(vertical = Ab.space.m), verticalArrangement = Arrangement.spacedBy(Ab.space.s)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            AbText(shortName(fit.list.title), Modifier.weight(1f), style = Ab.type.heading, maxLines = 1)
+            Spacer(Modifier.width(Ab.space.s))
+            SyncMark(fit.list.synced)
+        }
+        HourBars(
+            context.hours, contextColor(context.hue), highlight = hour,
+            description = "Your plays of this by hour of the day, most around ${"%02d:00".format(context.hours.indexOf(context.hours.max()))}",
+        )
+        AbText(fit.reason, style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 2)
     }
 }
 

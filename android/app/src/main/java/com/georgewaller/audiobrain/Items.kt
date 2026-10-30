@@ -15,6 +15,7 @@ import com.georgewaller.audiobrain.data.Verdict
 import com.georgewaller.audiobrain.design.Ab
 import com.georgewaller.audiobrain.design.AbButton
 import com.georgewaller.audiobrain.design.AbText
+import com.georgewaller.audiobrain.design.AgeTag
 import com.georgewaller.audiobrain.design.ButtonKind
 import com.georgewaller.audiobrain.design.ListRow
 import com.georgewaller.audiobrain.design.SigilSpec
@@ -117,8 +118,12 @@ fun LinkRow(item: ListItem) {
 }
 
 @Composable
-fun MixRow(list: MixList, onOpen: () -> Unit) {
-    ListRow(shortName(list.title), list.meta(), list.tracks.map { it.hue }.ifEmpty { list.items.map { null } }, synced = list.synced, onClick = onOpen)
+fun MixRow(list: MixList, onOpen: () -> Unit) = MixRow(list, list.meta(), null, onOpen)
+
+/** A list's row with its own [meta] line and age [tag] (the Lists page's sections). */
+@Composable
+fun MixRow(list: MixList, meta: String, tag: AgeTag?, onOpen: () -> Unit) {
+    ListRow(shortName(list.title), meta, list.tracks.map { it.hue }.ifEmpty { list.items.map { null } }, synced = list.synced, tag = tag, onClick = onOpen)
 }
 
 fun openUrl(context: Context, url: String?): Boolean {

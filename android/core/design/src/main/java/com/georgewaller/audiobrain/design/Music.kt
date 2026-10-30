@@ -64,6 +64,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -332,18 +334,51 @@ fun TrackRow(
 
 /** A list (playlist or discovery list): title, a mono meta line, its colour strip, and whether it's synced to Tidal. */
 @Composable
-fun ListRow(title: String, meta: String, hues: List<Float?>, modifier: Modifier = Modifier, synced: Boolean = false, onClick: () -> Unit) {
+fun ListRow(title: String, meta: String, hues: List<Float?>, modifier: Modifier = Modifier, synced: Boolean = false, tag: AgeTag? = null, onClick: () -> Unit) {
     Column(
         modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = Ab.space.m),
         verticalArrangement = Arrangement.spacedBy(Ab.space.s),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             AbText(title, Modifier.weight(1f), style = Ab.type.heading, maxLines = 1)
-            AbText(meta, style = Ab.type.number, color = Ab.colors.textFaint, maxLines = 1)
+            if (tag == null) AbText(meta, style = Ab.type.number, color = Ab.colors.textFaint, maxLines = 1)
+            else AgeTagPill(tag)
             Spacer(Modifier.width(Ab.space.s))
             SyncMark(synced)
         }
+        // with a tag, the meta (plays lately, an era) gets a line of its own
+        if (tag != null) AbText(meta, style = Ab.type.number, color = Ab.colors.textMuted, maxLines = 1)
         ColourStrip(hues)
+    }
+}
+
+/** How recent a list is, as its row says: "Now" stands out, older ones recede. */
+@Immutable
+data class AgeTag(val label: String, val current: Boolean = false)
+
+@Composable
+fun AgeTagPill(tag: AgeTag) {
+    val color = if (tag.current) Ab.colors.text else Ab.colors.textMuted
+    Box(Modifier.clip(Ab.shapes.small).background(if (tag.current) Ab.colors.overlay else Ab.colors.raised).padding(horizontal = 6.dp, vertical = 2.dp)) {
+        AbText(tag.label.uppercase(), style = Ab.type.overline, color = color, maxLines = 1)
+    }
+}
+
+/**
+ * A day of listening as 24 bars, one per hour, in the context's colour; [highlight] (the hour now) in the text
+ * colour, so it's plain whether now is when you usually play it.
+ */
+@Composable
+fun HourBars(hours: List<Float>, color: Color, highlight: Int?, description: String, modifier: Modifier = Modifier, height: Dp = 28.dp) {
+    val now = Ab.colors.text
+    Canvas(modifier.fillMaxWidth().height(height).semantics { contentDescription = description }) {
+        val max = hours.maxOrNull()?.takeIf { it > 0f } ?: return@Canvas
+        val gap = 2.dp.toPx()
+        val w = (size.width - gap * (hours.size - 1)) / hours.size
+        hours.forEachIndexed { i, v ->
+            val h = (v / max * size.height).coerceAtLeast(1.dp.toPx())
+            drawRect(if (i == highlight) now else color.copy(alpha = 0.55f), Offset(i * (w + gap), size.height - h), Size(w.coerceAtLeast(0.5f), h))
+        }
     }
 }
 

@@ -151,6 +151,31 @@ class ListAndSetTests(TestCase):
         self.assertEqual(self.client.delete("/api/v1/mixes/fresh", headers=self.headers).status_code, 400)
         self.assertTrue(Mix.objects.filter(key="fresh").exists())
 
+    def test_context_lists_say_how_recently_they_were_played(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from history.models import Listen
+        from recommend.models import Context, ContextTrack, Mix
+        hours = [0.0] * 24
+        hours[16] = 1.0
+        playing = Context.objects.create(name="Afternoon rock", centroid=[0.0] * 1280, hours=hours, era_start=date(2018, 5, 1), era_end=date(2026, 8, 1))
+        retired = Context.objects.create(name="Old peak hour", centroid=[0.0] * 1280, active=False)
+        track = Track.objects.create(name="Song", artist=self.artist)
+        ContextTrack.objects.create(context=playing, track=track, distance=0)
+        now = timezone.now()
+        for days in (2, 10, 200):
+            Listen.objects.create(track=track, played_at=now - timedelta(days=days), source="lastfm")
+        for context in (playing, retired):
+            Mix.objects.create(key=f"context:{context.pk}", kind="mix", section=Mix.LISTS, title=context.name, context=context)
+
+        lists = {l["key"]: l["context"] for l in self.client.get("/api/v1/lists", headers=self.headers).json()["lists"]}
+        now_playing, kept = lists[f"context:{playing.pk}"], lists[f"context:{retired.pk}"]
+        self.assertEqual((now_playing["recent_plays"], now_playing["lifetime_plays"], now_playing["active"]), (2, 3, True))
+        self.assertEqual((now_playing["hours"][16], now_playing["era_start"], now_playing["era_end"]), (1.0, "2018-05-01", "2026-08-01"))
+        self.assertEqual(now_playing["last_played"][:10], (now - timedelta(days=2)).date().isoformat())
+        self.assertEqual((kept["active"], kept["recent_plays"], kept["last_played"]), (False, 0, None))
+        self.assertIsNone(lists["explore:1"])
+
     def test_rename(self):
         response = self.post("/api/v1/mixes/explore:1/rename", {"title": "  Late night  "})
         self.assertEqual(response.json()["title"], "Late night")

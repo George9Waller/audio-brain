@@ -260,7 +260,21 @@ data class ListItem(
 }
 
 @Serializable
-data class ListContext(val id: Long, val name: String, val hue: Float, val family: String = "")
+data class ListContext(
+    val id: Long,
+    val name: String,
+    val hue: Float,
+    val family: String = "",
+    // how recent it is (lists only): for the Lists page's sections and Home's "Fits now"
+    val active: Boolean = true,
+    @SerialName("recent_plays") val recentPlays: Int = 0,  // in the server's RECENT window (45 days)
+    @SerialName("lifetime_plays") val lifetimePlays: Int = 0,
+    @SerialName("last_played") val lastPlayed: String? = null,
+    @SerialName("era_start") val eraStart: String? = null,  // "2018-05-13"
+    @SerialName("era_end") val eraEnd: String? = null,
+    val hours: List<Float> = emptyList(),  // share of its plays in each local hour, 24 values
+    val weekdays: List<Float> = emptyList(),  // Monday first
+)
 
 @Serializable
 data class MixList(
