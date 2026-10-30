@@ -338,6 +338,44 @@ class PlayableTests(TestCase):
         self.assertIn("discovery lists", summary)
         self.assertTrue(Mix.objects.filter(key="releases").exists())
 
+    def build_without_discover(self, **kwargs):
+        from recommend import lists
+        with mock.patch("recommend.beyond.albums", return_value=[]), mock.patch("recommend.beyond.artists_to_try", return_value=[]):
+            return lists.build_lists(**kwargs)
+
+    def test_a_synced_context_keeps_its_list_when_it_isnt_played_lately(self):
+        from recommend.models import ListSync
+        context = Context.objects.create(name="Afternoon rock", centroid=[0.0] * 1280)  # no recent plays: not picked
+        ListSync.objects.create(key=f"context:{context.pk}")
+        with mock.patch("recommend.lists.context_mix", return_value=picks_of(self.known)):
+            self.build_without_discover(push=False)
+        mix = Mix.objects.get(key=f"context:{context.pk}")
+        self.assertEqual((mix.kind, [i["track_id"] for i in mix.items]), ("mix", [t.pk for t in self.known]))
+
+    def test_a_synced_list_whose_context_retired_stays_as_it_was(self):
+        from recommend.models import ListSync
+        retired = Context.objects.create(name="Old peak hour", centroid=[0.0] * 1280, active=False)
+        unsynced = Context.objects.create(name="Old warm-up", centroid=[0.0] * 1280, active=False)
+        items = [{"kind": "track", "track_id": self.known[0].pk}]
+        for context in (retired, unsynced):
+            Mix.objects.create(key=f"context:{context.pk}", kind="era", section=Mix.LISTS, title=context.name, items=items, context=context)
+        ListSync.objects.create(key=f"context:{retired.pk}")
+        summary = self.build_without_discover(push=False)
+        self.assertEqual(Mix.objects.get(key=f"context:{retired.pk}").items, items)
+        self.assertFalse(Mix.objects.filter(key=f"context:{unsynced.pk}").exists())
+        self.assertIn("0 synced to Tidal", summary)
+
+    def test_a_synced_list_already_gone_is_put_back_from_tidal(self):
+        from recommend import lists
+        retired = Context.objects.create(name="Old peak hour", centroid=[0.0] * 1280, active=False)
+        Playlist.objects.create(key=f"context:{retired.pk}", name="Old peak hour", platform="tidal", external_id="p1", context=retired)
+        there = [{"type": "tracks", "id": f"t{t.pk}"} for t in reversed(self.known)] + [{"type": "tracks", "id": "not-ours"}]
+        with mock.patch.object(lists, "TidalClient") as client:
+            client.return_value.get_all.return_value = (there, None)
+            mix = lists.kept_synced(f"context:{retired.pk}", push=True)
+        self.assertEqual((mix.kind, mix.title, mix.context), ("era", "Old peak hour", retired))
+        self.assertEqual([i["track_id"] for i in mix.items], [t.pk for t in reversed(self.known)])
+
     def test_work_runs_inline_inside_a_transaction(self):
         from recommend.lists import Pool, inline
         self.assertTrue(inline())
