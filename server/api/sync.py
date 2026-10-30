@@ -31,7 +31,7 @@ class FeedbackIn(Schema):
 class QueueIn(Schema):
     client_id: UUID
     release_id: int
-    state: Literal["heard", "saved", "dismissed"]
+    state: Literal["new", "heard", "saved", "dismissed"]  # "new" undoes a decision
     given_at: datetime
 
 

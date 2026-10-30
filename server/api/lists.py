@@ -1,11 +1,12 @@
 """Lists (mixes and discovery), search and browsing the catalogue, as the app's Discover, Lists and Catalogue spaces
 show them. Track items share one shape everywhere (see recommend.lists), so the app draws them with one row."""
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from ninja import Router, Schema
 
 from api.music import all_hues, hue, nearest_contexts, playlist_out
@@ -107,6 +108,23 @@ def detail(items):
         item["artist_new"] = bool(track) and track.artist_id not in played
         item["context_name"] = names.get(item.get("context_id"))
     return items
+
+
+class QueueSummary(Schema):
+    waiting: dict[str, int]  # new releases by why they're in the queue: artist, remixer, label
+    decided: int  # saved, heard or dismissed, ever
+    decided_this_week: int
+
+
+@router.get("/releases/summary", response=QueueSummary)
+def release_summary(request):
+    """How big the release queue is, by why each release is in it, and how much of it you've worked through: the
+    Discover inbox's count and progress, as the lists hold only the best hundred rows of it."""
+    from discovery.models import Release
+    waiting = dict(Release.objects.filter(state=Release.NEW).values_list("source").annotate(n=Count("pk")))
+    decided = Release.objects.exclude(state=Release.NEW)
+    week = decided.filter(state_changed_at__gte=timezone.now() - timedelta(days=7))
+    return {"waiting": waiting, "decided": decided.count(), "decided_this_week": week.count()}
 
 
 @router.get("/lists", response=ListsOut)

@@ -255,9 +255,34 @@ data class ListItem(
     val verdict: String? = null,
     val state: String? = null,
     val url: String? = null,
+    // Discover's evidence, by kind (server/recommend/lists.py and beyond.py):
+    val source: String = "",  // a release: artist, remixer or label
+    val others: List<ListItem> = emptyList(),  // a release: the same artist's other waiting releases, folded under it
+    @SerialName("others_count") val othersCount: Int = 0,
+    @SerialName("close_to") val closeTo: List<String> = emptyList(),  // an artist to try: yours they're closest to
+    @SerialName("close_to_more") val closeToMore: Int = 0,
+    val years: Map<String, Int> = emptyMap(),  // an artist to come back to: plays per year
+    val span: String = "",  // and the years they were biggest
+    val plays: Int? = null,
+    val recent: Int? = null,
+    val minutes: Int? = null,  // a set: its length, tracklist entries found, how many of those you like, and its context
+    val identified: Int? = null,
+    val yours: Int? = null,
+    val context: String = "",
+    val then: Then? = null,  // a faded favourite: when it peaked, and when you last played it
 ) {
     val isTrack get() = kind == "track" && trackId != null
     val ref: TrackRef get() = TrackRef(trackId, tidalId, artist, title, album)
+}
+
+/** A faded favourite's story: its plays in all and at its peak, and the months of the peak and the last play ("2016-03"). */
+@Serializable
+data class Then(val plays: Int = 0, val peak: Int = 0, @SerialName("peak_at") val peakAt: String = "", @SerialName("last_at") val lastAt: String = "")
+
+/** The release queue's size by why each release is in it (artist, remixer, label), and how much has been decided. */
+@Serializable
+data class QueueSummary(val waiting: Map<String, Int> = emptyMap(), val decided: Int = 0, @SerialName("decided_this_week") val decidedThisWeek: Int = 0) {
+    val total get() = waiting.values.sum()
 }
 
 @Serializable

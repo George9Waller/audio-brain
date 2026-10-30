@@ -15,8 +15,7 @@ from django.utils import timezone
 
 from catalogue.models import Album, Artist, SimilarArtist
 from clients.tidal import TidalClient
-from discovery.affinity import play_counts
-from discovery.models import Release
+from discovery.affinity import liked_tracks, play_counts
 from discovery.releases import find_tidal_ids
 from enrichment.identity import normalise
 from history.models import Listen
@@ -31,7 +30,8 @@ NOT_STUDIO = re.compile(r"remix|\blive\b|tour|edition|deluxe|acoustic|karaoke|in
 
 
 def artists_to_try(count=30):
-    """[(name, score, reason)]: artists similar to several you play, that you haven't played yourself."""
+    """[(name, score, reason, extra)]: artists similar to several you play, that you haven't played yourself. `extra`
+    has `close_to`, the artists of yours they're closest to, first three, and `close_to_more`, how many others."""
     plays = play_counts()
     names = dict(Artist.objects.values_list("pk", "name"))
     known = {normalise(names[a]) for a, n in plays.items() if n >= KNOWN_PLAYS and a in names}
@@ -57,14 +57,16 @@ def artists_to_try(count=30):
         if used[sources[0]] >= MAX_VIA:
             continue
         used[sources[0]] += 1
-        picks.append((name, round(scores[name], 2), f"Close to {', '.join(sources[:3])}" + (f" and {len(sources) - 3} more you play" if len(sources) > 3 else "")))
+        picks.append((name, round(scores[name], 2), f"Close to {', '.join(sources[:3])}" + (f" and {len(sources) - 3} more you play" if len(sources) > 3 else ""),
+                      {"close_to": sources[:3], "close_to_more": max(0, len(sources) - 3)}))
         if len(picks) >= count:
             break
     return picks
 
 
 def artists_to_revisit(count=20):
-    """[(artist, lifetime plays, recent plays, reason)]: artists you played a lot once and rarely now."""
+    """[(artist, lifetime plays, recent plays, reason, extra)]: artists you played a lot once and rarely now. `extra`
+    has their plays per year ({"2018": 2517, ...}) and the span they were biggest in, for the app's then-and-now bars."""
     now = timezone.now()
     rows = (
         Listen.objects.values("track__artist")
@@ -77,28 +79,25 @@ def artists_to_revisit(count=20):
         artist = artists.get(r["track__artist"])
         if artist is None or ", " in artist.name or r["recent"] > r["total"] * 0.05:
             continue
-        years = Listen.objects.filter(track__artist=artist).values_list("played_at__year", flat=True)
-        common = [y for y, _ in Counter(years).most_common(2)]
+        by_year = Counter(Listen.objects.filter(track__artist=artist).values_list("played_at__year", flat=True))
+        common = [y for y, _ in by_year.most_common(2)]
         span = f"{min(common)}–{max(common)}" if len(common) > 1 and min(common) != max(common) else str(common[0])
-        picks.append((artist, r["total"], r["recent"], f"{r['total']} plays, mostly {span}; {r['recent']} in the last year"))
+        picks.append((artist, r["total"], r["recent"], f"{r['total']:,} plays, mostly {span}; {r['recent']} in the last year",
+                      {"span": span, "years": {str(y): n for y, n in sorted(by_year.items())}}))
     picks.sort(key=lambda p: -(p[1] - 10 * p[2]))
     return picks[:count]
 
 
 def albums(count=30, artists_checked=25):
-    """[(title, artist, kind, reason, tidal url or None)]: albums worth a listen, three ways."""
+    """[(title, artist, kind, reason, tidal url or None)]: albums worth a listen, two ways. New albums in the release
+    queue aren't among them: Discover shows the queue already, and listing them here showed them twice."""
     picks = []
-    # New albums and EPs in the discovery queue.
-    for release in Release.objects.filter(state=Release.NEW, kind__in=["ALBUM", "EP"], score__gt=0).order_by("-score").prefetch_related("artists")[:10]:
-        artist = ", ".join(a.name for a in release.artists.all())
-        picks.append((release.title, artist, release.kind.title(), f"New {release.kind.lower()}, {release.release_date:%d %b}. {release.reason}", f"https://tidal.com/browse/album/{release.tidal_id}"))
-    picks = picks[: count // 3]
     # Saved on a platform, not played for a year: longest-forgotten first, in one grouped query.
     now = timezone.now()
     favourites = {f.album_id: f for f in Favourite.objects.filter(kind=Favourite.ALBUM).exclude(album=None).select_related("album__artist")}
     last_played = dict(Listen.objects.filter(track__album__in=favourites).values("track__album").annotate(last=Max("played_at")).values_list("track__album", "last"))
     saved = sorted((last, album_id) for album_id, last in last_played.items() if now - last > DORMANT)
-    for last, album_id in saved[: count // 3]:
+    for last, album_id in saved[: count // 2]:
         fav = favourites[album_id]
         album = fav.album
         url = f"https://tidal.com/browse/album/{album.tidal_id}" if album.tidal_id else None
@@ -129,8 +128,11 @@ def albums(count=30, artists_checked=25):
 
 
 def sets_for_you(count=40):
-    """[(set, score, reason)]: watched-channel and playlist sets, ranked on tracklist overlap, DJ and context fit."""
+    """[(set, score, reason, extra)]: watched-channel and playlist sets, ranked on tracklist overlap, DJ and context fit.
+    `extra` has `identified` (tracklist entries found in the catalogue), `yours` (of those, tracks you like) and
+    `context`, the one most of them sit in."""
     plays = play_counts()
+    known = set(liked_tracks().values_list("pk", flat=True))
     liked = {normalise(n): plays[a] for a, n in Artist.objects.filter(pk__in=[a for a, c in plays.items() if c >= 10]).values_list("pk", "name")}
     context_of = dict(ContextTrack.objects.values_list("track_id", "context__name"))
     picks = []
@@ -147,21 +149,22 @@ def sets_for_you(count=40):
         score = (set_.taste_score or 0) * 4 + math.log1p(dj) / 6 + (fit[1] / len(entries) if fit and entries else 0) - (0.5 if known and not set_.taste_score else 0)
         parts = []
         if djs:
-            parts.append(f"{djs[0].title()} ({dj} plays)")
+            parts.append(f"{djs[0].title()} ({round(dj):,} plays)")
         if set_.taste_reason:
             parts.append(set_.taste_reason)
         if fit:
             parts.append(f"closest to your {fit[0]}")
-        picks.append((set_, round(score, 2), "; ".join(parts) or "New on a channel you watch"))
+        extra = {"identified": len(entries), "yours": sum(1 for t in entries if t in known), "context": fit[0] if fit else ""}
+        picks.append((set_, round(score, 2), "; ".join(parts) or "New on a channel you watch", extra))
     picks.sort(key=lambda p: -p[1])
     # At most two per channel and per radio-show series ("DESIRE RADIO #077", "#078"…), so one source can't fill it.
     per_source, chosen = Counter(), []
-    for set_, score, reason in picks:
+    for set_, score, reason, extra in picks:
         series = re.sub(r"[#\d]+", "", normalise(set_.track.name))[:30]
         source = set_.channel_id
         if per_source[source] >= 2 or per_source[series] >= 2:
             continue
         per_source[source] += 1
         per_source[series] += 1
-        chosen.append((set_, score, reason))
+        chosen.append((set_, score, reason, extra))
     return chosen[:count]

@@ -88,6 +88,5 @@ fun leadTag(kind: String): AgeTag? = when (kind) {
     else -> null
 }
 
-private fun count(n: Int) = NumberFormat.getIntegerInstance(Locale.UK).format(n)
 
 private fun parseInstant(text: String): Instant? = runCatching { java.time.OffsetDateTime.parse(text).toInstant() }.getOrNull()

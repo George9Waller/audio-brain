@@ -45,6 +45,7 @@ class ApiClient(private val settings: SettingsStore) {
     suspend fun now(country: String = ""): NowResponse = get(if (country.isBlank()) "/now" else "/now?country=$country")
     suspend fun resolve(ref: TrackRef): Resolved = post("/tracks/resolve", ApiJson.encodeToString(ref))
     suspend fun sync(request: SyncRequest): SyncResponse = post("/sync", ApiJson.encodeToString(request))
+    suspend fun releaseSummary(): QueueSummary = get("/releases/summary")
     suspend fun actions(playing: Long? = null): List<QuickAction> = get(if (playing != null) "/actions?playing=$playing" else "/actions")
     suspend fun make(request: MakeRequest): DraftResponse = post("/make", ApiJson.encodeToString(request))
     suspend fun keepDraft(key: String, request: KeepRequest): MixList = post("/drafts/${enc(key)}/keep", ApiJson.encodeToString(request))

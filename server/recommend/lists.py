@@ -132,19 +132,21 @@ def build_lists(mixes=12, push=None):
         built.append(save(f"releases:{source}", "releases", Mix.DISCOVER, title, subtitle, release_items(source=source)))
     found = discover.result()
     built.append(save("artists", "artists", Mix.DISCOVER, "Artists to try", "Close to several artists you play, by Last.fm's similar-artist links; ones you haven't played yourself",
-                      [{"kind": "artist", "title": name, "artist_id": None, "detail": "", "reason": reason, "score": round(score, 3), "url": SEARCH + name.replace(" ", "+")}
-                       for name, score, reason in found["artists"]]))
+                      [{"kind": "artist", "title": name, "artist_id": None, "detail": "", "reason": reason, "score": round(score, 3), "url": SEARCH + name.replace(" ", "+"), **extra}
+                       for name, score, reason, extra in found["artists"]]))
     built.append(save("revisit", "revisit", Mix.DISCOVER, "Artists to come back to", "Artists you played a lot once and rarely play now",
-                      [{"kind": "artist", "title": a.name, "artist_id": a.pk, "detail": f"{total} plays, {recent} lately", "reason": reason, "score": None,
+                      [{"kind": "artist", "title": a.name, "artist_id": a.pk, "detail": f"{total:,} plays, mostly {extra['span']}", "reason": f"{recent} in the last year",
+                        "score": None, "plays": total, "recent": recent, **extra,
                         "url": f"https://tidal.com/browse/artist/{a.tidal_id}" if a.tidal_id else SEARCH + a.name.replace(" ", "+")}
-                       for a, total, recent, reason in found["revisit"]]))
-    built.append(save("albums", "albums", Mix.DISCOVER, "Albums", "New albums in your queue, saved albums you haven't played for a year, and studio albums by artists you love",
+                       for a, total, recent, reason, extra in found["revisit"]]))
+    built.append(save("albums", "albums", Mix.DISCOVER, "Albums", "Saved albums you haven't played for a year, and studio albums by artists you love",
                       [{"kind": "album", "title": title, "artist": artist, "detail": kind, "reason": reason, "url": url} for title, artist, kind, reason, url in found["albums"]]))
     built.append(save("sets", "sets", Mix.DISCOVER, "Sets for you", "New uploads on the channels you save sets from, ranked by how much of the tracklist you play",
                       [{"kind": "set", "set_id": s.pk, "title": s.track.name, "artist": s.channel.name if s.channel else "",
                         "detail": f"{(s.duration or 0) // 60} min" + (f" · {s.published_at:%d %b %Y}" if s.published_at else ""),
-                        "reason": reason, "score": round(score, 3), "url": f"https://www.youtube.com/watch?v={s.youtube_id}"}
-                       for s, score, reason in found["sets"]]))
+                        "reason": reason, "score": round(score, 3), "url": f"https://www.youtube.com/watch?v={s.youtube_id}",
+                        "minutes": (s.duration or 0) // 60 or None, **extra}
+                       for s, score, reason, extra in found["sets"]]))
 
     logger.info("Lists built at %ds; waiting for suggestions", time.monotonic() - started)
     suggesting.extend((m, pool.submit(list_suggestions, m)) for m in waiting)
@@ -484,6 +486,8 @@ def track_items(picks, context=None):
         "album": p.track.album.name if p.track.album else "", "reason": p.reason, "novel": p.novel, "score": round(p.score, 4),
         "tidal_id": tidal.get(p.track.pk), "context_id": members.get(p.track.pk, context.pk if context else None),
         "styles": styles.get(p.track.pk, [])[:3], "sound": sound(audio.get(p.track.pk)),
+        # a faded favourite's story, for the app's then-and-now line: its peak and last plays, by month
+        **({"then": {k: p.signals[k] for k in ("plays", "peak", "peak_at", "last_at")}} if p.signals.get("peak_at") else {}),
     } for p in picks]
 
 
@@ -498,24 +502,40 @@ def sound(audio):
     }
 
 
+FOLDED = 8  # releases folded under an artist's best one, at most; the rest are counted
+
+
 def release_items(count=100, source=None):
-    """The queue's new releases from the last four months: scored ones best first, then ones not analysed yet."""
+    """The queue's new releases from the last four months, one row per artist (or set of artists): their best release,
+    scored ones first, with the others folded under it (`others`, newest first, and `others_count`). So an artist with
+    twenty releases waiting takes one row, not twenty, and every release can still be decided from the app."""
     from django.db.models import F
     ranked = Release.objects.filter(discovered_at__gte=timezone.now() - timedelta(days=120), state=Release.NEW)
     if source:
         ranked = ranked.filter(source=source)
     ranked = ranked.order_by(F("score").desc(nulls_last=True), "-release_date").prefetch_related("artists").select_related("label")
-    per_artist, items = {}, []
-    for r in ranked:  # at most two per artist, so one album's worth of singles doesn't fill the list
+    rows = {}
+    for r in ranked:
         artists = ",".join(sorted(str(a.pk) for a in r.artists.all()))
-        if per_artist.get(artists, 0) >= 2 or len(items) >= count:
-            continue
-        per_artist[artists] = per_artist.get(artists, 0) + 1
-        why = {"artist": "artist you play", "remixer": "remixer you like", "label": f"on {r.label}"}.get(r.source, "")
-        items.append({
-            "kind": "release", "release_id": r.pk, "title": r.title, "artist": ", ".join(a.name for a in r.artists.all()),
-            "detail": f"{r.kind.title()} · {r.release_date:%d %b %Y} · {why}", "reason": r.reason or "Not analysed yet", "score": round(r.score, 3) if r.score is not None else None,
-            "state": r.state, "url": f"https://tidal.com/browse/album/{r.tidal_id}",
-            "source": r.source, "label": r.label.name if r.label else "",
-        })
+        if artists in rows:
+            rows[artists]["folded"].append(r)
+        elif len(rows) < count:
+            rows[artists] = {"best": r, "folded": []}
+    items = []
+    for row in rows.values():
+        item = release_item(row["best"])
+        folded = sorted(row["folded"], key=lambda r: r.release_date, reverse=True)
+        item["others"] = [release_item(r, short=True) for r in folded[:FOLDED]]
+        item["others_count"] = len(folded)
+        items.append(item)
     return items
+
+
+def release_item(r, short=False):
+    why = {"artist": "artist you play", "remixer": "remixer you like", "label": f"on {r.label}"}.get(r.source, "")
+    item = {"kind": "release", "release_id": r.pk, "title": r.title, "detail": f"{r.kind.title()} · {r.release_date:%d %b %Y}" + ("" if short else f" · {why}"),
+            "state": r.state, "url": f"https://tidal.com/browse/album/{r.tidal_id}"}
+    if not short:
+        item.update({"artist": ", ".join(a.name for a in r.artists.all()), "reason": r.reason or "Not analysed yet", "score": round(r.score, 3) if r.score is not None else None,
+                     "source": r.source, "label": r.label.name if r.label else ""})
+    return item

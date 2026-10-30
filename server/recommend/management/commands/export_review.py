@@ -150,13 +150,13 @@ def beyond_sections():
     search = "https://tidal.com/search?q="
     sections = [
         {"key": "artists-new", "kind": "Artists", "title": "Artists to try", "subtitle": "Close to several artists you play (by Last.fm's similar-artist links, weighted by your whole history), that you haven't played yourself. No popularity involved.",
-         "tracks": [row(f"artist-{name}", name, name, "", reason, search + name.replace(" ", "+"), score) for name, score, reason in beyond.artists_to_try(30)]},
+         "tracks": [row(f"artist-{name}", name, name, "", reason, search + name.replace(" ", "+"), score) for name, score, reason, _ in beyond.artists_to_try(30)]},
         {"key": "artists-revisit", "kind": "Artists", "title": "Artists to come back to", "subtitle": "Artists you played a lot once and rarely now.",
-         "tracks": [row(f"artist-{a.pk}", a.name, a.name, "", reason, f"https://tidal.com/browse/artist/{a.tidal_id}" if a.tidal_id else search + a.name.replace(" ", "+"), novel=False) for a, total, recent, reason in beyond.artists_to_revisit(20)]},
+         "tracks": [row(f"artist-{a.pk}", a.name, a.name, "", reason, f"https://tidal.com/browse/artist/{a.tidal_id}" if a.tidal_id else search + a.name.replace(" ", "+"), novel=False) for a, total, recent, reason, _ in beyond.artists_to_revisit(20)]},
         {"key": "albums", "kind": "Albums", "title": "Albums", "subtitle": "New albums and EPs in your queue, albums you saved but haven't played for a year, and studio albums by artists you love that you've never played.",
          "tracks": [row(f"album-{i}", artist, title, kind, reason, url, novel=kind != "Saved album") for i, (title, artist, kind, reason, url) in enumerate(beyond.albums(30))]},
         {"key": "sets", "kind": "Sets", "title": "Sets for you", "subtitle": "New uploads on the channels you save sets from, ranked by how much of the tracklist you play, the DJ, and which of your contexts it fits. At most two per channel or show.",
-         "tracks": [row(f"set-{s.pk}", s.channel.name if s.channel else "", s.track.name, f"{(s.duration or 0) // 60} min" + (f" · {s.published_at:%d %b %Y}" if s.published_at else ""), reason, f"https://www.youtube.com/watch?v={s.youtube_id}", score) for s, score, reason in beyond.sets_for_you(40)]},
+         "tracks": [row(f"set-{s.pk}", s.channel.name if s.channel else "", s.track.name, f"{(s.duration or 0) // 60} min" + (f" · {s.published_at:%d %b %Y}" if s.published_at else ""), reason, f"https://www.youtube.com/watch?v={s.youtube_id}", score) for s, score, reason, _ in beyond.sets_for_you(40)]},
     ]
     return sections
 
