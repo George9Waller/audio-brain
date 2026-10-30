@@ -1,7 +1,9 @@
 """The lists the app shows, built together by the Mixes job and stored as Mix rows.
 
 Lists (track mixes you can play, and sync to Tidal): one per active context, the rotating past-era contexts, Fresh and
-Rediscovery. Lists you've chosen to sync (ListSync) are pushed to their own Tidal playlists each time. Discover (things to work through): the release queue, artists to try and to come back to, albums and sets.
+Rediscovery. Lists you've chosen to sync (ListSync) are pushed to their own Tidal playlists each time, and never
+dropped: a synced context's list is built while the context lasts, played lately or not, and kept as it last was once
+it retires. Discover (things to work through): the release queue, artists to try and to come back to, albums and sets.
 
 Track mixes are logged as recommendations once, here, with the Tidal playlist they went to, so the outcome of each
 suggestion is matched against later scrobbles exactly as before.
@@ -35,7 +37,7 @@ from library.models import OAuthToken
 from recommend.editorial import CAMELOT
 from recommend.features import energy
 from recommend.mixes import active_contexts, context_mix, dormant_contexts, fresh_picks, mix_description
-from recommend.models import ContextTrack, ListEdit, ListSync, Mix, Playlist
+from recommend.models import Context, ContextTrack, ListEdit, ListSync, Mix, Playlist
 from recommend.playlists import log_recommendations, push_playlist
 
 logger = logging.getLogger(__name__)
@@ -94,7 +96,9 @@ def build_lists(mixes=12, push=None):
 
     from recommend.timetravel import time_travel
     active = active_contexts(mixes)
-    contexts = active + [c for c in dormant_contexts() if c not in active]
+    dormant = [c for c in dormant_contexts() if c not in active]
+    # a context you've synced keeps its list while it lasts, even when it's dropped out of the ones played lately
+    contexts = active + dormant + [c for c in synced_contexts(synced) if c not in active and c not in dormant]
     years = listening_years()
     warm_caches()
     pool = Pool()
@@ -111,7 +115,7 @@ def build_lists(mixes=12, push=None):
     sources.update({f"year:{y}": pool.submit(time_travel, date(y, 1, 1), date(y, 12, 31), "then", OVERFETCH) for y in years})
     for context in contexts:
         picks = sources[f"context:{context.pk}"].result()
-        track_mix(f"context:{context.pk}", "mix" if context in active else "era", context.name, mix_description(context, picks[:LIST_LENGTH]), picks, context)
+        track_mix(f"context:{context.pk}", "era" if context in dormant else "mix", context.name, mix_description(context, picks[:LIST_LENGTH]), picks, context)
     track_mix("fresh", "fresh", "Fresh", "New releases from artists, remixers and labels you play, best fit first", sources["fresh"].result(), exclusive=False)
     track_mix("rediscovery", "rediscovery", "Rediscovery", "Tracks you were really into once and haven't played for six months or more", sources["rediscovery"].result(), exclusive=False)
     track_mix("new", "new", "New to you", "Tracks you've never played that fit the contexts you're into now, a few from each", sources["new"].result(), exclusive=False)
@@ -159,6 +163,10 @@ def build_lists(mixes=12, push=None):
             logger.info("Suggestions %d/%d: %s has %d at %ds", n, len(suggesting), mix.title, count, time.monotonic() - started)
     pool.close()
     logger.info("Done at %ds: %d tracks looked up on Tidal, %d found", time.monotonic() - started, LOOKUPS.looked_up, LOOKUPS.found)
+    # synced lists this build couldn't make (their context retired, say) stay as they last were, in the app and in Tidal
+    frozen = [mix for mix in (kept_synced(key, push) for key in sorted(synced - {m.key for m in built})) if mix]
+    built += [mix for mix in frozen if mix.kind in ORDER]
+    synced -= {mix.key for mix in frozen}
     keys = {m.key for m in built}
     Mix.objects.exclude(key__in=keys).exclude(kind__in=["asked", "draft", "radio", "explore", "set"]).delete()  # contexts that rotated out
     for position, mix in enumerate(sorted(built, key=lambda m: (m.section, ORDER.index(m.kind), m.pk))):
@@ -461,6 +469,39 @@ def new_to_you(contexts, per_context=10):
                 seen.add(r[i].track.pk)
                 out.append(r[i])
     return out
+
+
+def synced_contexts(keys):
+    """The still-active contexts among synced list keys ("context:12")."""
+    ids = [int(key.split(":")[1]) for key in keys if key.startswith("context:") and key.split(":")[1].isdigit()]
+    return list(Context.objects.filter(pk__in=ids, active=True))
+
+
+def kept_synced(key, push):
+    """A synced list the build didn't make: its last version. One that has already gone (before synced lists were
+    kept) is put back from its Tidal playlist, so it shows as synced again. None if there's nothing to keep."""
+    mix = Mix.objects.filter(key=key).first()
+    playlist = Playlist.objects.filter(key=key).exclude(external_id="").first()
+    if mix or not push or playlist is None:
+        return mix
+    kind = {"context": "era", "year": "year"}.get(key.split(":")[0], key)
+    if kind not in ORDER or kind in ("explore", "set", "interest"):  # lists of other kinds aren't rebuilt here
+        return None
+    from recommend.retrieve import Pick
+    try:
+        current, _ = TidalClient(user=True).get_all(f"playlists/{playlist.external_id}/relationships/items")
+    except Exception:
+        logger.warning("Couldn't read %s from Tidal to put it back", key, exc_info=True)
+        return None
+    order = [i["id"] for i in current if i.get("type") == "tracks"]
+    track_of = dict(PlatformTrack.objects.filter(platform=PlatformTrack.TIDAL, external_id__in=order).values_list("external_id", "track_id"))
+    tracks = Track.objects.select_related("artist", "album").in_bulk(track_of.values())
+    picks = [Pick(audio=None, score=0.0, signals={}, novel=False, reason="", track=tracks[track_of[i]]) for i in dict.fromkeys(order) if i in track_of]
+    if not picks:
+        return None
+    context = playlist.context or (Context.objects.filter(pk=key.split(":")[1]).first() if kind == "era" else None)
+    logger.info("Put back %s from its Tidal playlist: %d tracks", playlist.name, len(picks))
+    return save(key, kind, Mix.LISTS, playlist.name, "Kept as it last was in Tidal: its context has retired", track_items(picks, context), context)
 
 
 def save(key, kind, section, title, subtitle, items, context=None):
