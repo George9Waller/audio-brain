@@ -38,6 +38,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.georgewaller.audiobrain.data.DataGraph
@@ -122,6 +124,8 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit,
     val track by vm.track.collectAsStateWithLifecycle()
     val pending by vm.pending.collectAsStateWithLifecycle()
 
+    // back from the background: ask the server again if the last try failed (e.g. Tailscale was off)
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.resumed(); library.retryIfFailed() }
     LaunchedEffect(openSettings) { if (openSettings) { overlays.add(Overlay.Settings); onSettingsOpened() } }
     val openTracklist: (Overlay.Tracklist) -> Unit = { o -> tracklist.start(o.prefill, o.attachTo, o.show); overlays.removeAll { it is Overlay.Tracklist }; overlays.add(o) }
     // text or a link shared from another app (a tracklist page, a video, a friend's message) opens as a tracklist

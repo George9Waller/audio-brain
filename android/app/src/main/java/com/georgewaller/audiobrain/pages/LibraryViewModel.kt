@@ -8,11 +8,13 @@ import com.georgewaller.audiobrain.data.ArtistRow
 import com.georgewaller.audiobrain.data.DataGraph
 import com.georgewaller.audiobrain.data.ListItem
 import com.georgewaller.audiobrain.data.SetRow
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
@@ -22,6 +24,7 @@ import kotlinx.coroutines.launch
  * The Catalogue page's state: one tab (tracks, artists, albums, sets) at a time, with a search, a sort, and pages of
  * 50 loaded as you scroll. Kept outside the page so it survives sliding away and back.
  */
+@OptIn(FlowPreview::class)
 class LibraryViewModel(private val graph: DataGraph) : ViewModel() {
     enum class Tab(val label: String) { Tracks("Tracks"), Artists("Artists"), Albums("Albums"), Sets("Sets") }
 
@@ -47,7 +50,11 @@ class LibraryViewModel(private val graph: DataGraph) : ViewModel() {
     init {
         // load once connected, and again whenever the server or token changes
         viewModelScope.launch { graph.settings.settings.map { it.serverUrl to it.token }.distinctUntilChanged().collect { if (it.first.isNotBlank()) reload() } }
+        // and once the network comes back, if the last load failed
+        viewModelScope.launch { graph.network.changes.debounce(1_500).collect { retryIfFailed() } }
     }
+
+    fun retryIfFailed() { if (_state.value.error != null) reload() }
 
     fun setTab(tab: Tab) { _state.update { it.copy(tab = tab, sort = if (tab != Tab.Tracks && it.sort == "recent") "plays" else it.sort) }; reload() }
     fun setQuery(q: String) { _state.update { it.copy(query = q) }; reload(debounce = true) }

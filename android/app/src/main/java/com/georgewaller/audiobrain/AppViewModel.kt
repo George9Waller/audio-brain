@@ -93,6 +93,7 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
     private val _making = MutableStateFlow<Making>(Making.Idle)
     val making: StateFlow<Making> = _making.asStateFlow()
     private var makingJob: Job? = null
+    private var refreshedAt = 0L
 
     private val _events = MutableSharedFlow<Event>(extraBufferCapacity = 8)
     val events: SharedFlow<Event> = _events
@@ -103,6 +104,8 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
         viewModelScope.launch {
             graph.settings.settings.map { it.serverUrl to it.token }.distinctUntilChanged().drop(1).collect { if (it.first.isNotBlank()) refresh() }
         }
+        // and when the network comes back (Tailscale reconnecting, Wi-Fi returning); a moment for routes to settle
+        viewModelScope.launch { graph.network.changes.debounce(1_500).collect { retry() } }
         viewModelScope.launch {
             SessionTracker.nowPlaying.distinctUntilChangedBy { it?.ref?.key }.debounce(400).collect { np ->
                 _track.value = null
@@ -114,7 +117,21 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
         }
     }
 
+    /** Back in the foreground: fetch again if the last attempt failed or the lists are a while old. */
+    fun resumed() {
+        if (lists.value.error != null || System.currentTimeMillis() - refreshedAt > STALE_MS) retry()
+    }
+
+    private fun retry() {
+        refresh()
+        if (track.value == null) SessionTracker.nowPlaying.value?.takeIf { it.hasTrack }?.let { np ->
+            viewModelScope.launch { runCatching { graph.now.resolve(np.ref) }.onSuccess { _track.value = it.track; refreshActions() } }
+        }
+        if (graph.map.data.value == null) viewModelScope.launch { graph.map.load() }
+    }
+
     fun refresh() {
+        refreshedAt = System.currentTimeMillis()
         viewModelScope.launch { graph.lists.refresh() }
         refreshActions()
     }
@@ -414,4 +431,8 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
     }
 
     fun refFor(np: NowPlaying): TrackRef = np.ref.copy(id = track.value?.id)
+
+    companion object {
+        private const val STALE_MS = 5 * 60 * 1000L
+    }
 }
