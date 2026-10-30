@@ -1,8 +1,9 @@
 """New releases on labels you play, and from remixers on tracks you like.
 
 Labels are those behind at least MIN_LIKED tracks you like. Major labels release far too much to say anything about
-your taste, so a label with more than MAX_RECENT releases in the lookback is skipped. Releases come from MusicBrainz's
-search (label and date), then the album is found on Tidal by barcode and its tracks added like any release.
+your taste, so a label with more than MAX_RECENT releases in the lookback is skipped. Releases come from MusicBrainz
+(by label and date, from the mirror's database when there is one), then the album is found on Tidal by barcode and
+its tracks added like any release.
 Remixers who've remixed tracks you like are checked through Tidal like followed artists (see discovery.releases).
 """
 
@@ -14,7 +15,7 @@ from django.db.models import Count, Q
 from django.utils import timezone
 
 from catalogue.models import Artist, Label, TrackCredit
-from clients.musicbrainz import MusicBrainzClient, lucene_escape
+from clients.musicbrainz import MusicBrainzClient
 from clients.tidal import TidalClient
 from discovery.affinity import liked_tracks
 from discovery.models import Release
@@ -58,11 +59,11 @@ def check_labels(since=None):
         try:
             if not label.mbid and not find_label_mbid(mb, label):
                 continue
-            response = mb.get("release", fmt="json", query=f"laid:{label.mbid} AND date:[{since:%Y-%m-%d} TO {date.today():%Y-%m-%d}]", limit=100)
-            if response["count"] > MAX_RECENT:
-                logger.info("Skipping %s: %d releases since %s, too many to be a taste signal", label, response["count"], since)
+            releases = mb.label_releases(label.mbid, since, date.today())
+            if len(releases) > MAX_RECENT:
+                logger.info("Skipping %s: %d releases since %s, too many to be a taste signal", label, len(releases), since)
                 continue
-            barcodes = {r["barcode"]: r for r in response["releases"] if r.get("barcode")}
+            barcodes = {r["barcode"]: r for r in releases if r.get("barcode")}
             for barcode, release in barcodes.items():
                 found += import_by_barcode(tidal, barcode, label)
         except Exception:
@@ -73,7 +74,7 @@ def check_labels(since=None):
 
 def find_label_mbid(mb, label):
     """Labels named from Tidal copyright lines have no MBID yet; take MusicBrainz's exact-name match."""
-    for result in mb.get("label", fmt="json", query=f'label:"{lucene_escape(label.name)}"', limit=5)["labels"]:
+    for result in mb.labels(label.name):
         if result["score"] >= 95 and normalise(result["name"]) == normalise(label.name):
             if not Label.objects.filter(mbid=result["id"]).exists():
                 label.mbid = result["id"]

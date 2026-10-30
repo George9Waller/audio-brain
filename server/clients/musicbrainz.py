@@ -1,18 +1,22 @@
-"""MusicBrainz's web service, from the local mirror when there is one (INFRA.md I6) and from musicbrainz.org otherwise.
+"""MusicBrainz, from the local mirror when there is one (INFRA.md I6) and from musicbrainz.org otherwise.
 
 musicbrainz.org allows one request a second per IP address, which made enrichment take hours. The mirror has no
-limit, but runs without its search indexes (they'd need 16 GB of RAM), so it answers lookups by ID or ISRC and browse
-requests, not `query=` searches. So with `MUSICBRAINZ_BASE_URL` set, lookups go to the mirror and searches still go to
-musicbrainz.org at its rate; and if the mirror is down or failing, everything goes there until it's back.
+limit, but runs without its search indexes (they'd need 16 GB of RAM), so its web service answers lookups by ID or
+ISRC and browse requests, not `query=` searches. So with `MUSICBRAINZ_BASE_URL` set, lookups go to the mirror's web
+service, and with `MUSICBRAINZ_DATABASE_URL` set, the searches we make (a recording by artist and title, a label by
+name, a label's releases by date) are answered from the mirror's database in SQL (clients.musicbrainz_db). Whichever
+part of the mirror is down or failing, its requests go to musicbrainz.org at its rate until it's back.
 """
 
 import logging
 import time
 
+import psycopg
 import requests
 from django.conf import settings
 
-from clients.base import APIClient
+from clients.base import APIClient, usage
+from clients.musicbrainz_db import MirrorDatabase
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +32,8 @@ class MusicBrainzClient(APIClient):
         super().__init__()
         self.mirror = MusicBrainzMirror() if settings.MUSICBRAINZ_BASE_URL else None
         self.mirror_down_until = 0.0
+        self.database = MirrorDatabase(settings.MUSICBRAINZ_DATABASE_URL) if settings.MUSICBRAINZ_DATABASE_URL else None
+        self.database_down_until = 0.0
 
     def get_response(self, path="", **params):
         if self.mirror and "query" not in params and time.monotonic() >= self.mirror_down_until:
@@ -50,9 +56,43 @@ class MusicBrainzClient(APIClient):
         response.raise_for_status()
         return response.json()
 
-    def search_recordings(self, artist, title, limit=25):
+    def search_recordings(self, artist, title, limit=25, credited=""):
+        """Recordings by the artist with the title, for the caller to narrow. `credited` is the whole credit the artist
+        was taken from ("A, B & C"), which the mirror's database tries first."""
+        found = self.from_database("search_recordings", [credited or artist, artist], title)
+        if found is not None:
+            return found
         query = f'recording:"{lucene_escape(title)}" AND artist:"{lucene_escape(artist)}"'
         return self.get("recording", fmt="json", query=query, limit=limit)["recordings"]
+
+    def labels(self, name, limit=5):
+        """Labels with this name, each with a `score` (100 for the database's exact matches)."""
+        found = self.from_database("labels", name, limit)
+        if found is not None:
+            return found
+        return self.get("label", fmt="json", query=f'label:"{lucene_escape(name)}"', limit=limit)["labels"]
+
+    def label_releases(self, mbid, since, until):
+        """The label's releases dated between `since` and `until`, each with its `barcode`."""
+        found = self.from_database("label_releases", mbid, since, until)
+        if found is not None:
+            return found
+        return self.get("release", fmt="json", query=f"laid:{mbid} AND date:[{since:%Y-%m-%d} TO {until:%Y-%m-%d}]", limit=100)["releases"]
+
+    def from_database(self, method, *args):
+        """Ask the mirror's database, or None if there's none or it's failing (then musicbrainz.org is asked)."""
+        if not self.database or time.monotonic() < self.database_down_until:
+            return None
+        usage()["musicbrainz database"].requests += 1  # counted with the services, so a step says how it searched
+        try:
+            return getattr(self.database, method)(*args)
+        except psycopg.errors.QueryCanceled:  # one search too slow: only it goes to musicbrainz.org
+            logger.warning("MusicBrainz mirror database took too long for %s%r; asking musicbrainz.org", method, args)
+            return None
+        except psycopg.Error as error:
+            logger.warning("MusicBrainz mirror database failed (%s: %s); using musicbrainz.org for %ds", type(error).__name__, error, MIRROR_RETRY_AFTER)
+            self.database_down_until = time.monotonic() + MIRROR_RETRY_AFTER
+            return None
 
     def recordings_by_isrc(self, isrc):
         response = self.get_response(f"isrc/{isrc}", fmt="json", inc="artist-credits+isrcs")

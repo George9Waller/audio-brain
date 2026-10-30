@@ -332,6 +332,22 @@ How the new node is kept for the heavy work:
     lookup per ID. A mirror that's unreachable or answers 5xx sends everything to musicbrainz.org for five minutes.
   - No thread pool: lookups on the mirror take milliseconds each, and what's left of the time is the searches, which
     a pool can't speed up (they share musicbrainz.org's one request a second).
+- *First nights (29–30 Oct):* identity took 2h45m, then 56m. The mirror answered every lookup without waiting, but
+  musicbrainz.org answered 722 of 2,018 searches (then 196 of 926) with 503s, which cost 2h21m (then 40m) of waiting.
+- *Searches from the mirror's database (built 30 Oct):* `clients/musicbrainz_db.py` answers the three searches we
+  make in SQL against `musicbrainz-db`, with the indexes MusicBrainz's schema already has, so no `pg_trgm` or new
+  index was needed:
+  - a recording by artist and title: the artist by exact name or alias (accents and case ignored; the whole credit,
+    then its first artist), then that artist's recordings whose titles contain every word asked for (typographic
+    apostrophes made plain), retrying with the title's main part before any brackets; failing those, credits naming
+    the artist in order, through the recording title index. `best_search_match` narrows the results as before;
+  - a label by exact name, and a label's releases dated in a window (the earliest date per release).
+  - Checked against the 2,358 searches of 28–30 Oct: of the 1,304 musicbrainz.org resolved, 1,038 gave the same
+    recording, 252 another recording of the same song (another release's, which `best_search_match` preferred by
+    ISRC, title and date among more candidates) and 14 none; of the 1,054 it missed, 67 were found. About 70 ms a
+    search through a port-forward, the slowest 2 s, against hours of 503s.
+  - `MUSICBRAINZ_DATABASE_URL` (in the chart's config) turns it on. If the database is unreachable, searches go to
+    musicbrainz.org for five minutes; a single search over 10 seconds goes there alone.
 
 **I7. Discogs from its monthly data dumps.**
 - *Why:* Discogs styles are the finest genre signal in the catalogue (`discogs_style` tags), and the API allows 60
@@ -493,7 +509,8 @@ Checked 28 Oct with `kubectl` from the Mac. Both nodes run k3s v1.36.5. Updated 
 - [x] I5a Rate-limit lanes in the database (28 Oct)
 - [x] I5 Move to the new node (moved 28 Oct; old claims kept until a good night, then runbook step 8)
 - [x] I6b Worker per lane (28 Oct; on since I5)
-- [ ] I6 MusicBrainz mirror (built 28 Oct: chart and client; next the token, the import and the switch-over)
+- [ ] I6 MusicBrainz mirror (live 29 Oct for lookups; searches from its database built 30 Oct; done when a night's
+  identity finishes in minutes)
 - [ ] I7 Discogs dumps
 - [ ] I8 Scheduled backtests
 - [ ] I9 Health view and MCP tool

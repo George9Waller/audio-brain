@@ -315,8 +315,8 @@ Run it after 10:00 and before 00:15, when no nightly job runs, and with nothing 
 The chart's `musicbrainz` section runs a mirror without search on the new node: `musicbrainz-db` (100 Gi on the
 NVMe), `musicbrainz-valkey` and the `musicbrainz` server, whose web service is `http://musicbrainz:5000/ws/2/`. The
 server starts at `serverReplicas: 0`, because its database doesn't exist until the import has run. audio-brain keeps
-asking musicbrainz.org until `config.MUSICBRAINZ_BASE_URL` is set, and even then sends it searches, which the mirror
-can't answer.
+asking musicbrainz.org until `config.MUSICBRAINZ_BASE_URL` is set; its searches, which the mirror's web service
+can't answer, go to the mirror's database once `config.MUSICBRAINZ_DATABASE_URL` is set too (step 7).
 
 1. **(you) The replication token.** Sign in at metabrainz.org, take the access token from your profile (free for
    non-commercial use), and add it to the AWS secret `audio-brain` as `METABRAINZ_ACCESS_TOKEN`. The
@@ -342,15 +342,27 @@ can't answer.
    ```
    All three should answer 200. A search (`recording?query=...`) is expected to fail.
 4. **Replication:** the server's cron runs `replication.sh` daily at 11:00 UTC. To catch up at once after the import
-   (the export is up to a few days old): `kubectl exec deploy/musicbrainz -- bash -c 'replication.sh'`, and
-   `kubectl exec deploy/musicbrainz -- tail /tmp/replication.log` after a cron run. Without the token it fails and
-   the mirror just stays at the export's date.
+   (the export is up to a few days old): `kubectl exec deploy/musicbrainz -- bash -c 'replication.sh'`. It prints
+   little: the packets' progress goes to `/musicbrainz-server/mirror.log` while it runs (cleared afterwards). How far
+   the mirror has got is in its database, which is the check to use:
+   ```sh
+   kubectl exec musicbrainz-db-0 -- psql -U musicbrainz -d musicbrainz_db -Atc "select current_replication_sequence, last_replication_date from musicbrainz.replication_control"
+   ```
+   The date should be within a day of now. Without the token replication fails and the mirror stays at the export's
+   date.
 5. **Switch audio-brain over:** `config.MUSICBRAINZ_BASE_URL: http://musicbrainz:5000/ws/2/`, committed. Lookups (by
    ISRC, by ID, an artist's releases) then go to the mirror with no rate limit; searches stay on musicbrainz.org;
    and if the mirror fails or is unreachable, the client uses musicbrainz.org for five minutes before trying it again
    (`clients/musicbrainz.py`).
 6. **The download volume** (`musicbrainz-dbdump`, on the root disk, which has room) can stay: a re-import reuses it.
    Argo CD would recreate the claim if it were deleted, so to free the space, empty it from a pod that mounts it.
+7. **Searches from the mirror's database** (written 30 Oct): `config.MUSICBRAINZ_DATABASE_URL` (set in
+   `helm/values.yaml`) points the client at `musicbrainz-db` itself, where the searches it makes (a recording by
+   artist and title, a label by name, a label's releases by date) are answered in SQL (`clients/musicbrainz_db.py`),
+   so nothing goes to musicbrainz.org while the mirror is up. It's read-only and needs no new index. If the database
+   is unreachable, searches go to musicbrainz.org for five minutes; a single search over 10 seconds goes there alone.
+   Each enrichment step's log counts them as `musicbrainz database: N requests`; a `musicbrainz:` line there means
+   something fell back.
 
 ## Status, 21 Oct
 

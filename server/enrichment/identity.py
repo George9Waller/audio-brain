@@ -93,7 +93,8 @@ def find_recording(client, track, hinted):
                 return recording, "isrc"
 
     # One broad search (first artist, title without feat./remaster notes); best_search_match does the narrowing.
-    match = best_search_match(client.search_recordings(primary_artist(track.artist.name), clean_title(track.name)), track)
+    found = client.search_recordings(primary_artist(track.artist.name), clean_title(track.name), credited=track.artist.name)
+    match = best_search_match(found, track)
     return (match, "search") if match else (None, "")
 
 
