@@ -132,7 +132,7 @@ def sets_for_you(count=40):
     `extra` has `identified` (tracklist entries found in the catalogue), `yours` (of those, tracks you like) and
     `context`, the one most of them sit in."""
     plays = play_counts()
-    known = set(liked_tracks().values_list("pk", flat=True))
+    liked_ids = set(liked_tracks().values_list("pk", flat=True))
     liked = {normalise(n): plays[a] for a, n in Artist.objects.filter(pk__in=[a for a, c in plays.items() if c >= 10]).values_list("pk", "name")}
     context_of = dict(ContextTrack.objects.values_list("track_id", "context__name"))
     picks = []
@@ -154,7 +154,7 @@ def sets_for_you(count=40):
             parts.append(set_.taste_reason)
         if fit:
             parts.append(f"closest to your {fit[0]}")
-        extra = {"identified": len(entries), "yours": sum(1 for t in entries if t in known), "context": fit[0] if fit else ""}
+        extra = {"identified": len(entries), "yours": sum(1 for t in entries if t in liked_ids), "context": fit[0] if fit else ""}
         picks.append((set_, round(score, 2), "; ".join(parts) or "New on a channel you watch", extra))
     picks.sort(key=lambda p: -p[1])
     # At most two per channel and per radio-show series ("DESIRE RADIO #077", "#078"…), so one source can't fill it.
