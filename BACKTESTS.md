@@ -80,6 +80,9 @@ same way at most of them.
 - **Second retry:** The dump and restore completed, and preparation finished, but recording the code identity failed:
   the application image has neither Git nor a Git checkout. PostgreSQL remained healthy, and the clone and temporary
   Job were removed. The backtest needs the actual image tag as its identity when running outside a Git checkout.
+- **Successful pilot, 31 Oct:** With image identity fixed, a single-cutoff default run completed in about 14 minutes.
+  PostgreSQL remained ready without a container restart; both clones and the temporary Job were removed. The full
+  report is on the shared models volume at `backtests/2026-09-19/report-default.json`; the baseline is logged below.
 
 **Variants that retrain a model.**
 - Today a variant only patches how lists are built; the scorer and taste vectors are trained once per cutoff, in
@@ -193,3 +196,11 @@ go on to the full backtest.
 
 Add each phase's table here as it finishes: the variant, the primary measure and the guards against the default
 (the mean and 95% interval), how many cutoffs agree, and the verdict.
+
+### Phase 0 pilot — 31 Oct 2026
+
+One `default` cutoff, 19 Sep–31 Oct (42 days), using image
+`943d551191ba07a82a7c33d28311e0bbd02e4829` and snapshot `4b092b47d67f413aa8183b83ef5aeef1`.
+The default scorer gate was off (test AUC 0.655). Across 1,302 distinct listed tracks, 42 came back on at least two
+days (3.2%), 10 of 407 new tracks were played (2.5%), and the lists covered 16.3% of plays. Overall, 127 listed
+tracks were played (9.8%). This is a runner and baseline check on one cutoff, not a comparison or a decision.
