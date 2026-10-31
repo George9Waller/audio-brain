@@ -16,12 +16,13 @@ class Command(BaseCommand):
         parser.add_argument("--folder", required=True)
         parser.add_argument("--variant", default="default", choices=list(backtest.VARIANTS))
         parser.add_argument("--suggestions", action="store_true")
+        parser.add_argument("--model-path")
 
-    def handle(self, *args, step, as_of, folder, variant, suggestions, **options):
+    def handle(self, *args, step, as_of, folder, variant, suggestions, model_path, **options):
         backtest.assert_clone()
         call_command("migrate", verbosity=0)  # the clone may predate the code's latest migrations
         as_of, folder = datetime.fromisoformat(as_of), Path(folder)
         if step == "prepare":
             backtest.prepare(as_of, folder)
         else:
-            backtest.build(as_of, folder, variant=variant, suggestions=suggestions)
+            backtest.build(as_of, folder, variant=variant, suggestions=suggestions, model_path=model_path)
