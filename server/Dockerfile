@@ -29,9 +29,15 @@ for line in pathlib.Path("essentia_models.sha256").read_text().split("\n"):
 EOF
 
 FROM python:3.13-slim
-# ffmpeg for yt-dlp's audio cuts; the Postgres client for pg_dump in backups and backtests
+# ffmpeg for yt-dlp's audio cuts; pg_dump must be at least as new as the PostgreSQL 18 server.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg postgresql-client \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /etc/apt/keyrings/postgresql.asc \
+    && . /etc/os-release \
+    && echo "deb [signed-by=/etc/apt/keyrings/postgresql.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg postgresql-client-18 \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home --uid 1000 app
 WORKDIR /app/server
