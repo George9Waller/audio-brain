@@ -3,6 +3,7 @@
 from typing import Any
 
 from django.db.models import Avg, Max
+from django.utils import timezone
 from ninja import Router, Schema
 
 from api.music import all_hues
@@ -10,11 +11,12 @@ from catalogue.models import Artist, AudioFeatures, Track
 from history.models import Listen
 from library.models import Favourite
 from recommend.atlas import placed_by_sound
-from recommend.models import ContextTrack, Mix, MapPoint
+from recommend.mixes import RECENT
+from recommend.models import Context, ContextTrack, MapPoint, Mix, NearContext
 
 router = Router(tags=["map"])
 
-FAVOURITE, PLAYED, DISCOVERY, IN_LIST, BY_SOUND = 1, 2, 4, 8, 16
+FAVOURITE, PLAYED, DISCOVERY, IN_LIST, BY_SOUND, LATELY, PAST_YEAR = 1, 2, 4, 8, 16, 32, 64
 SCALE = 10000  # positions sent as integers 0..SCALE
 ARTIST_MIN = 6  # tracks on the map before an artist gets a label
 
@@ -34,8 +36,10 @@ class Place(Schema):
 class MapOut(Schema):
     version: str  # changes when the layout or lists are rebuilt; the app re-downloads only then
     scale: int
-    # [track id, x, y, hue or -1, flags]: flags 1 favourite, 2 played, 4 in Fresh or Rediscovery, 8 in one of your lists,
-    # 16 placed by sound alone (no listening history)
+    # [track id, x, y, hue or -1, flags, near hue or -1, family or -1]: flags 1 favourite, 2 played, 4 in Fresh or
+    # Rediscovery, 8 in one of your lists, 16 placed by sound alone (no listening history), 32 played lately (RECENT),
+    # 64 last played earlier this year. A track in no context has the hue of the one it sounds closest to
+    # (NearContext) as its near hue; family is an index into `families`, by its context or that closest one.
     points: list[list[float]]
     families: list[Place]  # labels for zoomed out
     contexts: list[Place]  # labels between
@@ -52,7 +56,11 @@ def atlas(request):
     hues = all_hues()
     member = dict(ContextTrack.objects.filter(context__active=True).values_list("track_id", "context_id"))
     favourite = set(Favourite.objects.filter(track__isnull=False).values_list("track_id", flat=True))
-    played = set(Listen.objects.values_list("track_id", flat=True).distinct())
+    from api.library import windows
+    lately, year = windows()
+    last = dict(Listen.objects.values("track_id").annotate(last=Max("played_at")).values_list("track_id", "last"))
+    played = set(last)
+    near = dict(NearContext.objects.filter(context__active=True).values_list("track_id", "context_id"))
     by_sound = placed_by_sound()
     mixes = list(Mix.objects.exclude(section=Mix.DRAFTS).select_related("context"))
     discovery, listed = set(), set()
@@ -63,7 +71,10 @@ def atlas(request):
     for t, (x, y) in pos.items():
         c = member.get(t)
         flags = (FAVOURITE if t in favourite else 0) | (PLAYED if t in played else 0) | (DISCOVERY if t in discovery else 0) | (IN_LIST if t in listed else 0) | (BY_SOUND if t in by_sound else 0)
-        points.append([t, round(x * SCALE), round(y * SCALE), round(hues[c], 1) if c in hues else -1, flags])
+        if t in last:
+            flags |= LATELY if last[t] >= lately else PAST_YEAR if last[t] >= year else 0
+        n = near.get(t) if c not in hues else None
+        points.append([t, round(x * SCALE), round(y * SCALE), round(hues[c], 1) if c in hues else -1, flags, round(hues[n], 1) if n in hues else -1, c or n or -1])
     track_rows = Track.objects.filter(pk__in=pos).select_related("artist").values_list("pk", "artist__country", "artist__language", "first_release_date")
     audio_rows = AudioFeatures.objects.filter(track_id__in=pos).values_list("track_id", "danceability", "aggressive", "party", "loudness")
     energy = {track_id: round((dance + aggressive + party + min(max((loudness + 20) / 14, 0), 1)) / 4, 3)
@@ -88,7 +99,6 @@ def atlas(request):
     by_context = {}
     for t, c in member.items():
         by_context.setdefault(c, []).append(t)
-    from recommend.models import Context
     names = dict(Context.objects.filter(active=True).values_list("pk", "name"))
     family_of = dict(Context.objects.filter(active=True).values_list("pk", "family"))
 
@@ -102,6 +112,10 @@ def atlas(request):
         if c in family_of:
             families.setdefault(family_of[c], []).extend(ids)
     family_places = [p for f, ids in families.items() if (p := place(f"family:{f}", f, family_hue(f), ids, "family"))]
+    # each point's family as an index into the families sent, by its context or the one it sounds closest to
+    index = {p["name"]: i for i, p in enumerate(family_places)}
+    for row in points:
+        row[6] = index.get(family_of.get(row[6]), -1)
     by_artist = {}
     for t, a in Track.objects.filter(pk__in=pos).values_list("pk", "artist_id"):
         by_artist.setdefault(a, []).append(t)
@@ -111,4 +125,5 @@ def atlas(request):
     lists = [p for m in mixes if m.section == Mix.LISTS and (p := place(m.key, m.title, hues.get(m.context_id) if m.context_id else None, [i["track_id"] for i in m.items if i.get("kind") == "track"], m.kind, members=True))]
     stamp = MapPoint.objects.aggregate(n=Max("pk"))["n"]
     built = max((m.built_at for m in mixes), default=None)
-    return {"version": f"{len(points)}-{stamp}-{built:%Y%m%d%H%M}" if built else f"{len(points)}-{stamp}", "scale": SCALE, "points": points, "families": family_places, "contexts": contexts, "artists": artist_places, "lists": lists, "metadata": metadata}
+    near_stamp = len(near)
+    return {"version": f"{len(points)}-{stamp}-{near_stamp}-{built:%Y%m%d%H%M}" if built else f"{len(points)}-{stamp}-{near_stamp}", "scale": SCALE, "points": points, "families": family_places, "contexts": contexts, "artists": artist_places, "lists": lists, "metadata": metadata}

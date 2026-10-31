@@ -157,13 +157,19 @@ def nearest_contexts(track_ids):
     they can show the colour of what they're like, marked as near rather than in."""
     if not track_ids:
         return {}
+    from recommend.models import NearContext
+    # worked out nightly (recommend.atlas.near_contexts); tracks analysed since are worked out here
+    found = dict(NearContext.objects.filter(track__in=track_ids, context__active=True).values_list("track_id", "context_id"))
+    missing = [t for t in track_ids if t not in found]
+    if not missing:
+        return found
     with connection.cursor() as cursor:
         cursor.execute(
             "SELECT a.track_id, (SELECT c.id FROM recommend_context c WHERE c.active ORDER BY c.centroid <=> a.embedding LIMIT 1) "
             "FROM catalogue_audiofeatures a WHERE a.track_id = ANY(%s)",
-            [list(track_ids)],
+            [missing],
         )
-        return {track: context for track, context in cursor.fetchall() if context is not None}
+        return found | {track: context for track, context in cursor.fetchall() if context is not None}
 
 
 def playlist_out(playlist):

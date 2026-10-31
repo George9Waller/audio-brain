@@ -224,6 +224,16 @@ class MapPoint(models.Model):
     y = models.FloatField()  # 0-1
 
 
+class NearContext(models.Model):
+    """For a track in no context (unplayed ones, mostly): the context it sounds closest to, by its embedding against
+    each centroid (recommend.atlas.near_contexts, nightly after the contexts and the map). Gives such a track the
+    colour of what it's like, marked as near rather than in, without working it out on every request."""
+
+    track = models.OneToOneField(Track, on_delete=models.CASCADE, primary_key=True, related_name="near_context")
+    context = models.ForeignKey(Context, on_delete=models.CASCADE, related_name="near_tracks")
+    distance = models.FloatField(db_index=True)  # cosine distance to that context's centroid
+
+
 class ListSync(models.Model):
     """A list you've chosen to keep in Tidal as its own playlist (to download, say). The Mixes job pushes these
     lists, and only these, each time it rebuilds them. Kept by key, so the choice survives rebuilds."""

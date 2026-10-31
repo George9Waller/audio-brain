@@ -109,6 +109,7 @@ MODELS = [
     ("Track scorer", "jobs.steps.train_scorer"),
     ("Context ranker", "jobs.steps.train_context_ranker"),
     ("Map layout", "recommend.atlas.build_map"),
+    ("Closest contexts", "recommend.atlas.near_contexts"),
     ("Weekly researched discovery leads", "recommend.discovery.run_discovery"),
 ]
 # The steps that read every track and write a row for each; while they run, enrichment's merges wait
