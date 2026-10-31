@@ -24,8 +24,9 @@ docstring says what it measures and how.
 
 **Runner reproducibility and isolation.**
 - A multi-cutoff run takes one temporary clone of the source database, then derives every cutoff clone from it. The
-  report records that snapshot's ID and capture time, the cutoff dates and horizon, the source database identity and
-  size, the full Git commit, and a fingerprint of server-side working-tree changes.
+  report records that snapshot's ID and capture time, the cutoff dates and horizon, and the source database identity
+  and size. In a Git checkout it records the commit and a fingerprint of server-side working-tree changes; in a
+  container it records the actual image tag, with working-tree details marked unknown.
 - Each variant builds in its own disposable clone of the prepared cutoff database and gets its own scorer model file.
   This keeps list/context writes and model loading from one variant out of the next.
 - A prepared clone is reusable only when its code identity still matches. `--reuse` also requires all requested
@@ -75,7 +76,10 @@ same way at most of them.
 - **Retry after deployment:** PostgreSQL remained healthy under `tini`, with no crash recovery, but the pilot still
   failed. The source database had active connections, so cloning fell back to `pg_dump`; the application image had
   PostgreSQL client 17, which cannot dump the PostgreSQL 18 server. The failed Job and priority class were removed,
-  and no clone remained. The application image needs client 18 before another pilot.
+  and no clone remained. PostgreSQL client 18 was then deployed in the application image.
+- **Second retry:** The dump and restore completed, and preparation finished, but recording the code identity failed:
+  the application image has neither Git nor a Git checkout. PostgreSQL remained healthy, and the clone and temporary
+  Job were removed. The backtest needs the actual image tag as its identity when running outside a Git checkout.
 
 **Variants that retrain a model.**
 - Today a variant only patches how lists are built; the scorer and taste vectors are trained once per cutoff, in

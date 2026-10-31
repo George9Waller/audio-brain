@@ -61,6 +61,8 @@ spec:
             {{- end }}
           {{- include "audio-brain.env" . | nindent 10 }}
           env:
+            - name: BACKTEST_IMAGE_TAG
+              value: {{ default .Values.env.IMAGE_TAG .Values.backtest.imageTag | quote }}
             {{- include "audio-brain.threads" .Values.backtest.threads | nindent 12 }}
           resources:
             {{- toYaml .Values.backtest.resources | nindent 12 }}
