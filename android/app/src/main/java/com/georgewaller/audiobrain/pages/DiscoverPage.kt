@@ -69,7 +69,8 @@ fun DiscoverPage(vm: AppViewModel, padding: PaddingValues, onOpenList: (String) 
             val waiting = queue.waiting[source] ?: l.items.size
             item(key = "h-$source") { DiscoverHeader(title, caption, new, "${count(waiting)} →") { onOpenList(l.key) } }
             items(l.items.take(shown), key = { "r-$source-${it.releaseId}" }) { r ->
-                ReleaseCard(r, decided, vm::decide, { openUrl(context, it.url) }, r.releaseId in expanded) {
+                // the section says why, except which label
+                ReleaseCard(r, decided, vm::decide, { openUrl(context, it.url) }, r.releaseId in expanded, why = source == "label") {
                     expanded = r.releaseId?.let { id -> if (id in expanded) expanded - id else expanded + id } ?: expanded
                 }
             }
@@ -91,7 +92,8 @@ fun DiscoverPage(vm: AppViewModel, padding: PaddingValues, onOpenList: (String) 
             past?.tracks?.take(2)?.forEach { t ->
                 item(key = "p-${t.trackId}") {
                     Column {
-                        ItemRow(t, verdicts[t.ref.key], { v -> vm.give(v, t, "discover:rediscovery") }, { onMenu(t, "discover:rediscovery") })
+                        // the line under it says how much and when, so the row needn't
+                        ItemRow(if (t.then != null) t.copy(reason = "") else t, verdicts[t.ref.key], { v -> vm.give(v, t, "discover:rediscovery") }, { onMenu(t, "discover:rediscovery") })
                         t.then?.let { ThenLine(it, Modifier.padding(bottom = Ab.space.s)) }
                     }
                 }
@@ -103,7 +105,7 @@ fun DiscoverPage(vm: AppViewModel, padding: PaddingValues, onOpenList: (String) 
         }
 
         list("sets")?.takeIf { it.items.isNotEmpty() }?.let { l ->
-            item(key = "h-sets") { DiscoverHeader("Long listens", "New sets on channels you save from, by how much of the tracklist you play", AgeTag("Habit", AgeTone.Habit), "${l.items.size} →") { onOpenList(l.key) } }
+            item(key = "h-sets") { DiscoverHeader("Long listens", "Sets on channels you save from, by how much of the tracklist you play", AgeTag("Habit", AgeTone.Habit), "${l.items.size} →") { onOpenList(l.key) } }
             items(l.items.take(3), key = { "s-${it.setId ?: it.title}" }) { s -> SetCard(s) { openUrl(context, s.url) } }
         }
         list("albums")?.takeIf { it.items.isNotEmpty() }?.let { l ->

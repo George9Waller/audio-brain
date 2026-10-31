@@ -574,9 +574,10 @@ def release_items(count=100, source=None):
 
 def release_item(r, short=False):
     why = {"artist": "artist you play", "remixer": "remixer you like", "label": f"on {r.label}"}.get(r.source, "")
-    item = {"kind": "release", "release_id": r.pk, "title": r.title, "detail": f"{r.kind.title()} · {r.release_date:%d %b %Y}" + ("" if short else f" · {why}"),
+    kind = "EP" if r.kind == "EP" else r.kind.title()
+    item = {"kind": "release", "release_id": r.pk, "title": r.title, "detail": f"{kind} · {r.release_date:%d %b %Y}",
             "state": r.state, "url": f"https://tidal.com/browse/album/{r.tidal_id}"}
-    if not short:
-        item.update({"artist": ", ".join(a.name for a in r.artists.all()), "reason": r.reason or "Not analysed yet", "score": round(r.score, 3) if r.score is not None else None,
+    if not short:  # why it's in the queue apart, so a section that already says why can leave it out
+        item.update({"why": why, "artist": ", ".join(a.name for a in r.artists.all()), "reason": r.reason or "Not analysed yet", "score": round(r.score, 3) if r.score is not None else None,
                      "source": r.source, "label": r.label.name if r.label else ""})
     return item

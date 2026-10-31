@@ -52,9 +52,12 @@ fun ReleaseInbox(vm: AppViewModel, key: String, padding: PaddingValues) {
     val rows = state.lists.firstOrNull { it.key == if (source.isEmpty()) "releases" else "releases:$source" }?.items.orEmpty()
     // decisions made here that the server's counts don't include yet: the queue still lists them as new
     val everything = state.lists.filter { it.key.startsWith("releases") }.flatMap { l -> l.items.flatMap { listOf(it) + it.others } }.distinctBy { it.releaseId }
-    val madeHere = everything.count { it.state == "new" && decided[it.releaseId] in setOf("saved", "dismissed", "heard") }
-    val waiting = (queue.total - madeHere).coerceAtLeast(0)
-    val done = queue.decided + madeHere
+    val madeHere = everything.filter { it.state == "new" && decided[it.releaseId] in setOf("saved", "dismissed", "heard") }
+    // a folded release has no source of its own: it shares its row's
+    val sourceOf = state.lists.filter { it.key.startsWith("releases") }.flatMap { l -> l.items.flatMap { r -> (listOf(r) + r.others).map { it.releaseId to r.source } } }.toMap()
+    fun waitingFrom(k: String) = ((if (k.isEmpty()) queue.total else queue.waiting[k] ?: 0) - madeHere.count { k.isEmpty() || sourceOf[it.releaseId] == k }).coerceAtLeast(0)
+    val waiting = waitingFrom("")
+    val done = queue.decided + madeHere.size
 
     LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
         item(key = "head") {
@@ -71,15 +74,14 @@ fun ReleaseInbox(vm: AppViewModel, key: String, padding: PaddingValues) {
                 AbText("${count(done)} decided so far · ${queue.decidedThisWeek} this week", style = Ab.type.caption, color = Ab.colors.textMuted)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(Ab.space.s), verticalArrangement = Arrangement.spacedBy(Ab.space.s)) {
                     SOURCES.forEach { (k, label) ->
-                        val n = if (k.isEmpty()) queue.total else queue.waiting[k] ?: 0
-                        AbChip("$label ${count(n)}", selected = source == k) { source = k }
+                        AbChip("$label ${count(waitingFrom(k))}", selected = source == k) { source = k }
                     }
                 }
             }
         }
         if (rows.isEmpty()) item(key = "empty") { EmptyState("Nothing waiting", "New releases from artists, remixers and labels you play arrive here each day.") }
         items(rows, key = { "r-${it.releaseId}" }) { r ->
-            ReleaseCard(r, decided, vm::decide, { openUrl(context, it.url) }, r.releaseId in expanded) {
+            ReleaseCard(r, decided, vm::decide, { openUrl(context, it.url) }, r.releaseId in expanded, why = source.isEmpty() || source == "label") {
                 expanded = r.releaseId?.let { id -> if (id in expanded) expanded - id else expanded + id } ?: expanded
             }
             AbDivider()
