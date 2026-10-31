@@ -106,6 +106,7 @@ def cutoff(days):
 def run(days=42, variants=("default",), reuse=False, keep=False, suggestions=False, label="", horizon=HORIZON):
     """Prepare a clone as of `days` ago (or reuse a prepared one), build the lists for each variant, score them on the
     `horizon` days after the cutoff. Returns {variant: report}; each report is also saved next to the clone's lists."""
+    code_identity()  # Fail before the expensive clone and training if this run cannot be identified.
     as_of = cutoff(days)
     folder = OUT / as_of.date().isoformat()
     folder.mkdir(parents=True, exist_ok=True)
@@ -126,6 +127,7 @@ def run_many(cutoffs=(42, 84, 126, 168), variants=("default",), reuse=False, kee
     """`run` at several cutoffs (days ago), each scored on the same horizon, then summarised across them: each
     variant's mean and spread, and each variant against `baseline`. `jobs` cutoffs are prepared and built at once.
     Returns the summary, which is also saved under models/backtests/multi/."""
+    code_identity()
     variants = list(dict.fromkeys(["default", baseline, *variants]))
     if baseline not in variants:
         raise ValueError(f"Baseline {baseline!r} must be included in variants")
@@ -642,34 +644,27 @@ def ratio(hits, expected):
     return round(hits / expected, 2) if expected else None
 
 
-def commit():
-    try:
-        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=settings.BASE_DIR, capture_output=True, text=True).stdout.strip()
-    except OSError:
-        return ""
-
-
-def repository_root():
-    try:
-        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=settings.BASE_DIR, capture_output=True, text=True, check=True)
-        return Path(result.stdout.strip())
-    except (OSError, subprocess.CalledProcessError):
-        return Path(settings.BASE_DIR)
-
-
 def code_identity():
-    root = repository_root()
-    diff = subprocess.run(["git", "diff", "--binary", "HEAD", "--", "server"], cwd=root, capture_output=True).stdout
-    status = subprocess.run(["git", "status", "--porcelain", "--", "server"], cwd=root, capture_output=True, text=True).stdout
-    untracked = subprocess.run(["git", "ls-files", "--others", "--exclude-standard", "--", "server"], cwd=root, capture_output=True, text=True).stdout
+    image_tag = os.environ.get("BACKTEST_IMAGE_TAG", "")
+    try:
+        root = Path(subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=settings.BASE_DIR, capture_output=True, text=True, check=True).stdout.strip())
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+        diff = subprocess.run(["git", "diff", "--binary", "HEAD", "--", "server"], cwd=root, capture_output=True, check=True).stdout
+        status = subprocess.run(["git", "status", "--porcelain", "--", "server"], cwd=root, capture_output=True, text=True, check=True).stdout
+        untracked = subprocess.run(["git", "ls-files", "--others", "--exclude-standard", "--", "server"], cwd=root, capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        if not image_tag:
+            raise RuntimeError("Cannot identify backtest code: Git is unavailable and BACKTEST_IMAGE_TAG is not set") from exc
+        return {"commit": image_tag if re.fullmatch(r"[0-9a-f]{40}", image_tag) else "",
+                "server working tree dirty": None, "server diff sha256": None, "image tag": image_tag}
     digest = hashlib.sha256(diff)
     for name in sorted(untracked.splitlines()):
         path = root / name
         digest.update(name.encode())
         if path.is_file():
             digest.update(path.read_bytes())
-    return {"commit": commit(), "server working tree dirty": bool(status.strip()),
-            "server diff sha256": digest.hexdigest()}
+    return {"commit": commit, "server working tree dirty": bool(status.strip()),
+            "server diff sha256": digest.hexdigest(), "image tag": image_tag or None}
 
 
 def run_metadata(cutoffs, horizon=HORIZON, snapshot_id=None, snapshot_at=None):
@@ -683,6 +678,7 @@ def run_metadata(cutoffs, horizon=HORIZON, snapshot_id=None, snapshot_at=None):
         "code commit": code["commit"],
         "server working tree dirty": code["server working tree dirty"],
         "server diff sha256": code["server diff sha256"],
+        "image tag": code["image tag"],
         "source database": db,
         "source database oid": row[0] if row else None,
         "source database bytes": row[1] if row else None,

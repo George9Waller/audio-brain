@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+import subprocess
 from unittest import mock
 
 import numpy as np
@@ -224,6 +225,31 @@ class ModelHelperTests(TestCase):
 
 
 class MultiCutoffBacktestTests(TestCase):
+    def test_container_identity_uses_image_tag_without_git(self):
+        tag = "a" * 40
+        with mock.patch.dict("os.environ", {"BACKTEST_IMAGE_TAG": tag}), \
+             mock.patch("recommend.backtest.subprocess.run", side_effect=FileNotFoundError):
+            identity = backtest.code_identity()
+        self.assertEqual(identity["commit"], tag)
+        self.assertEqual(identity["image tag"], tag)
+        self.assertIsNone(identity["server working tree dirty"])
+        self.assertIsNone(identity["server diff sha256"])
+
+    def test_non_commit_image_tag_is_not_reported_as_a_commit(self):
+        with mock.patch.dict("os.environ", {"BACKTEST_IMAGE_TAG": "candidate"}), \
+             mock.patch("recommend.backtest.subprocess.run", side_effect=subprocess.CalledProcessError(128, "git")):
+            identity = backtest.code_identity()
+        self.assertEqual(identity["commit"], "")
+        self.assertEqual(identity["image tag"], "candidate")
+
+    def test_missing_identity_fails_before_cloning(self):
+        with mock.patch.dict("os.environ", {"BACKTEST_IMAGE_TAG": ""}), \
+             mock.patch("recommend.backtest.subprocess.run", side_effect=FileNotFoundError), \
+             mock.patch("recommend.backtest.make_clone") as make_clone:
+            with self.assertRaisesRegex(RuntimeError, "Cannot identify backtest code"):
+                backtest.run()
+        make_clone.assert_not_called()
+
     def test_clone_names_are_per_cutoff_and_still_checked(self):
         name = backtest.clone_name(AS_OF)
         self.assertTrue(name.endswith("_backtest_20260901"))
