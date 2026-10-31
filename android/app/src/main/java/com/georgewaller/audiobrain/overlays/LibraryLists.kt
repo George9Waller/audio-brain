@@ -43,6 +43,7 @@ import com.georgewaller.audiobrain.cardSlice
 import com.georgewaller.audiobrain.color
 import com.georgewaller.audiobrain.count
 import com.georgewaller.audiobrain.data.DataGraph
+import com.georgewaller.audiobrain.data.LanguageCount
 import com.georgewaller.audiobrain.data.ListItem
 import com.georgewaller.audiobrain.design.Ab
 import com.georgewaller.audiobrain.design.AbButton
@@ -110,25 +111,33 @@ private fun LazyListScope.footer(paged: Paged<*>, empty: String) {
  * Tapping the chosen part again shows every track, most played first.
  */
 @Composable
-fun TracksScreen(vm: AppViewModel, graph: DataGraph, library: LibraryViewModel, start: String, initialQuery: String, padding: PaddingValues, nav: CatalogueNav) {
+fun TracksScreen(vm: AppViewModel, graph: DataGraph, library: LibraryViewModel, start: String, initialQuery: String, startLanguage: String, padding: PaddingValues, nav: CatalogueNav) {
     val summary by library.state.collectAsStateWithLifecycle()
     val verdicts by vm.verdicts.collectAsStateWithLifecycle()
     var recency by remember { mutableStateOf(Recency.entries.firstOrNull { it.key == start }) }
     var query by remember { mutableStateOf(initialQuery) }
+    var language by remember { mutableStateOf(startLanguage) }
     val q = debounced(query)
     val scope = rememberCoroutineScope()
-    var total by remember(recency, q) { mutableStateOf<Int?>(null) }
-    val paged = remember(recency, q) {
-        Paged(scope) { offset -> graph.api.libraryTracks(q, "plays", offset, recency?.key.orEmpty()).also { total = it.total }.items }
+    var total by remember(recency, q, language) { mutableStateOf<Int?>(null) }
+    // a language's own split by when comes with its first page; keep it while other parts of it are shown
+    var languageCounts by remember(language) { mutableStateOf<Map<String, Int>?>(null) }
+    val paged = remember(recency, q, language) {
+        Paged(scope) { offset ->
+            graph.api.libraryTracks(q, "plays", offset, recency?.key.orEmpty(), language).also { page -> total = page.total; page.recency?.let { languageCounts = it } }.items
+        }
     }
-    val counts = summary.summary?.recency.orEmpty()
+    val languages = summary.summary?.languages.orEmpty()
+    val counts = if (language.isBlank()) summary.summary?.recency.orEmpty() else languageCounts.orEmpty()
+    val name = languages.firstOrNull { it.code == language }?.name
     val list = rememberLazyListState()
     LoadMore(list, paged)
     LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = padding) {
         item(key = "head") {
             Column(verticalArrangement = Arrangement.spacedBy(Ab.space.m)) {
-                Heading("Library", summary.summary?.tracks?.let { "${count(it)} tracks" }, paged.loading && paged.items.isEmpty())
+                Heading(name ?: "Library", if (name != null) languageCounts?.values?.sum()?.let { "${count(it)} tracks" } else summary.summary?.tracks?.let { "${count(it)} tracks" }, paged.loading && paged.items.isEmpty())
                 AbTextField(query, { query = it }, "", placeholder = "A track, artist or album")
+                LanguageChips(languages, language) { language = it }
                 if (counts.isNotEmpty()) {
                     RecencyBar(counts, Modifier.padding(top = Ab.space.xs), height = 14.dp, selected = recency) { recency = if (recency == it) null else it }
                     Recency.entries.chunked(2).forEach { pair ->
@@ -142,7 +151,7 @@ fun TracksScreen(vm: AppViewModel, graph: DataGraph, library: LibraryViewModel, 
                 Row(Modifier.padding(top = Ab.space.s, bottom = Ab.space.s), verticalAlignment = Alignment.CenterVertically) {
                     val r = recency
                     AbText(
-                        if (q.isNotBlank()) "${total?.let(::count) ?: "…"} matching “$q”" else r?.caption ?: "All your tracks, most played first",
+                        if (q.isNotBlank()) "${total?.let(::count) ?: "…"} matching “$q”" else r?.caption ?: "All your ${name?.let { "$it " } ?: ""}tracks, most played first",
                         Modifier.weight(1f), style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 2,
                     )
                     AbText("${r?.sort ?: "Most played"} ↓", style = Ab.type.number, color = Ab.colors.textMuted)
@@ -162,9 +171,10 @@ fun ArtistsScreen(graph: DataGraph, library: LibraryViewModel, initialQuery: Str
     val summary by library.state.collectAsStateWithLifecycle()
     var sort by remember { mutableStateOf("year") }
     var query by remember { mutableStateOf(initialQuery) }
+    var language by remember { mutableStateOf("") }
     val q = debounced(query)
     val scope = rememberCoroutineScope()
-    val paged = remember(sort, q) { Paged(scope) { offset -> graph.api.libraryArtists(q, sort, offset) } }
+    val paged = remember(sort, q, language) { Paged(scope) { offset -> graph.api.libraryArtists(q, sort, offset, language) } }
     val list = rememberLazyListState()
     LoadMore(list, paged)
     LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = padding) {
@@ -172,6 +182,7 @@ fun ArtistsScreen(graph: DataGraph, library: LibraryViewModel, initialQuery: Str
             Column(verticalArrangement = Arrangement.spacedBy(Ab.space.m)) {
                 Heading("Artists", summary.summary?.artists?.let(::count), paged.loading && paged.items.isEmpty())
                 AbTextField(query, { query = it }, "", placeholder = "An artist")
+                LanguageChips(summary.summary?.languages.orEmpty(), language) { language = it }
                 Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
                     AbChip("This year", selected = sort == "year") { sort = "year" }
                     AbChip("All time", selected = sort == "plays") { sort = "plays" }
@@ -264,6 +275,16 @@ fun SetsScreen(graph: DataGraph, library: LibraryViewModel, initialQuery: String
         }
         cardItems(paged.items, { "s-${it.id}" }) { s -> SetLine(s) { nav.set(s.id) } }
         footer(paged, "No sets here yet.")
+    }
+}
+
+/** Any language, or one of those you play besides English; tapping the chosen one again goes back to any. */
+@Composable
+private fun LanguageChips(languages: List<LanguageCount>, selected: String, onPick: (String) -> Unit) {
+    if (languages.isEmpty()) return
+    androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
+        item { AbChip("Any language", selected = selected.isBlank()) { onPick("") } }
+        items(languages.size) { i -> val l = languages[i]; AbChip(l.name, selected = selected == l.code) { onPick(if (selected == l.code) "" else l.code) } }
     }
 }
 

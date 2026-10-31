@@ -399,7 +399,11 @@ data class SearchResult(val tracks: List<ListItem> = emptyList(), val artists: L
 // Library (server/api/library.py)
 
 @Serializable
-data class TrackPage(val total: Int, val offset: Int, val items: List<ListItem>)
+data class TrackPage(val total: Int, val offset: Int, val items: List<ListItem>, val recency: Map<String, Int>? = null)
+
+/** A language other than English you play: MusicBrainz's code ("fra"), its name, and tracks played and in all. */
+@Serializable
+data class LanguageCount(val code: String, val name: String, val played: Int = 0, val tracks: Int = 0)
 
 /** A cell of a colour icon: a context's hue, hollow when the track only sounds like it. */
 @Serializable
@@ -413,6 +417,7 @@ data class LibrarySummary(
     val tracks: Int = 0,
     val recency: Map<String, Int> = emptyMap(),  // lately, year, older, never
     val artists: Int = 0, val albums: Int = 0, val sets: Map<String, Int> = emptyMap(), val contexts: Int = 0, val families: Int = 0,
+    val languages: List<LanguageCount> = emptyList(),
     val recent: List<Shelf> = emptyList(),
 )
 

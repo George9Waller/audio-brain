@@ -39,6 +39,10 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PointMode
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -73,6 +77,8 @@ import com.georgewaller.audiobrain.data.DataGraph
 import com.georgewaller.audiobrain.data.LibrarySearch
 import com.georgewaller.audiobrain.data.ListItem
 import com.georgewaller.audiobrain.data.SetPage
+import com.georgewaller.audiobrain.data.Settings
+import com.georgewaller.audiobrain.playerName
 import com.georgewaller.audiobrain.data.TrackStory
 import com.georgewaller.audiobrain.data.Verdict
 import com.georgewaller.audiobrain.dayLabel
@@ -220,10 +226,9 @@ fun ArtistScreen(vm: AppViewModel, graph: DataGraph, id: Long, padding: PaddingV
                     }
                 }
             }
-            if (page.tracks.isNotEmpty()) item(key = "tracks") {
-                DiscoverSection("${page.tracks.size} played", Ab.colors.textMuted, "Tracks", "Most played first", emptyList()) {
-                    page.tracks.forEach { t -> CardRow { LibraryTrackRow(t, verdicts[t.ref.key], { v -> vm.give(v, t, "artist") }, { t.openWith(nav, "artist") }, { nav.menu(t, "artist") }) } }
-                }
+            if (page.tracks.isNotEmpty()) {
+                item(key = "tracks") { SectionHead("${page.tracks.size} played", Ab.colors.textMuted, "Tracks", "Most played first", Modifier.padding(top = Ab.space.xxl)) }
+                cardItems(page.tracks, { "t-${it.trackId}" }) { t -> LibraryTrackRow(t, verdicts[t.ref.key], { v -> vm.give(v, t, "artist") }, { t.openWith(nav, "artist") }, { nav.menu(t, "artist") }) }
             }
             if (page.unplayed.isNotEmpty()) item(key = "unplayed") {
                 DiscoverSection("New · ${count(page.never)} tracks", Ab.colors.ageNew, "Not played yet", "Closest to your contexts first", emptyList()) {
@@ -407,7 +412,7 @@ fun ContextScreen(vm: AppViewModel, graph: DataGraph, id: Long, padding: Padding
         LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
             item(key = "h") {
                 Column(verticalArrangement = Arrangement.spacedBy(Ab.space.s)) {
-                    ContextOnMap(graph, page.members.toSet(), page.hue)
+                    ContextOnMap(graph, remember(page) { page.members.toSet() }, page.hue)
                     AbText("On the map: this context lit, the rest dimmed", style = Ab.type.number, color = Ab.colors.textMuted)
                     Row(Modifier.padding(top = Ab.space.m), verticalAlignment = Alignment.CenterVertically) {
                         HueDot(page.hue, near = false, size = 12.dp)
@@ -440,21 +445,17 @@ fun ContextScreen(vm: AppViewModel, graph: DataGraph, id: Long, padding: Padding
                     page.listKey?.let { key -> AbButton("Open its list", { nav.list(key) }, Modifier.padding(top = Ab.space.s), kind = ButtonKind.Quiet) }
                 }
             }
-            item(key = "tracks") {
-                DiscoverSection("${count(page.size)} tracks", colour, "Its tracks", "Core → edge: the ones that define it first, the ones that might belong elsewhere last", emptyList()) {
-                    page.tracks.forEach { t ->
-                        CardRow {
-                            val fit = 1f - ((t.distance ?: 0f) / page.far.coerceAtLeast(0.0001f)).coerceIn(0f, 1f)
-                            TrackRow(
-                                t.title, t.artist, verdict = (verdicts[t.ref.key] ?: Verdict.fromApi(t.verdict))?.style(),
-                                onClick = { t.openWith(nav, "context:$id") }, onLongClick = { nav.menu(t, "context:$id") },
-                                onSwipeRight = { vm.give(Verdict.Keep, t, "context:$id") }, onSwipeLeft = { vm.give(Verdict.No, t, "context:$id") },
-                                leading = { Share((fit * 100).roundToInt(), 100, "Fit ${(fit * 100).roundToInt()}%", Modifier.width(30.dp), color = colour) },
-                                facts = listOfNotNull(t.recent?.takeIf { it > 0 }?.let { "$it lately" }, "${t.plays ?: 0} in all").joinToString("\n"),
-                            )
-                        }
-                    }
-                }
+            // rows as lazy items, so only those on screen are built
+            item(key = "tracks") { SectionHead("${count(page.size)} tracks", colour, "Its tracks", "Core → edge: the ones that define it first, the ones that might belong elsewhere last", Modifier.padding(top = Ab.space.xxl)) }
+            cardItems(page.tracks, { "t-${it.trackId}" }) { t ->
+                val fit = 1f - ((t.distance ?: 0f) / page.far.coerceAtLeast(0.0001f)).coerceIn(0f, 1f)
+                TrackRow(
+                    t.title, t.artist, verdict = (verdicts[t.ref.key] ?: Verdict.fromApi(t.verdict))?.style(),
+                    onClick = { t.openWith(nav, "context:$id") }, onLongClick = { nav.menu(t, "context:$id") },
+                    onSwipeRight = { vm.give(Verdict.Keep, t, "context:$id") }, onSwipeLeft = { vm.give(Verdict.No, t, "context:$id") },
+                    leading = { Share((fit * 100).roundToInt(), 100, "Fit ${(fit * 100).roundToInt()}%", Modifier.width(30.dp), color = colour) },
+                    facts = listOfNotNull(t.recent?.takeIf { it > 0 }?.let { "$it lately" }, "${t.plays ?: 0} in all").joinToString("\n"),
+                )
             }
         }
     }
@@ -482,26 +483,37 @@ private fun ContextOnMap(graph: DataGraph, members: Set<Long>, hue: Float) {
     val data by graph.map.data.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { graph.map.load() }
     val d = data
-    val points = remember(d?.version, members) {
-        d?.let { m ->
+    val faint = Ab.colors.textFaint.copy(alpha = 0.25f).toArgb()
+    val colour = contextColor(hue).toArgb()
+    // drawn once, off the main thread, as a picture: tens of thousands of points would otherwise be drawn again on
+    // every frame of the page sliding in
+    val picture by androidx.compose.runtime.produceState<Pair<androidx.compose.ui.graphics.ImageBitmap, Float>?>(null, d?.version, members) {
+        val m = d ?: return@produceState
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            val side = 720
+            val bitmap = android.graphics.Bitmap.createBitmap(side, side, android.graphics.Bitmap.Config.ARGB_8888)
+            val c = android.graphics.Canvas(bitmap)
+            val paint = android.graphics.Paint().apply { isAntiAlias = true; strokeCap = android.graphics.Paint.Cap.ROUND }
             val rest = ArrayList<Float>(m.points.size * 2)
             val lit = ArrayList<Float>(members.size * 2)
-            m.points.forEach { p -> val to = if (p[0].toLong() in members) lit else rest; to.add(p[1] / m.scale); to.add(p[2] / m.scale) }
-            rest to lit
+            var litY = 0f
+            m.points.forEach { p ->
+                val x = p[1] / m.scale * side; val y = p[2] / m.scale * side
+                if (p[0].toLong() in members) { lit.add(x); lit.add(y); litY += p[2] / m.scale } else { rest.add(x); rest.add(y) }
+            }
+            paint.color = faint; paint.strokeWidth = 3f; c.drawPoints(rest.toFloatArray(), paint)
+            paint.color = colour; paint.strokeWidth = 6f; c.drawPoints(lit.toFloatArray(), paint)
+            bitmap.asImageBitmap() to (if (lit.isNotEmpty()) litY / (lit.size / 2) else 0.5f)
         }
     }
-    val faint = Ab.colors.textFaint.copy(alpha = 0.25f)
-    val colour = contextColor(hue)
     Canvas(Modifier.fillMaxWidth().height(140.dp).clip(Ab.shapes.medium).background(Ab.colors.surface).semantics { contentDescription = "This context on the map" }) {
-        val (rest, lit) = points ?: return@Canvas
+        val (image, litY) = picture ?: return@Canvas
         val pad = 8.dp.toPx()
         // the map is square: fit it to the width, and show the band of it where this context is
         val side = size.width - pad * 2
-        val litY = lit.filterIndexed { i, _ -> i % 2 == 1 }.average().toFloat().takeIf { !it.isNaN() } ?: 0.5f
         val top = (size.height / 2 - litY * side).coerceIn(size.height - side - pad, pad)
-        fun offsets(xs: List<Float>) = xs.chunked(2) { Offset(pad + it[0] * side, top + it[1] * side) }
-        drawPoints(offsets(rest), PointMode.Points, faint, 2.dp.toPx(), StrokeCap.Round)
-        drawPoints(offsets(lit), PointMode.Points, colour, 3.5.dp.toPx(), StrokeCap.Round)
+        drawImage(image, dstOffset = androidx.compose.ui.unit.IntOffset(pad.toInt(), top.toInt()), dstSize = androidx.compose.ui.unit.IntSize(side.toInt(), side.toInt()),
+            filterQuality = androidx.compose.ui.graphics.FilterQuality.Medium)
     }
 }
 
@@ -511,6 +523,7 @@ private fun ContextOnMap(graph: DataGraph, members: Set<Long>, hue: Float) {
 fun TrackScreen(vm: AppViewModel, graph: DataGraph, id: Long, padding: PaddingValues, nav: CatalogueNav) {
     val verdicts by vm.verdicts.collectAsStateWithLifecycle()
     val lists by vm.lists.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
     Loaded<TrackStory>(id, { graph.api.trackStory(id) }) { story ->
         val t = story.track
@@ -560,9 +573,16 @@ fun TrackScreen(vm: AppViewModel, graph: DataGraph, id: Long, padding: PaddingVa
                             }
                         }
                     }
+                    val playOn = settings?.playOn ?: Settings.TIDAL
+                    val other = if (playOn == Settings.TIDAL) Settings.YT_MUSIC else Settings.TIDAL
                     Row(Modifier.padding(top = Ab.space.m), horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
-                        story.tidalUrl?.let { url -> AbButton("Play in Tidal", { openUrl(context, url) }, Modifier.weight(1f)) }
-                        AbButton("Radio from this", { vm.startRadio(t) }, Modifier.weight(1f), kind = ButtonKind.Quiet)
+                        AbButton("Play in ${playerName(playOn)}", { vm.playTrack(t) }, Modifier.weight(1f), icon = AbIcons.Play)
+                        AbButton(playerName(other), { vm.playTrack(t, other) }, kind = ButtonKind.Ghost)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
+                        AbButton("Radio from this", { vm.startRadio(t) }, kind = ButtonKind.Quiet)
+                        AbButton("Explore artist", { vm.explore(name = t.artist.split(",").first().trim(), trackId = t.trackId) }, kind = ButtonKind.Quiet)
+                        story.tidalUrl?.let { url -> com.georgewaller.audiobrain.design.AbIconButton(AbIcons.Open, "Open in Tidal", { openUrl(context, url) }, tint = Ab.colors.textMuted) }
                     }
                 }
             }

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -66,6 +67,19 @@ fun CataloguePage(library: LibraryViewModel, padding: PaddingValues, nav: Catalo
                 SectionHead("Now · ${summary.recent.size} places", Ab.colors.ageNow, "You've been in lately", "The albums and sets you've played most in the last 45 days, and your busiest context")
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(Ab.space.m)) {
                     items(summary.recent, key = { "${it.kind}-${it.id}" }) { shelf -> ShelfCard(shelf) { open(shelf, nav) } }
+                }
+            }
+        }
+        if (summary.languages.isNotEmpty()) item(key = "languages") {
+            Column(Modifier.padding(top = Ab.space.xxl)) {
+                SectionHead("", Ab.colors.textMuted, "By language", "Tracks by artists who mostly release in each, as MusicBrainz has them")
+                Column(verticalArrangement = Arrangement.spacedBy(Ab.space.s)) {
+                    summary.languages.chunked(2).forEach { pair ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
+                            pair.forEach { l -> Tile(l.name, "${count(l.played)} played · ${count(l.tracks)} in all", Modifier.weight(1f)) { nav.language(l.code) } }
+                            if (pair.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                    }
                 }
             }
         }

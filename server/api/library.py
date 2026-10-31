@@ -142,21 +142,45 @@ class Page(Schema):
     total: int
     offset: int
     items: list[dict[str, Any]]
+    recency: dict[str, int] | None = None  # with a language, on the first page: its tracks by when, as the summary's
+
+
+# MusicBrainz's ISO 639-3 codes (Artist.language) for the languages a catalogue is likely to have; others show as codes
+LANGUAGES = {
+    "eng": "English", "fra": "French", "ita": "Italian", "spa": "Spanish", "deu": "German", "por": "Portuguese", "nld": "Dutch",
+    "swe": "Swedish", "nor": "Norwegian", "dan": "Danish", "fin": "Finnish", "isl": "Icelandic", "jpn": "Japanese", "kor": "Korean",
+    "zho": "Chinese", "rus": "Russian", "pol": "Polish", "tur": "Turkish", "ara": "Arabic", "heb": "Hebrew", "gle": "Irish",
+    "cym": "Welsh", "hin": "Hindi", "yor": "Yoruba", "zul": "Zulu", "afr": "Afrikaans", "ell": "Greek", "ces": "Czech", "hun": "Hungarian",
+}
+NOT_LANGUAGES = {"mul", "zxx", "und", "mis"}  # several, none (instrumental), unknown
+
+
+def recency_of(tracks):
+    """`tracks` (a queryset) by when each was last played: lately, earlier this year, before, never."""
+    lately, year = windows()
+    last = Listen.objects.filter(track__in=tracks).values("track").annotate(last=Max("played_at"))
+    played = last.count()
+    in_lately = last.filter(last__gte=lately).count()
+    in_year = last.filter(last__lt=lately, last__gte=year).count()
+    return {"lately": in_lately, "year": in_year, "older": played - in_lately - in_year, "never": tracks.count() - played}
 
 
 When = Literal["", "lately", "year", "older", "never"]
 
 
 @router.get("/library/tracks", response=Page)
-def tracks(request, q: str = "", sort: Sort = "plays", offset: int = 0, when: When = ""):
-    """Library tracks; `when` narrows them to played lately, earlier in the past year, before that, or never (every
+def tracks(request, q: str = "", sort: Sort = "plays", offset: int = 0, when: When = "", language: str = ""):
+    """Library tracks; `when` narrows them to played lately, earlier this year, before that, or never (every
     catalogue track you haven't played). Each view sorts the way it needs: most played lately, last played, most
-    played back then, and for never played the closest to a context you play (NearContext), unless `sort` is az."""
+    played back then, and for never played the closest to a context you play (NearContext), unless `sort` is az.
+    `language` keeps tracks by artists who mostly release in it (MusicBrainz's code, "fra")."""
     lately, year = windows()
     if when == "never":
         qs = Track.objects.exclude(Exists(Listen.objects.filter(track=OuterRef("pk"))))
     else:
         qs = library_tracks()
+    if language:
+        qs = qs.filter(artist__language=language)
     if q.strip():
         qs = qs.filter(words(q, "name", "artist__name", "album__name"))
     if when in ("lately", "year", "older"):
@@ -174,7 +198,8 @@ def tracks(request, q: str = "", sort: Sort = "plays", offset: int = 0, when: Wh
         qs = qs.order_by("-intent_plays", "name")
     total = qs.count()
     page = list(qs.select_related("artist", "album")[offset:offset + PAGE])
-    return {"total": total, "offset": offset, "items": track_rows(page, peaks=when in ("", "older"))}
+    counts = recency_of(Track.objects.filter(artist__language=language)) if language and not offset else None
+    return {"total": total, "offset": offset, "items": track_rows(page, peaks=when in ("", "older")), "recency": counts}
 
 
 class Shelf(Schema):
@@ -194,6 +219,7 @@ class LibrarySummary(Schema):
     sets: dict[str, int]  # played, saved, new
     contexts: int
     families: int
+    languages: list[dict[str, Any]]  # {code, name, played, tracks}: the languages other than English you play most
     recent: list[Shelf]  # what you've been in lately: albums, sets and a context, last played first
 
 
@@ -214,8 +240,17 @@ def summary(request):
         "artists": Artist.objects.filter(pk__in=lib.values("artist")).count(),
         "albums": Album.objects.filter(pk__in=lib.values("album")).count(),
         "sets": set_counts(), "contexts": contexts.count(), "families": contexts.exclude(family="").values("family").distinct().count(),
-        "recent": recent_shelf(lately),
+        "languages": languages(), "recent": recent_shelf(lately),
     }
+
+
+def languages(count=6, least=10):
+    """The languages other than English you've played at least `least` tracks in, most played first, with how many
+    catalogue tracks each has: by artist, as MusicBrainz knows them."""
+    played = Exists(Listen.objects.filter(track=OuterRef("pk")))
+    rows = (Track.objects.exclude(artist__language__in=NOT_LANGUAGES | {"", "eng"}).values("artist__language")
+            .annotate(tracks=Count("pk"), played=Count("pk", filter=Q(played))).filter(played__gte=least).order_by("-played")[:count])
+    return [{"code": r["artist__language"], "name": LANGUAGES.get(r["artist__language"], r["artist__language"]), "played": r["played"], "tracks": r["tracks"]} for r in rows]
 
 
 def recent_shelf(since):
@@ -266,9 +301,12 @@ ArtistSort = Literal["plays", "recent", "az", "year"]
 
 
 @router.get("/library/artists", response=list[ArtistRow])
-def artists(request, q: str = "", sort: ArtistSort = "plays", offset: int = 0):
-    """Artists in your library, by plays this year (`year`), in all, or by name, each with their plays per year."""
+def artists(request, q: str = "", sort: ArtistSort = "plays", offset: int = 0, language: str = ""):
+    """Artists in your library, by plays this year (`year`), in all, or by name, each with their plays per year;
+    `language` keeps those who mostly release in it."""
     qs = Artist.objects.filter(pk__in=library_tracks().values("artist"))
+    if language:
+        qs = qs.filter(language=language)
     if q.strip():
         qs = qs.filter(words(q, "name"))
     if sort == "az":

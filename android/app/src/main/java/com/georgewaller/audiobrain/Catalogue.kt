@@ -64,6 +64,7 @@ import java.util.Locale
 /** Where you can go from any Catalogue page. */
 class CatalogueNav(
     val tracks: (recency: String, q: String) -> Unit,
+    val language: (code: String) -> Unit,  // tracks by artists who mostly release in it
     val artists: (q: String) -> Unit,
     val albums: (q: String) -> Unit,
     val sets: (q: String) -> Unit,

@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -90,7 +91,8 @@ enum class Lens(val label: String, val caption: String) {
 private const val PLAYED = 2
 private const val LATELY = 32
 private const val THIS_YEAR = 64
-private const val GRID = 160
+private const val GRID = 320
+private const val SEAM = 0xFF0C0D0F.toInt()  // the map's ground
 /** The grid reaches this far past the layout's 0–1 square, so regions at its edge fade out rather than stop. */
 private const val MARGIN = 0.1f
 
@@ -148,7 +150,7 @@ private fun blobs(p: Points, families: List<MapPlace>, lens: Lens, colours: IntA
         val cy = cell(p.ys[i]).coerceIn(0, GRID - 1)
         density[f][cy * GRID + cx] += 1f
     }
-    density.forEach { repeat(3) { _ -> blur(it, 3) } }
+    density.forEach { repeat(3) { _ -> blur(it, 6) } }
     val owner = IntArray(GRID * GRID) { -1 }
     val strength = FloatArray(GRID * GRID)
     for (c in 0 until GRID * GRID) {
@@ -159,13 +161,17 @@ private fun blobs(p: Points, families: List<MapPlace>, lens: Lens, colours: IntA
     // one scale for every family, so a family with little in this lens shrinks and fades beside the rest
     val sorted = strength.filter { it > 0f }.sorted()
     val top = sorted.getOrNull((sorted.size * 0.97f).toInt().coerceAtMost(sorted.size - 1))?.takeIf { it > 0f } ?: 1f
+    val alpha = FloatArray(GRID * GRID) { c -> if (owner[c] < 0) 0f else smoothstep(0.04f, 0.5f, strength[c] / top) * 0.5f }
+    for (c in alpha.indices) if (alpha[c] < 0.02f) owner[c] = -1
     val pixels = IntArray(GRID * GRID)
     for (c in 0 until GRID * GRID) {
         val f = owner[c]
         if (f < 0) continue
-        val a = smoothstep(0.04f, 0.5f, strength[c] / top) * 0.5f
-        if (a < 0.02f) { owner[c] = -1; continue }
-        pixels[c] = ((a * 255).toInt() shl 24) or (colours[f] and 0xFFFFFF)
+        // where two families meet, a dark seam, so neighbours of a like colour still read as two
+        val x = c % GRID; val y = c / GRID
+        val seam = listOf(x > 0 && owner[c - 1] >= 0 && owner[c - 1] != f, x < GRID - 1 && owner[c + 1] >= 0 && owner[c + 1] != f,
+            y > 0 && owner[c - GRID] >= 0 && owner[c - GRID] != f, y < GRID - 1 && owner[c + GRID] >= 0 && owner[c + GRID] != f).any { it }
+        pixels[c] = if (seam) ((0.7f * 255).toInt() shl 24) or (SEAM and 0xFFFFFF) else ((alpha[c] * 255).toInt() shl 24) or (colours[f] and 0xFFFFFF)
     }
     val bitmap = Bitmap.createBitmap(GRID, GRID, Bitmap.Config.ARGB_8888)
     bitmap.setPixels(pixels, 0, GRID, 0, 0, GRID, GRID)
@@ -202,6 +208,9 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, nav: CatalogueNav, shown: Boolea
     LaunchedEffect(shown) { if (shown) graph.map.load() }
     var family by rememberSaveable { mutableStateOf<Int?>(null) }
     var lens by rememberSaveable { mutableStateOf(Lens.All) }
+    // room under the controls for the now-playing chip, only while something plays
+    val session by vm.nowPlaying.collectAsStateWithLifecycle()
+    val chipRoom = if (session?.hasTrack == true) 76.dp else 0.dp
     val d = data
     val points by produceState<Points?>(null, d?.version) { value = d?.let { withContext(Dispatchers.Default) { Points(it) } } }
     val colours = remember(d?.version) { d?.families?.map { contextColor(it.hue).toArgb() }?.toIntArray() ?: IntArray(0) }
@@ -228,7 +237,7 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, nav: CatalogueNav, shown: Boolea
             else MapCanvas(p, d, regions, family, lens, contexts, onFamily = { family = it }, onContext = nav.context, onTrack = nav.track)
         }
         SegmentTabs(Lens.entries.map { it.label }, lens.ordinal, { lens = Lens.entries[it] }, Modifier.padding(vertical = Ab.space.m))
-        if (open != null) LazyColumn(Modifier.heightIn(max = 300.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 88.dp)) {
+        if (open != null) LazyColumn(Modifier.heightIn(max = 300.dp), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = chipRoom)) {
             items(contexts, key = { it.key }) { c ->
                 Row(Modifier.fillMaxWidth().clickable { contextId(c)?.let(nav.context) }.heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
                     HueDot(c.hue, near = false)
@@ -238,7 +247,7 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, nav: CatalogueNav, shown: Boolea
                 }
                 AbDivider()
             }
-        } else Spacer(Modifier.padding(bottom = 88.dp))
+        } else Spacer(Modifier.height(chipRoom))
     }
 }
 

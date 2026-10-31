@@ -100,8 +100,9 @@ sealed interface Overlay {
     data class Album(val id: Long) : Overlay
     data class Set(val id: Long) : Overlay
     data class Context(val id: Long) : Overlay
-    data class Track(val id: Long) : Overlay
-    data class Tracks(val recency: String, val q: String = "") : Overlay
+    /** [rise]: opened by dragging a track's sheet up, so it comes up from the bottom. */
+    data class Track(val id: Long, val rise: Boolean = false) : Overlay
+    data class Tracks(val recency: String, val q: String = "", val language: String = "") : Overlay
     data class Artists(val q: String = "") : Overlay
     data class Albums(val q: String = "") : Overlay
     data class Sets(val q: String = "") : Overlay
@@ -175,7 +176,7 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit,
     val open: (Overlay) -> Unit = { overlays.add(it) }
     val nav = remember {
         CatalogueNav(
-            tracks = { r, q -> open(Overlay.Tracks(r, q)) }, artists = { open(Overlay.Artists(it)) }, albums = { open(Overlay.Albums(it)) },
+            tracks = { r, q -> open(Overlay.Tracks(r, q)) }, language = { open(Overlay.Tracks("", language = it)) }, artists = { open(Overlay.Artists(it)) }, albums = { open(Overlay.Albums(it)) },
             sets = { open(Overlay.Sets(it)) }, map = { catalogueMode = "map" }, search = { open(Overlay.Search(it)) },
             artist = { open(Overlay.Artist(it)) }, album = { open(Overlay.Album(it)) }, set = { open(Overlay.Set(it)) },
             context = { open(Overlay.Context(it)) }, track = { open(Overlay.Track(it)) }, list = { open(Overlay.List(it)) },
@@ -234,7 +235,11 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit,
         // overlays slide over the pages
         AnimatedContent(
             overlays.lastOrNull(),
-            transitionSpec = { (slideInHorizontally { it } + fadeIn()) togetherWith (slideOutHorizontally { it } + fadeOut()) },
+            transitionSpec = {
+                val rising = (targetState as? Overlay.Track)?.rise == true || (initialState as? Overlay.Track)?.rise == true && targetState == null
+                if (rising) (slideInVertically { it / 3 } + fadeIn()) togetherWith (slideOutVertically { it / 3 } + fadeOut())
+                else (slideInHorizontally { it } + fadeIn()) togetherWith (slideOutHorizontally { it } + fadeOut())
+            },
             label = "overlay",
         ) { overlay ->
             if (overlay == null) return@AnimatedContent
@@ -248,7 +253,7 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit,
                     is Overlay.Set -> SetScreen(vm, graph, overlay.id, p, nav)
                     is Overlay.Context -> ContextScreen(vm, graph, overlay.id, p, nav)
                     is Overlay.Track -> TrackScreen(vm, graph, overlay.id, p, nav)
-                    is Overlay.Tracks -> TracksScreen(vm, graph, library, overlay.recency, overlay.q, p, nav)
+                    is Overlay.Tracks -> TracksScreen(vm, graph, library, overlay.recency, overlay.q, overlay.language, p, nav)
                     is Overlay.Artists -> ArtistsScreen(graph, library, overlay.q, p, nav)
                     is Overlay.Albums -> AlbumsScreen(graph, library, overlay.q, p, nav)
                     is Overlay.Sets -> SetsScreen(graph, library, overlay.q, p, nav)
@@ -278,7 +283,9 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit,
         }
 
         AbDrawer(drawer, { drawer = false }) { NowDrawerContent(vm, onMenu, onSetTracklist) { drawer = false } }
-        AbDrawer(menu != null, { menu = null }) { menu?.let { (item, where) -> ItemMenuContent(vm, item, where) { menu = null } } }
+        // a track's sheet: drag it up (or tap the line) for the track's whole page
+        val expand: (() -> Unit)? = menu?.first?.trackId?.let { id -> { menu = null; overlays.add(Overlay.Track(id, rise = true)); Unit } }
+        AbDrawer(menu != null, { menu = null }, onExpand = expand) { menu?.let { (item, where) -> ItemMenuContent(vm, item, where, expand) { menu = null } } }
 
         AnimatedVisibility(message != null, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 84.dp), enter = fadeIn(), exit = fadeOut()) {
             AbSurface(color = Ab.colors.overlay, shape = Ab.shapes.pill) {

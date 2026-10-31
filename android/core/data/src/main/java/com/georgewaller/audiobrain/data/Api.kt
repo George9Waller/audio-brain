@@ -66,8 +66,9 @@ class ApiClient(private val settings: SettingsStore) {
     suspend fun search(q: String, sound: Boolean): SearchResult = post("/search", ApiJson.encodeToString(SearchRequest(q, sound)))
 
     suspend fun librarySummary(): LibrarySummary = get("/library/summary")
-    suspend fun libraryTracks(q: String, sort: String, offset: Int, recency: String = ""): TrackPage = get("/library/tracks?${query(q, sort, offset)}&when=$recency")
-    suspend fun libraryArtists(q: String, sort: String, offset: Int): List<ArtistRow> = get("/library/artists?${query(q, sort, offset)}")
+    suspend fun libraryTracks(q: String, sort: String, offset: Int, recency: String = "", language: String = ""): TrackPage =
+        get("/library/tracks?${query(q, sort, offset)}&when=$recency&language=$language")
+    suspend fun libraryArtists(q: String, sort: String, offset: Int, language: String = ""): List<ArtistRow> = get("/library/artists?${query(q, sort, offset)}&language=$language")
     suspend fun libraryAlbums(q: String, sort: String, offset: Int): List<AlbumRow> = get("/library/albums?${query(q, sort, offset)}")
     suspend fun librarySets(q: String, source: String, offset: Int): List<SetRow> = get("/library/sets?q=${enc(q)}&source=$source&offset=$offset")
     suspend fun librarySearch(q: String): LibrarySearch = get("/library/search?q=${enc(q)}")

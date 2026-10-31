@@ -540,3 +540,12 @@ class LibraryTests(TestCase):
         self.assertEqual(rows[self.never.pk][3], -1)
         self.assertGreaterEqual(rows[self.never.pk][5], 0)
         self.assertEqual(families[int(rows[self.lately.pk][6])], "Indie & Rock")
+
+    def test_by_language(self):
+        Artist.objects.filter(pk=self.artist.pk).update(language="fra")
+        page = self.get("/library/tracks?language=fra")
+        self.assertEqual({i["artist"] for i in page["items"]}, {"Becky Hill"})
+        self.assertEqual(page["recency"]["lately"], 1)
+        self.assertEqual([a["name"] for a in self.get("/library/artists?language=fra")], ["Becky Hill"])
+        # two played tracks are below the summary's threshold of ten
+        self.assertEqual(self.get("/library/summary")["languages"], [])
