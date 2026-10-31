@@ -92,13 +92,13 @@ fun DiscoverHeader(title: String, caption: String, tag: AgeTag?, all: String?, o
  * other waiting releases are folded under it, each decidable too, so twenty from one artist take one row.
  */
 @Composable
-fun ReleaseCard(item: ListItem, decided: Map<Long, String>, onDecide: (ListItem, String) -> Unit, onOpen: (ListItem) -> Unit, expanded: Boolean, onExpand: () -> Unit) {
+fun ReleaseCard(item: ListItem, decided: Map<Long, String>, onDecide: (ListItem, String) -> Unit, onOpen: (ListItem) -> Unit, expanded: Boolean, why: Boolean = true, onExpand: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(vertical = Ab.space.m), verticalArrangement = Arrangement.spacedBy(Ab.space.xxs)) {
         Row(verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f).clickable { onOpen(item) }, verticalArrangement = Arrangement.spacedBy(Ab.space.xxs)) {
                 AbText(item.title, style = Ab.type.heading, maxLines = 2)
                 AbText(item.artist, style = Ab.type.body, color = Ab.colors.textMuted, maxLines = 1)
-                AbText(item.detail, style = Ab.type.number, color = Ab.colors.textMuted, maxLines = 1)
+                AbText(listOf(item.detail, item.why.takeIf { why }.orEmpty()).filter { it.isNotBlank() }.joinToString(" · "), style = Ab.type.number, color = Ab.colors.textMuted, maxLines = 1)
                 soundsLike(item.reason)?.let { AbText("Sounds like $it", style = Ab.type.caption, color = Ab.colors.text, maxLines = 3) }
             }
             Spacer(Modifier.width(Ab.space.s))

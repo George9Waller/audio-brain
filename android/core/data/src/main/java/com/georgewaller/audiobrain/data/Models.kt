@@ -257,6 +257,7 @@ data class ListItem(
     val url: String? = null,
     // Discover's evidence, by kind (server/recommend/lists.py and beyond.py):
     val source: String = "",  // a release: artist, remixer or label
+    val why: String = "",  // and that in words: "artist you play", "on Ninja Tune"
     val others: List<ListItem> = emptyList(),  // a release: the same artist's other waiting releases, folded under it
     @SerialName("others_count") val othersCount: Int = 0,
     @SerialName("close_to") val closeTo: List<String> = emptyList(),  // an artist to try: yours they're closest to
