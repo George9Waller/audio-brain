@@ -563,7 +563,19 @@ class LibraryTests(TestCase):
         Listen.objects.create(track=duet, played_at=self.now - timedelta(days=3), source="lastfm")
         credit_artists()
         self.assertEqual(set(duet.credits.values_list("artist__name", flat=True)), {"Becky Hill", "Sigala"})
-        self.assertEqual(list(Track.objects.get(name="EARFQUAKE").credits.values_list("artist__name", flat=True)), ["Tyler, The Creator"])
+        # a name it can't split stays uncredited, and counts for itself by name
+        earfquake = Track.objects.get(name="EARFQUAKE")
+        self.assertFalse(earfquake.credits.exists())
+        self.assertEqual(self.get(f"/library/artists/{whole.pk}")["catalogue"], 1)
+        # "feat." is a join too; a remixer's credit doesn't stop a track counting for its artist by name
+        featuring = Track.objects.create(name="Heaven", artist=Artist.objects.create(name="Sigala feat. Becky Hill"))
+        remixed = Track.objects.create(name="Gecko", artist=whole)
+        from catalogue.models import TrackCredit
+        TrackCredit.objects.create(track=remixed, artist=guest, role=TrackCredit.REMIXER)
+        Listen.objects.create(track=remixed, played_at=self.now - timedelta(days=2), source="lastfm")
+        credit_artists()
+        self.assertEqual(set(featuring.credits.values_list("artist__name", flat=True)), {"Sigala", "Becky Hill"})
+        self.assertEqual(self.get(f"/library/artists/{whole.pk}")["artist"]["listens"], 1)
         page = self.get(f"/library/artists/{self.artist.pk}")
         self.assertEqual(page["artist"]["listens"], 5)  # her own four, and the duet
         self.assertIn("Wish You Well", [t["title"] for t in page["tracks"]])
@@ -571,3 +583,23 @@ class LibraryTests(TestCase):
         self.assertIn("Sigala", names)
         self.assertNotIn("Becky Hill, Sigala", names)
         self.assertEqual(credit_artists().split()[0], "0")  # idempotent
+
+    def test_credits_a_collaboration_took_go_back_to_its_artist(self):
+        from catalogue.credits import credit_artists
+        from catalogue.models import TrackCredit
+        from enrichment.identity import artist_for
+        guest = Artist.objects.create(name="Sigala")
+        # the collaboration's profile gave it Becky Hill's MBID, so MusicBrainz's credit for her landed on it
+        together = Artist.objects.create(name="Becky Hill, Sigala", mbid="becky-mbid")
+        duet = Track.objects.create(name="Wish You Well", artist=together)
+        TrackCredit.objects.create(track=duet, artist=together, role=TrackCredit.ARTIST)
+        TrackCredit.objects.create(track=duet, artist=guest, role=TrackCredit.ARTIST)
+        group = Artist.objects.create(name="Earth, Wind & Fire", mbid="ewf")
+        boogie = Track.objects.create(name="Boogie Wonderland", artist=group)
+        TrackCredit.objects.create(track=boogie, artist=group, role=TrackCredit.ARTIST)
+        self.assertIn("1 credits moved", credit_artists())
+        self.assertEqual(set(duet.credits.values_list("artist__name", flat=True)), {"Becky Hill", "Sigala"})
+        self.assertEqual(list(boogie.credits.values_list("artist__name", flat=True)), ["Earth, Wind & Fire"])  # a group's own name
+        # and from now on MusicBrainz's Becky Hill is her own row, which takes the MBID the collaboration held
+        self.assertEqual(artist_for({"id": "becky-mbid", "name": "Becky Hill"}), self.artist)
+        self.assertEqual(Artist.objects.get(pk=self.artist.pk).mbid, "becky-mbid")

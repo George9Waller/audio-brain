@@ -139,12 +139,22 @@ def add_credit(track, mb_artist, role):
 
 
 def artist_for(mb_artist):
-    """The catalogue artist for a MusicBrainz artist, or None if the name is taken by a different artist."""
-    artist = Artist.objects.filter(mbid=mb_artist["id"]).first() or Artist.objects.filter(name__iexact=mb_artist["name"]).first()
+    """The catalogue artist for a MusicBrainz artist, or None if the name is taken by a different artist. A
+    collaboration's name ("CamelPhat, Elderbrook") can hold its first artist's MBID (from its profile), so the row with
+    the artist's own name comes first, then any other that isn't a joined name; one held only by joined names doesn't
+    keep the artist from its own row."""
+    from catalogue.credits import joined
+
+    holders = list(Artist.objects.filter(mbid=mb_artist["id"]))
+    own = next((a for a in holders if a.name.lower() == mb_artist["name"].lower()), None) or next((a for a in holders if not joined(a.name)), None)
+    if own:
+        return own
+    artist = Artist.objects.filter(name__iexact=mb_artist["name"]).first()
     if artist is None:
         return Artist.objects.create(name=mb_artist["name"], mbid=mb_artist["id"])
-    if not artist.mbid:
-        claim_artist_mbid(artist, mb_artist["id"])
+    if not artist.mbid and all(joined(a.name) for a in holders):
+        artist.mbid = mb_artist["id"]
+        artist.save(update_fields=["mbid"])
     return artist if artist.mbid == mb_artist["id"] else None
 
 

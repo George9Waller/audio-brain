@@ -21,7 +21,7 @@ from ninja import Router, Schema
 
 from api.lists import decorate, picks_for
 from api.music import all_hues, nearest_contexts
-from catalogue.credits import credited
+from catalogue.credits import credited, uncredited
 from catalogue.models import Album, Artist, AudioFeatures, Track, TrackCredit
 from history.models import Listen
 from library.models import Favourite
@@ -332,7 +332,7 @@ def library_artists():
     collaboration's name, once it has been split."""
     lib = library_tracks()
     return Artist.objects.filter(
-        Q(pk__in=TrackCredit.objects.filter(role=TrackCredit.ARTIST, track__in=lib).values("artist")) | Q(pk__in=lib.filter(credits__isnull=True).values("artist"))
+        Q(pk__in=TrackCredit.objects.filter(role=TrackCredit.ARTIST, track__in=lib).values("artist")) | Q(pk__in=lib.filter(uncredited()).values("artist"))
     )
 
 
@@ -352,7 +352,7 @@ def years_of(artist_ids):
     out = {}
     credited_plays = (Listen.objects.filter(track__credits__artist__in=artist_ids, track__credits__role=TrackCredit.ARTIST).annotate(year=ExtractYear("played_at"))
                       .values("track__credits__artist", "year").annotate(n=Count("pk")).values_list("track__credits__artist", "year", "n"))
-    by_name = (Listen.objects.filter(track__artist__in=artist_ids, track__credits__isnull=True).annotate(year=ExtractYear("played_at"))
+    by_name = (Listen.objects.filter(uncredited("track"), track__artist__in=artist_ids).annotate(year=ExtractYear("played_at"))
                .values("track__artist", "year").annotate(n=Count("pk")).values_list("track__artist", "year", "n"))
     for artist, year, n in [*credited_plays, *by_name]:
         out.setdefault(artist, {})[str(year)] = out.get(artist, {}).get(str(year), 0) + n
