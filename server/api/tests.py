@@ -549,3 +549,25 @@ class LibraryTests(TestCase):
         self.assertEqual([a["name"] for a in self.get("/library/artists?language=fra")], ["Becky Hill"])
         # two played tracks are below the summary's threshold of ten
         self.assertEqual(self.get("/library/summary")["languages"], [])
+
+    def test_collaborations_count_for_each_artist(self):
+        from datetime import timedelta
+        from catalogue.credits import credit_artists
+        from catalogue.models import Album
+        from history.models import Listen
+        guest = Artist.objects.create(name="Sigala")
+        together = Artist.objects.create(name="Becky Hill, Sigala")
+        whole = Artist.objects.create(name="Tyler, The Creator")  # "The Creator" isn't an artist: stays whole
+        duet = Track.objects.create(name="Wish You Well", artist=together, album=Album.objects.create(name="Wish You Well", artist=together))
+        Track.objects.create(name="EARFQUAKE", artist=whole)
+        Listen.objects.create(track=duet, played_at=self.now - timedelta(days=3), source="lastfm")
+        credit_artists()
+        self.assertEqual(set(duet.credits.values_list("artist__name", flat=True)), {"Becky Hill", "Sigala"})
+        self.assertEqual(list(Track.objects.get(name="EARFQUAKE").credits.values_list("artist__name", flat=True)), ["Tyler, The Creator"])
+        page = self.get(f"/library/artists/{self.artist.pk}")
+        self.assertEqual(page["artist"]["listens"], 5)  # her own four, and the duet
+        self.assertIn("Wish You Well", [t["title"] for t in page["tracks"]])
+        names = [a["name"] for a in self.get("/library/artists?sort=plays")]
+        self.assertIn("Sigala", names)
+        self.assertNotIn("Becky Hill, Sigala", names)
+        self.assertEqual(credit_artists().split()[0], "0")  # idempotent
