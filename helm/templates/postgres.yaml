@@ -29,6 +29,8 @@ spec:
         app: {{ .Values.appName }}-postgres
     spec:
       {{- include "audio-brain.placement" (dict "root" . "node" .Values.postgresql.node) | nindent 6 }}
+      imagePullSecrets:
+        {{- toYaml .Values.imagePullSecrets | nindent 8 }}
       containers:
         - name: postgres
           image: {{ .Values.postgresql.image }}
@@ -53,6 +55,7 @@ spec:
             exec:
               command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
             periodSeconds: 10
+            timeoutSeconds: 5
           resources:
             {{- toYaml .Values.postgresql.resources | nindent 12 }}
           volumeMounts:

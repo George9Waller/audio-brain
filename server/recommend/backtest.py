@@ -35,12 +35,15 @@ for missing IDs (an unlooked-up track counts as playable). Not removed from the 
 Tidal and Last.fm similarity, tags, artist profiles, and the session-intent model's calibration.
 """
 
+import hashlib
 import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
+import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
@@ -59,7 +62,7 @@ from recommend.retrieve import SIGNAL_WEIGHTS as WEIGHTS  # the live weights, wh
 logger = logging.getLogger(__name__)
 
 CLONE_SUFFIX = "_backtest"
-CLONE_NAME = re.compile(r"_backtest(_\d{8})?$")  # the one shared clone of old, or one per cutoff
+CLONE_NAME = re.compile(r"_backtest(?:_\d{8}|_snapshot_[a-z0-9]+)?(?:_v_[a-z0-9_]+)?$")
 OUT = Path(settings.BASE_DIR) / "models" / "backtests"
 RECENT = timedelta(days=42)  # "recently played" before the cutoff, for the harder baseline
 HORIZON = 42  # days after each cutoff that are scored, the same for every cutoff
@@ -70,6 +73,7 @@ HORIZON = 42  # days after each cutoff that are scored, the same for every cutof
 VARIANTS = {
     "default": [],
     "no-scorer": [("recommend.scorer.model_is_useful", lambda: False)],
+    "scorer-on": [("recommend.scorer.model_is_useful", lambda: True)],
     "no-session": [("recommend.retrieve.SIGNAL_WEIGHTS", {**WEIGHTS, "session": 0.0, "together": 0.0})],
     "no-canon": [("recommend.retrieve.CANON_BONUS", 0.0)],
     "taste": [("recommend.retrieve.SIGNAL_WEIGHTS", {**WEIGHTS, "taste": 1.0})],
@@ -106,38 +110,53 @@ def run(days=42, variants=("default",), reuse=False, keep=False, suggestions=Fal
     folder = OUT / as_of.date().isoformat()
     folder.mkdir(parents=True, exist_ok=True)
     clone = clone_name(as_of)
+    saved = json.loads((folder / "prepared.json").read_text()) if is_prepared(clone, folder, reuse) else None
+    snapshot_id = saved["snapshot id"] if saved else uuid.uuid4().hex
+    snapshot_at = saved.get("snapshot captured at") if saved else datetime.now(UTC).isoformat(timespec="seconds")
     try:
-        ensure_prepared(clone, as_of, folder, reuse)
-        return build_and_score(clone, as_of, folder, variants, suggestions, label, horizon)
+        ensure_prepared(clone, as_of, folder, reuse, snapshot_id=snapshot_id, snapshot_at=snapshot_at)
+        return build_and_score(clone, as_of, folder, variants, suggestions, label, horizon, snapshot_id=snapshot_id, snapshot_at=snapshot_at)
     finally:
         if not (keep or reuse):
             drop_database(clone)
             (folder / "prepared.json").unlink(missing_ok=True)
 
 
-def run_many(cutoffs=(42, 84, 126, 168), variants=("default",), reuse=False, keep=False, suggestions=False, label="", horizon=HORIZON, jobs=1):
+def run_many(cutoffs=(42, 84, 126, 168), variants=("default",), reuse=False, keep=False, suggestions=False, label="", horizon=HORIZON, jobs=1, baseline="default"):
     """`run` at several cutoffs (days ago), each scored on the same horizon, then summarised across them: each
-    variant's mean and spread, and each variant against the default. `jobs` cutoffs are prepared and built at once.
+    variant's mean and spread, and each variant against `baseline`. `jobs` cutoffs are prepared and built at once.
     Returns the summary, which is also saved under models/backtests/multi/."""
-    variants = list(dict.fromkeys(["default", *variants]))
+    variants = list(dict.fromkeys(["default", baseline, *variants]))
+    if baseline not in variants:
+        raise ValueError(f"Baseline {baseline!r} must be included in variants")
     dates = [cutoff(days) for days in cutoffs]
     folders = [OUT / d.date().isoformat() for d in dates]
     clones = [clone_name(d) for d in dates]
     for folder in folders:
         folder.mkdir(parents=True, exist_ok=True)
-    # Clones are made one at a time: copying from the live database as a template needs it to themselves.
+    markers = [json.loads((folder / "prepared.json").read_text()) if is_prepared(clone, folder, reuse) else None
+               for clone, folder in zip(clones, folders)]
+    snapshot_ids = {m.get("snapshot id") for m in markers if m}
+    reusable = reuse and all(markers) and len(snapshot_ids) == 1
+    snapshot_id = next(iter(snapshot_ids)) if reusable else uuid.uuid4().hex
+    snapshot_at = markers[0].get("snapshot captured at") if reusable else datetime.now(UTC).isoformat(timespec="seconds")
     fresh = []
-    for clone, folder in zip(clones, folders):
-        if not is_prepared(clone, folder, reuse):
-            (folder / "prepared.json").unlink(missing_ok=True)
-            make_clone(clone)
-            fresh.append((clone, folder))
+    if not reusable:
+        snapshot_clone = source_snapshot_name(snapshot_id)
+        try:
+            make_clone(snapshot_clone)
+            for clone, folder in zip(clones, folders):
+                (folder / "prepared.json").unlink(missing_ok=True)
+                make_clone(clone, template=snapshot_clone)
+                fresh.append((clone, folder))
+        finally:
+            drop_database(snapshot_clone)
 
     def one(i):
         clone, as_of, folder = clones[i], dates[i], folders[i]
         if (clone, folder) in fresh:
-            ensure_prepared(clone, as_of, folder, reuse=False, cloned=True)
-        return build_and_score(clone, as_of, folder, variants, suggestions, label, horizon)
+            ensure_prepared(clone, as_of, folder, reuse=False, cloned=True, snapshot_id=snapshot_id, snapshot_at=snapshot_at)
+        return build_and_score(clone, as_of, folder, variants, suggestions, label, horizon, snapshot_id=snapshot_id, snapshot_at=snapshot_at)
 
     try:
         with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
@@ -147,8 +166,8 @@ def run_many(cutoffs=(42, 84, 126, 168), variants=("default",), reuse=False, kee
             for clone, folder in zip(clones, folders):
                 drop_database(clone)
                 (folder / "prepared.json").unlink(missing_ok=True)
-    result = summarise(reports, variants, folders, dates, horizon)
-    result.update(label=label, commit=commit(), cutoffs=list(cutoffs))
+    result = summarise(reports, variants, folders, dates, horizon, baseline=baseline)
+    result.update(label=label, baseline=baseline, cutoffs=list(cutoffs), **run_metadata(dates, horizon=horizon, snapshot_id=snapshot_id, snapshot_at=snapshot_at))
     out = OUT / "multi"
     out.mkdir(parents=True, exist_ok=True)
     name = f"{datetime.now(UTC):%Y-%m-%d}-{'-'.join(map(str, cutoffs))}-{'+'.join(variants)}.json"
@@ -161,15 +180,26 @@ def clone_name(as_of):
     return f"{settings.DATABASES['default']['NAME']}{CLONE_SUFFIX}_{as_of:%Y%m%d}"
 
 
+def source_snapshot_name(snapshot_id):
+    base = settings.DATABASES["default"]["NAME"][:32]
+    return f"{base}{CLONE_SUFFIX}_snapshot_{snapshot_id[:8]}"
+
+
+def variant_clone_name(clone, variant):
+    digest = hashlib.sha256(variant.encode()).hexdigest()[:10]
+    return f"{clone[:49]}_v_{digest}"
+
+
 def is_prepared(clone, folder, reuse):
     """Whether `folder`'s marker says `clone` was prepared for it, and the clone is still there."""
     marker = folder / "prepared.json"
     if not (reuse and marker.exists() and database_exists(clone)):
         return False
-    return json.loads(marker.read_text()).get("clone") == clone
+    saved = json.loads(marker.read_text())
+    return saved.get("clone") == clone and saved.get("code identity") == code_identity()
 
 
-def ensure_prepared(clone, as_of, folder, reuse, cloned=False):
+def ensure_prepared(clone, as_of, folder, reuse, cloned=False, snapshot_id=None, snapshot_at=None):
     marker = folder / "prepared.json"
     if not cloned and is_prepared(clone, folder, reuse):
         return
@@ -177,18 +207,29 @@ def ensure_prepared(clone, as_of, folder, reuse, cloned=False):
     if not cloned:
         make_clone(clone)
     step("prepare", clone, as_of, folder)
-    marker.write_text(json.dumps({"as_of": as_of.isoformat(), "clone": clone, "prepared_at": datetime.now(UTC).isoformat(timespec="seconds")}))
+    marker.write_text(json.dumps({"as_of": as_of.isoformat(), "clone": clone, "snapshot id": snapshot_id,
+                                  "snapshot captured at": snapshot_at,
+                                  "code identity": code_identity(), "prepared_at": datetime.now(UTC).isoformat(timespec="seconds")}))
 
 
-def build_and_score(clone, as_of, folder, variants, suggestions, label, horizon):
+def build_and_score(clone, as_of, folder, variants, suggestions, label, horizon, snapshot_id=None, snapshot_at=None):
     end = min(as_of + timedelta(days=horizon), datetime.now(UTC))
     reports = {}
     for variant in variants:
-        step("build", clone, as_of, folder, variant=variant, suggestions=suggestions)
-        report = score(json.loads((folder / f"lists-{variant}.json").read_text()), as_of, end=end)
-        report.update(variant=variant, label=label, commit=commit())
-        (folder / f"report-{variant}.json").write_text(json.dumps(report, indent=1))
-        reports[variant] = report
+        variant_clone = variant_clone_name(clone, variant)
+        model_path = folder / "models" / variant / "scorer.joblib"
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        if (folder / "scorer.joblib").exists():
+            shutil.copy2(folder / "scorer.joblib", model_path)
+        try:
+            make_clone(variant_clone, template=clone)
+            step("build", variant_clone, as_of, folder, variant=variant, suggestions=suggestions, model_path=model_path)
+            report = score(json.loads((folder / f"lists-{variant}.json").read_text()), as_of, end=end)
+            report.update(variant=variant, label=label, **run_metadata([as_of], horizon=horizon, snapshot_id=snapshot_id, snapshot_at=snapshot_at))
+            (folder / f"report-{variant}.json").write_text(json.dumps(report, indent=1))
+            reports[variant] = report
+        finally:
+            drop_database(variant_clone)
     return reports
 
 
@@ -215,9 +256,9 @@ def drop_database(name):
     subprocess.run(["dropdb", "--if-exists", "--force", name], env=pg_env(), check=True)
 
 
-def make_clone(name):
+def make_clone(name, template=None):
     """A fresh copy of the live database: by template when nothing else is connected (seconds), else dump and restore."""
-    source = settings.DATABASES["default"]["NAME"]
+    source = template or settings.DATABASES["default"]["NAME"]
     drop_database(name)
     env = pg_env()
     if subprocess.run(["createdb", "-T", source, name], env=env, capture_output=True).returncode == 0:
@@ -231,11 +272,13 @@ def make_clone(name):
         raise RuntimeError(f"Couldn't clone the database: {restore.stderr[-2000:]}")
 
 
-def step(name, clone, as_of, folder, variant="default", suggestions=False):
+def step(name, clone, as_of, folder, variant="default", suggestions=False, model_path=None):
     """Run one step in a child process connected to the clone, so this process never touches it."""
     command = [sys.executable, str(Path(settings.BASE_DIR) / "manage.py"), "backtest_step", name, "--as-of", as_of.isoformat(), "--folder", str(folder), "--variant", variant]
     if suggestions:
         command.append("--suggestions")
+    if model_path:
+        command.extend(["--model-path", str(model_path)])
     subprocess.run(command, env={**os.environ, "POSTGRES_DB": clone}, check=True)
 
 
@@ -331,7 +374,7 @@ def offline_playable(picks, length):
     return [p for p in picks if p.track.pk in tidal or p.track.pk not in tried][:length]
 
 
-def build(as_of, folder, variant="default", suggestions=False):
+def build(as_of, folder, variant="default", suggestions=False, model_path=None):
     """Build every list in the prepared clone, with the clock at the cutoff, and write them out with the catalogue
     sets the scoring needs."""
     import time_machine
@@ -343,7 +386,8 @@ def build(as_of, folder, variant="default", suggestions=False):
     from recommend.models import Mix
 
     assert_clone()
-    scorer.MODEL_PATH = folder / "scorer.joblib"
+    scorer.MODEL_PATH = Path(model_path) if model_path else folder / "models" / variant / "scorer.joblib"
+    scorer.MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     scorer.load_model.cache_clear()
     # A clone prepared by older code: bring its models up to date first, as of the cutoff.
     from recommend.models import TasteVector
@@ -484,8 +528,8 @@ def headline(report, name):
     return value
 
 
-def summarise(reports, variants, folders, dates, horizon, resamples=RESAMPLES, seed=0):
-    """Each variant's mean and spread across cutoffs, and each against the default (see `compare`)."""
+def summarise(reports, variants, folders, dates, horizon, resamples=RESAMPLES, seed=0, baseline="default"):
+    """Each variant's mean and spread across cutoffs, and each against the baseline (see `compare`)."""
     from history.models import Listen
 
     cutoffs = [r["default"]["as of"] for r in reports]
@@ -511,7 +555,7 @@ def summarise(reports, variants, folders, dates, horizon, resamples=RESAMPLES, s
             plays[track_id] += 1
         first = dict(Listen.objects.filter(track__in=list(days)).values("track").annotate(first=Min("played_at")).values_list("track", "first"))
         tables.append(track_table(lists, days, plays, first, as_of, report["default"]["chance rates %"]))
-    summary["against default"] = {v: compare(tables, v, rng, resamples) for v in variants if v != "default"}
+    summary[f"against {baseline}"] = {v: compare(tables, v, rng, resamples, baseline=baseline) for v in variants if v != baseline}
     return summary
 
 
@@ -559,8 +603,8 @@ def metrics(table, variant, weights):
         }
 
 
-def compare(tables, variant, rng, resamples=RESAMPLES):
-    """A paired bootstrap of `variant` minus the default over tracks, at each cutoff and averaged across them.
+def compare(tables, variant, rng, resamples=RESAMPLES, baseline="default"):
+    """A paired bootstrap of `variant` minus `baseline` over tracks, at each cutoff and averaged across them.
 
     Each resample draws every track a Poisson(1) number of times (the usual stand-in for drawing tracks with
     replacement) and scores both variants on that same draw, so tracks the two share move together. Cutoffs are
@@ -569,7 +613,7 @@ def compare(tables, variant, rng, resamples=RESAMPLES):
     for table in tables:
         n = len(table["played"])
         weights = np.vstack([np.ones(n), rng.poisson(1.0, size=(resamples, n))])  # row 0: the data as it is
-        ours, theirs = metrics(table, variant, weights), metrics(table, "default", weights)
+        ours, theirs = metrics(table, variant, weights), metrics(table, baseline, weights)
         for name in COMPARED:
             diffs[name].append(ours[name] - theirs[name])
     result = {}
@@ -600,6 +644,50 @@ def ratio(hits, expected):
 
 def commit():
     try:
-        return subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=settings.BASE_DIR, capture_output=True, text=True).stdout.strip()
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=settings.BASE_DIR, capture_output=True, text=True).stdout.strip()
     except OSError:
         return ""
+
+
+def repository_root():
+    try:
+        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=settings.BASE_DIR, capture_output=True, text=True, check=True)
+        return Path(result.stdout.strip())
+    except (OSError, subprocess.CalledProcessError):
+        return Path(settings.BASE_DIR)
+
+
+def code_identity():
+    root = repository_root()
+    diff = subprocess.run(["git", "diff", "--binary", "HEAD", "--", "server"], cwd=root, capture_output=True).stdout
+    status = subprocess.run(["git", "status", "--porcelain", "--", "server"], cwd=root, capture_output=True, text=True).stdout
+    untracked = subprocess.run(["git", "ls-files", "--others", "--exclude-standard", "--", "server"], cwd=root, capture_output=True, text=True).stdout
+    digest = hashlib.sha256(diff)
+    for name in sorted(untracked.splitlines()):
+        path = root / name
+        digest.update(name.encode())
+        if path.is_file():
+            digest.update(path.read_bytes())
+    return {"commit": commit(), "server working tree dirty": bool(status.strip()),
+            "server diff sha256": digest.hexdigest()}
+
+
+def run_metadata(cutoffs, horizon=HORIZON, snapshot_id=None, snapshot_at=None):
+    """Capture the code and source-database identity alongside reports for later reproduction."""
+    db = settings.DATABASES["default"]["NAME"]
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT oid, pg_database_size(oid) FROM pg_database WHERE datname = %s", [db])
+        row = cursor.fetchone()
+    code = code_identity()
+    return {
+        "code commit": code["commit"],
+        "server working tree dirty": code["server working tree dirty"],
+        "server diff sha256": code["server diff sha256"],
+        "source database": db,
+        "source database oid": row[0] if row else None,
+        "source database bytes": row[1] if row else None,
+        "snapshot id": snapshot_id,
+        "snapshot captured at": snapshot_at,
+        "cutoff dates": [c.isoformat() if isinstance(c, datetime) else str(c) for c in cutoffs],
+        "scored horizon days": horizon,
+    }

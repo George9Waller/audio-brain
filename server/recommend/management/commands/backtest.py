@@ -19,11 +19,12 @@ class Command(BaseCommand):
         parser.add_argument("--cutoffs", help="Several cutoffs, in days ago (e.g. 42,84,126,168): one clone each, summarised across them")
         parser.add_argument("--horizon", type=int, default=backtest.HORIZON, help="Days after each cutoff to score (default six weeks)")
         parser.add_argument("--jobs", type=int, default=1, help="With --cutoffs, how many cutoffs to prepare and build at once")
+        parser.add_argument("--baseline", default="default", choices=list(backtest.VARIANTS), help="Variant every result is compared against")
 
-    def handle(self, *args, days, variant, reuse, keep, suggestions, lists, label, cutoffs, horizon, jobs, **options):
+    def handle(self, *args, days, variant, reuse, keep, suggestions, lists, label, cutoffs, horizon, jobs, baseline, **options):
         if cutoffs:
             days_ago = [int(d) for d in cutoffs.split(",") if d.strip()]
-            summary = backtest.run_many(days_ago, variants=variant or ["default"], reuse=reuse, keep=keep, suggestions=suggestions, label=label, horizon=horizon, jobs=jobs)
+            summary = backtest.run_many(days_ago, variants=variant or [baseline], reuse=reuse, keep=keep, suggestions=suggestions, label=label, horizon=horizon, jobs=jobs, baseline=baseline)
             self.show_summary(summary)
             return
         reports = backtest.run(days, variants=variant or ["default"], reuse=reuse, keep=keep, suggestions=suggestions, label=label, horizon=horizon)
@@ -43,8 +44,9 @@ class Command(BaseCommand):
                 cells = "".join(f"{'' if v is None else v:>12}" for v in row["by cutoff"])
                 spread = f"{row['min']}–{row['max']}" if row["min"] is not None else ""
                 self.stdout.write(f"  {variant:{width}}{cells}{'' if row['mean'] is None else row['mean']:>10}{'' if row['sd'] is None else row['sd']:>8}{spread:>16}")
-        for variant, result in summary["against default"].items():
-            self.stdout.write(self.style.MIGRATE_HEADING(f"\n{variant} against default (paired bootstrap over tracks, mean across cutoffs)"))
+        baseline = summary["baseline"]
+        for variant, result in summary[f"against {baseline}"].items():
+            self.stdout.write(self.style.MIGRATE_HEADING(f"\n{variant} against {baseline} (paired bootstrap over tracks, mean across cutoffs)"))
             self.stdout.write(f"  {'':26}{'difference':>12}{'95% interval':>20}{'cutoffs agree':>15}   verdict")
             for name, r in result.items():
                 if r["difference"] is None:

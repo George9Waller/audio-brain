@@ -118,6 +118,30 @@ worker:
         limits:
           memory: 2Gi
 
+# Enable only for a deliberate one-off backtest. The Job uses the same app image, database credentials and models PVC
+# as the API and main worker, and runs on the large node with lower scheduling priority.
+backtest:
+  enabled: false
+  runId: ""  # required when enabled; use a new short id for each Job
+  imageTag: ""  # optional branch image tag; empty uses env.IMAGE_TAG
+  days: 42  # single-cutoff baseline; set cutoffs to run a multi-cutoff comparison
+  cutoffs: ""
+  variants:
+    - default
+  baseline: default
+  reuse: false
+  keep: true
+  label: cluster-baseline
+  threads: 4
+  activeDeadlineSeconds: 14400
+  ttlSecondsAfterFinished: 604800
+  resources:
+    requests:
+      cpu: "1"
+      memory: 1Gi
+    limits:
+      memory: 10Gi
+
 postgresql:
   image: pgvector/pgvector:pg18
   database: audio_brain

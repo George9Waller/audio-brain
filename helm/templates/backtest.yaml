@@ -1,0 +1,70 @@
+{{- if .Values.backtest.enabled }}
+{{- $runId := required "backtest.runId is required when backtest.enabled is true" .Values.backtest.runId | lower | replace "_" "-" | trunc 30 | trimSuffix "-" }}
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ .Values.appName }}-backtest-low
+value: -10
+globalDefault: false
+preemptionPolicy: Never
+description: "Low priority for an explicitly started audio-brain backtest."
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.appName }}-backtest-{{ $runId }}
+  labels:
+    {{- include "audio-brain.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backtest
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.backtest.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ .Values.backtest.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.appName }}-backtest-{{ $runId }}
+        app.kubernetes.io/component: backtest
+    spec:
+      {{- include "audio-brain.podSpec" (dict "root" . "node" "large" "data" true) | nindent 6 }}
+      restartPolicy: Never
+      priorityClassName: {{ .Values.appName }}-backtest-low
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: backtest
+          image: {{ .Values.image.repository }}:{{ default .Values.env.IMAGE_TAG .Values.backtest.imageTag }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "manage.py", "backtest"]
+          args:
+            {{- if .Values.backtest.cutoffs }}
+            - --cutoffs
+            - {{ .Values.backtest.cutoffs | quote }}
+            - --baseline
+            - {{ .Values.backtest.baseline | quote }}
+            {{- else }}
+            - --days
+            - {{ .Values.backtest.days | quote }}
+            {{- end }}
+            {{- range .Values.backtest.variants }}
+            - --variant
+            - {{ . | quote }}
+            {{- end }}
+            - --label
+            - {{ .Values.backtest.label | quote }}
+            {{- if .Values.backtest.reuse }}
+            - --reuse
+            {{- end }}
+            {{- if .Values.backtest.keep }}
+            - --keep
+            {{- end }}
+          {{- include "audio-brain.env" . | nindent 10 }}
+          env:
+            {{- include "audio-brain.threads" .Values.backtest.threads | nindent 12 }}
+          resources:
+            {{- toYaml .Values.backtest.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /app/server/models
+{{- end }}

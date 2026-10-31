@@ -228,6 +228,9 @@ class MultiCutoffBacktestTests(TestCase):
         name = backtest.clone_name(AS_OF)
         self.assertTrue(name.endswith("_backtest_20260901"))
         self.assertTrue(backtest.CLONE_NAME.search(name))
+        variant = backtest.variant_clone_name(name, "artist-cap-3")
+        self.assertTrue(backtest.CLONE_NAME.search(variant))
+        self.assertNotEqual(variant, backtest.variant_clone_name(name, "artist-cap-5"))
         self.assertTrue(backtest.CLONE_NAME.search("audio_brain_backtest"))
         for live in ("audio_brain", "audio_brain_backtest_x", "audio_brain_backtest_2026"):
             with self.assertRaises(AssertionError):
@@ -253,6 +256,15 @@ class MultiCutoffBacktestTests(TestCase):
         result = backtest.compare([self.table(), self.table()], "v", np.random.default_rng(0), resamples=200)
         self.assertEqual(result["played %"]["difference"], 0.0)
         self.assertEqual(result["played %"]["verdict"], "noise")
+
+    def test_can_compare_with_a_named_incumbent(self):
+        table = self.table(better=40)
+        table["variants"]["incumbent"] = table["variants"]["default"]
+        table["variants"]["candidate"] = table["variants"]["v"]
+        result = backtest.compare([table], "candidate", np.random.default_rng(0), resamples=200,
+                                  baseline="incumbent")
+        self.assertEqual(result["played %"]["difference"], 20.0)
+        self.assertEqual(result["played %"]["verdict"], "better")
 
     def test_a_clear_gain_is_real_and_a_tiny_one_is_noise(self):
         rng = np.random.default_rng(0)

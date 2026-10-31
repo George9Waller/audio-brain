@@ -1,9 +1,9 @@
 name: Deploy to argocd
 
-# Builds the server image and the Claude MCP server image (each only when its code changed), pushes them to ECR and
-# points helm/values.yaml at them; Argo CD syncs from there. Both go in the ECR repository audio-brain, the MCP one
-# tagged mcp-<sha>. Needs: that repository and this repo in GHActionsECRRole's trust policy. The tag commit is pushed
-# with the built-in GITHUB_TOKEN; its pushes start no workflows, and Argo CD reads the change from git.
+# Builds the server, PostgreSQL and Claude MCP images when their code changes, pushes them to ECR and points
+# helm/values.yaml at them; Argo CD syncs from there. All go in the ECR repository audio-brain, with postgres- and
+# mcp- prefixes for those images. Needs that repository and this repo in GHActionsECRRole's trust policy. The tag
+# commit is pushed with the built-in GITHUB_TOKEN; its pushes start no workflows, and Argo CD reads the change from git.
 
 on:
   push:
@@ -12,6 +12,7 @@ on:
     paths:
       - server/**
       - claude_mcp/**
+      - postgres/**
       - deploy/gunicorn.conf.py
       - .dockerignore
       - .github/workflows/deploy.yaml
@@ -29,6 +30,7 @@ jobs:
     outputs:
       server: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.server == 'true' }}
       mcp: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.mcp == 'true' }}
+      postgres: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.postgres == 'true' }}
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -45,6 +47,9 @@ jobs:
             - .github/workflows/deploy.yaml
           mcp:
             - claude_mcp/**
+            - .github/workflows/deploy.yaml
+          postgres:
+            - postgres/**
             - .github/workflows/deploy.yaml
 
   build:
@@ -129,10 +134,47 @@ jobs:
         cache-from: type=gha,scope=mcp
         cache-to: type=gha,mode=max,scope=mcp
 
+  build-postgres:
+    needs: changes
+    if: needs.changes.outputs.postgres == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-region: eu-west-2
+        role-to-assume: arn:aws:iam::810574566145:role/GHActionsECRRole
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+
+    - name: Build, tag and push PostgreSQL image to ECR
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: postgres/Dockerfile
+        platforms: linux/amd64
+        push: true
+        provenance: false
+        tags: ${{ steps.login-ecr.outputs.registry }}/audio-brain:postgres-${{ github.sha }}
+        cache-from: type=gha,scope=postgres
+        cache-to: type=gha,mode=max,scope=postgres
+
   update-image-tag:
-    needs: [changes, build, build-mcp]
+    needs: [changes, build, build-mcp, build-postgres]
     # after whichever builds ran, as long as none failed
-    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && (needs.build.result == 'success' || needs.build-mcp.result == 'success') }}
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && (needs.build.result == 'success' || needs.build-mcp.result == 'success' || needs.build-postgres.result == 'success') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -154,6 +196,9 @@ jobs:
         fi
         if [ "${{ needs.build-mcp.result }}" = success ]; then
           sed -i "s|^  MCP_IMAGE_TAG:.*|  MCP_IMAGE_TAG: '${{ github.sha }}'|" helm/values.yaml
+        fi
+        if [ "${{ needs.build-postgres.result }}" = success ]; then
+          sed -i "/^postgresql:/,/^[^ ]/s|^  image: .*|  image: 810574566145.dkr.ecr.eu-west-2.amazonaws.com/audio-brain:postgres-${{ github.sha }}|" helm/values.yaml
         fi
         git add helm/values.yaml
         git commit -m "Update image tag to ${{ github.sha }}"
