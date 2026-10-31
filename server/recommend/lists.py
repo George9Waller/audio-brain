@@ -117,7 +117,7 @@ def build_lists(mixes=12, push=None):
         picks = sources[f"context:{context.pk}"].result()
         track_mix(f"context:{context.pk}", "era" if context in dormant else "mix", context.name, mix_description(context, picks[:LIST_LENGTH]), picks, context)
     track_mix("fresh", "fresh", "Fresh", "New releases from artists, remixers and labels you play, best fit first", sources["fresh"].result(), exclusive=False)
-    track_mix("rediscovery", "rediscovery", "Rediscovery", "Tracks you were really into once and haven't played for six months or more", sources["rediscovery"].result(), exclusive=False)
+    track_mix("rediscovery", "rediscovery", "Back from your past", "Tracks you were really into once and haven't played for six months or more", sources["rediscovery"].result(), exclusive=False)
     track_mix("new", "new", "New to you", "Tracks you've never played that fit the contexts you're into now, a few from each", sources["new"].result(), exclusive=False)
     track_mix("edges", "edges", "Edges", "Tracks just outside your current taste contexts: nearby in sound and listening, but not yet part of a cluster", sources["edges"].result(), exclusive=False)
     track_mix("repeat", "repeat", "On repeat", "What you've come back to most in the last six weeks", sources["repeat"].result(), exclusive=False)
@@ -562,9 +562,11 @@ def release_items(count=100, source=None):
             rows[artists]["folded"].append(r)
         elif len(rows) < count:
             rows[artists] = {"best": r, "folded": []}
+    hues = release_hues([row["best"] for row in rows.values()])
     items = []
     for row in rows.values():
         item = release_item(row["best"])
+        item["hues"] = hues.get(row["best"].pk, [])
         folded = sorted(row["folded"], key=lambda r: r.release_date, reverse=True)
         item["others"] = [release_item(r, short=True) for r in folded[:FOLDED]]
         item["others_count"] = len(folded)
@@ -572,11 +574,32 @@ def release_items(count=100, source=None):
     return items
 
 
+SWATCH = 16  # the most tracks a release's colour icon shows
+
+
+def release_hues(releases):
+    """{release id: a hue per analysed track}, each the colour of the context that track sounds closest to, for
+    the release's icon: new music shown in the colours of what it's like."""
+    from api.music import all_hues, nearest_contexts
+    pairs = list(Release.tracks.through.objects.filter(release__in=releases).order_by("pk").values_list("release_id", "track_id"))
+    near = nearest_contexts({t for _, t in pairs})
+    colours = all_hues()
+    out = {}
+    for release, track in pairs:
+        h = colours.get(near.get(track))
+        if h is not None and len(out.setdefault(release, [])) < SWATCH:
+            out[release].append(h)
+    return out
+
+
 def release_item(r, short=False):
     why = {"artist": "artist you play", "remixer": "remixer you like", "label": f"on {r.label}"}.get(r.source, "")
-    item = {"kind": "release", "release_id": r.pk, "title": r.title, "detail": f"{r.kind.title()} · {r.release_date:%d %b %Y}" + ("" if short else f" · {why}"),
-            "state": r.state, "url": f"https://tidal.com/browse/album/{r.tidal_id}"}
-    if not short:
-        item.update({"artist": ", ".join(a.name for a in r.artists.all()), "reason": r.reason or "Not analysed yet", "score": round(r.score, 3) if r.score is not None else None,
+    kind = "EP" if r.kind == "EP" else r.kind.title()
+    # Tidal dates some releases 2500 when it hasn't a real date
+    when = f"{r.release_date:%d %b %Y}" if r.release_date.year <= timezone.now().year + 1 else "date not known"
+    item = {"kind": "release", "release_id": r.pk, "title": r.title, "detail": f"{kind} · {when}",
+            "released": r.release_date.isoformat(), "state": r.state, "url": f"https://tidal.com/browse/album/{r.tidal_id}"}
+    if not short:  # why it's in the queue apart, so a section that already says why can leave it out
+        item.update({"why": why, "artist": ", ".join(a.name for a in r.artists.all()), "reason": r.reason or "Not analysed yet", "score": round(r.score, 3) if r.score is not None else None,
                      "source": r.source, "label": r.label.name if r.label else ""})
     return item

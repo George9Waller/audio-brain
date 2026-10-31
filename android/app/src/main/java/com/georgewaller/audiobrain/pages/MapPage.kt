@@ -229,7 +229,10 @@ fun MapPage(vm: AppViewModel, graph: DataGraph, onMenu: (ListItem, String) -> Un
     // the now-playing chip covers the bottom of the page only while something plays
     val session by vm.nowPlaying.collectAsStateWithLifecycle()
     val chipRoom = if (session?.hasTrack == true) 76.dp else Ab.space.s
-    val pulse by rememberInfiniteTransition(label = "map-playing").animateFloat(0f, 1f, infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart), label = "map-playing")
+    // the ring round what's playing pulses; only while it's on the map, as each beat redraws the whole map (and this
+    // page stays composed next to Discover)
+    val pulsing = nowPlaying?.id?.let { prepared?.index?.get(it) } != null
+    val pulse = if (pulsing) rememberInfiniteTransition(label = "map-playing").animateFloat(0f, 1f, infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Restart), label = "map-playing").value else 0f
 
     // search: names, then fit the view to the matches
     LaunchedEffect(query) {

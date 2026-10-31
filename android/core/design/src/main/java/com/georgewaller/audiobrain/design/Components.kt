@@ -109,7 +109,8 @@ fun Modifier.pressScale(source: MutableInteractionSource? = null): Modifier {
     return this.scale(scale)
 }
 
-enum class ButtonKind { Primary, Quiet, Ghost }
+/** [Keep]: tinted in the keep colour, for the yes of a decision; [Text]: just the label, for the quieter no. */
+enum class ButtonKind { Primary, Quiet, Ghost, Keep, Text }
 
 @Composable
 fun AbButton(
@@ -126,6 +127,8 @@ fun AbButton(
         ButtonKind.Primary -> colors.accent to colors.onAccent
         ButtonKind.Quiet -> colors.raised to colors.text
         ButtonKind.Ghost -> Color.Transparent to colors.text
+        ButtonKind.Keep -> colors.keep.copy(alpha = 0.14f) to colors.keep
+        ButtonKind.Text -> Color.Transparent to colors.textMuted
     }
     AbSurface(
         modifier
@@ -133,10 +136,14 @@ fun AbButton(
             .alphaIf(!enabled)
             .clickable(source, PressIndication, enabled = enabled, role = Role.Button, onClick = onClick),
         color = background, shape = Ab.shapes.pill, contentColor = content,
-        border = if (kind == ButtonKind.Ghost) colors.line else null,
+        border = when (kind) {
+            ButtonKind.Ghost -> colors.line
+            ButtonKind.Keep -> colors.keep.copy(alpha = 0.35f)
+            else -> null
+        },
     ) {
         Row(
-            Modifier.heightIn(min = 44.dp).padding(horizontal = Ab.space.l),
+            Modifier.heightIn(min = 44.dp).padding(horizontal = if (kind == ButtonKind.Text) Ab.space.s else Ab.space.l),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Ab.space.s, Alignment.CenterHorizontally),
         ) {

@@ -576,6 +576,23 @@ class ReleaseQueueTests(TestCase):
         self.assertEqual(([o["title"] for o in items[0]["others"]], items[0]["others_count"]), (["ASOT 1297", "ASOT 1295", "ASOT 1293"], 3))
         self.assertEqual(items[1]["others"], [])
 
+    def test_a_release_is_coloured_by_what_its_tracks_sound_closest_to(self):
+        from api.music import all_hues
+        from catalogue.models import AudioFeatures
+        from recommend.lists import release_items
+        rock, house = ([1.0] + [0.0] * 1279), ([0.0, 1.0] + [0.0] * 1278)
+        contexts = [Context.objects.create(name=n, centroid=c) for n, c in [("Rock", rock), ("House", house), ("Jazz", [0.0, 0.0, 1.0] + [0.0] * 1277)]]
+        artist = Artist.objects.create(name="Essel")
+        release = self.release(artist, "All In My Head", 22, score=0.7)
+        for name, embedding in [("A", [0.9, 0.1] + [0.0] * 1278), ("B", [0.1, 0.9] + [0.0] * 1278), ("Unanalysed", None)]:
+            track = Track.objects.create(name=name, artist=artist)
+            release.tracks.add(track)
+            if embedding:
+                AudioFeatures.objects.create(track=track, preview_source="tidal", model="m", bpm=120, bpm_confidence=3, key="C", scale="major", key_strength=0.5,
+                                             loudness=-8, danceability=1, instrumental=0.2, happy=0.4, sad=0.1, aggressive=0.1, relaxed=0.1, party=0.5, embedding=embedding)
+        hues = all_hues()
+        self.assertEqual(release_items()[0]["hues"], [hues[contexts[0].pk], hues[contexts[1].pk]])
+
     def test_the_summary_counts_the_whole_queue(self):
         artist = Artist.objects.create(name="Someone")
         for i, (source, state) in enumerate([("artist", "new"), ("artist", "new"), ("remixer", "new"), ("label", "saved"), ("artist", "dismissed")]):
