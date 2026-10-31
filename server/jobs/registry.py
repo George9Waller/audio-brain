@@ -100,6 +100,7 @@ SCORE_RELEASES = [("Score releases", "discovery.score.score_releases")]
 SCORE_SETS = [("Score sets", "discovery.score.score_sets")]
 MODELS = [
     ("Recommendation outcomes", "recommend.outcomes.update_outcomes"),
+    ("Artist credits", "catalogue.credits.credit_artists"),
     ("Listening sessions", "history.sessions.build_sessions"),
     ("History rollup", "history.rollup.build_rollup"),
     ("Session track vectors", "recommend.session_vectors.build_track_vectors"),

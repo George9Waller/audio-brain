@@ -21,7 +21,8 @@ from ninja import Router, Schema
 
 from api.lists import decorate, picks_for
 from api.music import all_hues, nearest_contexts
-from catalogue.models import Album, Artist, AudioFeatures, Track
+from catalogue.credits import credited, uncredited
+from catalogue.models import Album, Artist, AudioFeatures, Track, TrackCredit
 from history.models import Listen
 from library.models import Favourite
 from recommend.lists import track_items
@@ -155,6 +156,11 @@ LANGUAGES = {
 NOT_LANGUAGES = {"mul", "zxx", "und", "mis"}  # several, none (instrumental), unknown
 
 
+def in_language(language):
+    """Tracks by an artist who mostly releases in `language`: any credited artist, so a collaboration counts too."""
+    return Track.objects.filter(Q(artist__language=language) | Q(credits__artist__language=language, credits__role=TrackCredit.ARTIST)).values("pk")
+
+
 def recency_of(tracks):
     """`tracks` (a queryset) by when each was last played: lately, earlier this year, before, never."""
     lately, year = windows()
@@ -180,7 +186,7 @@ def tracks(request, q: str = "", sort: Sort = "plays", offset: int = 0, when: Wh
     else:
         qs = library_tracks()
     if language:
-        qs = qs.filter(artist__language=language)
+        qs = qs.filter(pk__in=in_language(language))
     if q.strip():
         qs = qs.filter(words(q, "name", "artist__name", "album__name"))
     if when in ("lately", "year", "older"):
@@ -198,7 +204,7 @@ def tracks(request, q: str = "", sort: Sort = "plays", offset: int = 0, when: Wh
         qs = qs.order_by("-intent_plays", "name")
     total = qs.count()
     page = list(qs.select_related("artist", "album")[offset:offset + PAGE])
-    counts = recency_of(Track.objects.filter(artist__language=language)) if language and not offset else None
+    counts = recency_of(Track.objects.filter(pk__in=in_language(language))) if language and not offset else None
     return {"total": total, "offset": offset, "items": track_rows(page, peaks=when in ("", "older")), "recency": counts}
 
 
@@ -237,7 +243,7 @@ def summary(request):
     contexts = Context.objects.filter(active=True)
     return {
         "tracks": total, "recency": {"lately": in_lately, "year": in_year, "older": played - in_lately - in_year, "never": total - played},
-        "artists": Artist.objects.filter(pk__in=lib.values("artist")).count(),
+        "artists": library_artists().count(),
         "albums": Album.objects.filter(pk__in=lib.values("album")).count(),
         "sets": set_counts(), "contexts": contexts.count(), "families": contexts.exclude(family="").values("family").distinct().count(),
         "languages": languages(), "recent": recent_shelf(lately),
@@ -307,7 +313,7 @@ ArtistSort = Literal["plays", "recent", "az", "year"]
 def artists(request, q: str = "", sort: ArtistSort = "plays", offset: int = 0, language: str = ""):
     """Artists in your library, by plays this year (`year`), in all, or by name, each with their plays per year;
     `language` keeps those who mostly release in it."""
-    qs = Artist.objects.filter(pk__in=library_tracks().values("artist"))
+    qs = library_artists()
     if language:
         qs = qs.filter(language=language)
     if q.strip():
@@ -315,28 +321,41 @@ def artists(request, q: str = "", sort: ArtistSort = "plays", offset: int = 0, l
     if sort == "az":
         qs = qs.order_by("name")
     elif sort == "year":
-        qs = qs.annotate(k=Count("tracks__listens", filter=Q(tracks__listens__played_at__gte=year_start()))).order_by("-k", "name")
+        qs = qs.annotate(k=Count("credits__track__listens", filter=Q(credits__role=TrackCredit.ARTIST, credits__track__listens__played_at__gte=year_start()))).order_by("-k", "name")
     else:
-        qs = qs.annotate(k=Count("tracks__listens")).order_by("-k", "name")
+        qs = qs.annotate(k=Count("credits__track__listens", filter=Q(credits__role=TrackCredit.ARTIST))).order_by("-k", "name")
     return artist_rows(list(qs[offset:offset + PAGE]))
+
+
+def library_artists():
+    """Artists credited on a track in your library (catalogue.credits): a collaboration's artists each, not the
+    collaboration's name, once it has been split."""
+    lib = library_tracks()
+    return Artist.objects.filter(
+        Q(pk__in=TrackCredit.objects.filter(role=TrackCredit.ARTIST, track__in=lib).values("artist")) | Q(pk__in=lib.filter(uncredited()).values("artist"))
+    )
 
 
 def artist_rows(page):
     ids = [a.pk for a in page]
     years = years_of(ids)
-    tracks = dict(library_tracks().filter(artist__in=ids).values("artist").annotate(n=Count("pk")).values_list("artist", "n"))
-    plays = dict(Track.objects.filter(artist__in=ids).values("artist").annotate(p=Sum("intent_plays")).values_list("artist", "p"))
+    mine = TrackCredit.objects.filter(role=TrackCredit.ARTIST, artist__in=ids)
+    tracks = dict(mine.filter(track__in=library_tracks()).values("artist").annotate(n=Count("track", distinct=True)).values_list("artist", "n"))
+    plays = dict(mine.values("artist").annotate(p=Sum("track__intent_plays")).values_list("artist", "p"))
     now = str(timezone.localtime().year)
     return [{"id": a.pk, "name": a.name, "tracks": tracks.get(a.pk, 0), "plays": round(plays.get(a.pk) or 0, 1), "years": years.get(a.pk, {}),
              "listens": sum(years.get(a.pk, {}).values()), "this_year": years.get(a.pk, {}).get(now, 0)} for a in page]
 
 
 def years_of(artist_ids):
-    """{artist id: {"2018": plays, ...}} in one grouped query."""
+    """{artist id: {"2018": plays, ...}}: plays of every track credited to them, and of their uncredited ones by name."""
     out = {}
-    for artist, year, n in (Listen.objects.filter(track__artist__in=artist_ids).annotate(year=ExtractYear("played_at"))
-                            .values("track__artist", "year").annotate(n=Count("pk")).values_list("track__artist", "year", "n")):
-        out.setdefault(artist, {})[str(year)] = n
+    credited_plays = (Listen.objects.filter(track__credits__artist__in=artist_ids, track__credits__role=TrackCredit.ARTIST).annotate(year=ExtractYear("played_at"))
+                      .values("track__credits__artist", "year").annotate(n=Count("pk")).values_list("track__credits__artist", "year", "n"))
+    by_name = (Listen.objects.filter(uncredited("track"), track__artist__in=artist_ids).annotate(year=ExtractYear("played_at"))
+               .values("track__artist", "year").annotate(n=Count("pk")).values_list("track__artist", "year", "n"))
+    for artist, year, n in [*credited_plays, *by_name]:
+        out.setdefault(artist, {})[str(year)] = out.get(artist, {}).get(str(year), 0) + n
     return out
 
 
@@ -366,14 +385,14 @@ def artist_page(request, artist_id: int):
 
     artist = get_object_or_404(Artist, pk=artist_id)
     lately, _ = windows()
-    every = Track.objects.filter(artist=artist).select_related("artist", "album")
+    every = Track.objects.filter(credited([artist.pk])).select_related("artist", "album")
     stats = stats_of(every.values("pk"), lately)
     played = sorted((t for t in every if t.pk in stats), key=lambda t: (-stats[t.pk][0], t.name))[:60]
     unplayed = list(every.exclude(pk__in=stats).order_by(F("near_context__distance").asc(nulls_last=True))[:10])
-    counts = list(ContextTrack.objects.filter(track__artist=artist, context__active=True).values("context", "context__name").annotate(n=Count("pk")).order_by("-n"))
+    counts = list(ContextTrack.objects.filter(track__in=every.values("pk"), context__active=True).values("context", "context__name").annotate(n=Count("pk")).order_by("-n"))
     colours = all_hues()
     lib = library_tracks()
-    albums = Album.objects.filter(artist=artist, pk__in=lib.values("album")).select_related("artist")
+    albums = Album.objects.filter(pk__in=lib.filter(pk__in=every.values("pk")).values("album")).select_related("artist")
     return {
         "artist": artist_rows([artist])[0],
         "tidal_url": f"https://tidal.com/browse/artist/{artist.tidal_id}" if artist.tidal_id else None,
@@ -750,7 +769,8 @@ def search(request, q: str = ""):
     stats = stats_of([t.pk for t in top], lately)
     top.sort(key=lambda t: (-stats.get(t.pk, (0, 0, None))[1], -stats.get(t.pk, (0, 0, None))[0]))
 
-    artist_qs = Artist.objects.filter(words(q, "name")).annotate(k=Count("tracks__listens")).order_by("-k", "name")
+    artist_found = library_artists().filter(words(q, "name"))
+    artist_qs = artist_found.annotate(k=Count("credits__track__listens", filter=Q(credits__role=TrackCredit.ARTIST))).order_by("-k", "name")
     artist_page = list(artist_qs[:SHOWN + 1])
     album_qs = album_order(Album.objects.filter(words(q, "name", "artist__name")).select_related("artist"), "all")
     lists = Mix.objects.exclude(section=Mix.DRAFTS).filter(Q(title__icontains=q) | Q(subtitle__icontains=q)).order_by("section", "position")
@@ -760,21 +780,25 @@ def search(request, q: str = ""):
     waiting = Release.objects.filter(state=Release.NEW).filter(Q(title__icontains=q) | Q(artists__name__icontains=q)).distinct()
 
     best = None
-    lead = artist_page[0] if artist_page and artist_page[0].k else None
+    # an artist you've played: by credits, or by name for tracks not yet credited (catalogue.credits runs nightly)
+    lead = artist_page[0] if artist_page else None
+    years = years_of([lead.pk]).get(lead.pk, {}) if lead else {}
+    if not sum(years.values()):
+        lead = None
     if lead:
-        years = years_of([lead.pk]).get(lead.pk, {})
         start = year_start()
-        by_month = dict(Listen.objects.filter(track__artist=lead, played_at__gte=start).annotate(m=TruncMonth("played_at")).values("m").annotate(n=Count("pk")).values_list("m", "n"))
+        theirs = Track.objects.filter(credited([lead.pk])).values("pk")
+        by_month = dict(Listen.objects.filter(track__in=theirs, played_at__gte=start).annotate(m=TruncMonth("played_at")).values("m").annotate(n=Count("pk")).values_list("m", "n"))
         now = timezone.localtime()
         by_month = {timezone.localtime(m).month if isinstance(m, datetime) else m.month: n for m, n in by_month.items()}
-        best = {"kind": "artist", "id": lead.pk, "name": lead.name, "tracks": lead.tracks.count(), "listens": sum(years.values()),
-                "recent": Listen.objects.filter(track__artist=lead, played_at__gte=lately).count(), "years": years,
+        best = {"kind": "artist", "id": lead.pk, "name": lead.name, "tracks": Track.objects.filter(pk__in=theirs).count(), "listens": sum(years.values()),
+                "recent": Listen.objects.filter(track__in=theirs, played_at__gte=lately).count(), "years": years,
                 "months": [by_month.get(m, 0) for m in range(1, now.month + 1)]}
     set_page = list(set_qs[:SHOWN])
     return {
         "q": q, "best": best,
         "tracks": {"total": found.count(), "items": track_rows(top[:SHOWN])},
-        "artists": {"total": artist_qs.count(), "items": artist_rows([a for a in artist_page if not lead or a.pk != lead.pk][:SHOWN])},
+        "artists": {"total": artist_found.count(), "items": artist_rows([a for a in artist_page if not lead or a.pk != lead.pk][:SHOWN])},
         "albums": {"total": album_qs.count(), "items": album_rows(list(album_qs[:SHOWN]))},
         "lists": {"total": lists.count(), "items": list(lists.values("key", "title", "subtitle", "kind")[:SHOWN])},
         "sets": {"total": set_qs.count(), "items": [{**row, "hits": s.hits} for row, s in zip(set_rows(set_page), set_page)]},

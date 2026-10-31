@@ -139,12 +139,22 @@ def add_credit(track, mb_artist, role):
 
 
 def artist_for(mb_artist):
-    """The catalogue artist for a MusicBrainz artist, or None if the name is taken by a different artist."""
-    artist = Artist.objects.filter(mbid=mb_artist["id"]).first() or Artist.objects.filter(name__iexact=mb_artist["name"]).first()
+    """The catalogue artist for a MusicBrainz artist, or None if the name is taken by a different artist. A
+    collaboration's name ("CamelPhat, Elderbrook") can hold its first artist's MBID (from its profile), so the row with
+    the artist's own name comes first, then any other that isn't a joined name; one held only by joined names doesn't
+    keep the artist from its own row."""
+    from catalogue.credits import joined
+
+    holders = list(Artist.objects.filter(mbid=mb_artist["id"]))
+    own = next((a for a in holders if a.name.lower() == mb_artist["name"].lower()), None) or next((a for a in holders if not joined(a.name)), None)
+    if own:
+        return own
+    artist = Artist.objects.filter(name__iexact=mb_artist["name"]).first()
     if artist is None:
         return Artist.objects.create(name=mb_artist["name"], mbid=mb_artist["id"])
-    if not artist.mbid:
-        claim_artist_mbid(artist, mb_artist["id"])
+    if not artist.mbid and all(joined(a.name) for a in holders):
+        artist.mbid = mb_artist["id"]
+        artist.save(update_fields=["mbid"])
     return artist if artist.mbid == mb_artist["id"] else None
 
 
@@ -160,7 +170,9 @@ def merge_tracks(track, into):
     Waits while the models job is running (catalogue.deletions)."""
     from catalogue.models import AudioFeatures, PlatformTrack, SimilarTrack, TrackCredit, TrackTag
     from discovery.models import Release
-    from library.models import Favourite
+    from library.models import Favourite, SourcePlaylist
+    from recommend.models import (Comparison, ContextMembershipOverride, ContextTrack, DiscoveryCandidate, Feedback, ListEdit,
+                                  Mix, Recommendation)
 
     with transaction.atomic():
         allow_track_deletion()
@@ -169,6 +181,22 @@ def merge_tracks(track, into):
         track.aliases.update(track=into)
         SetTrack.objects.filter(track=track).update(track=into)
         Favourite.objects.filter(track=track).update(track=into)
+        # what you've said and done about it: verdicts, list edits, comparisons, and what was suggested
+        Feedback.objects.filter(track=track).update(track=into)
+        ListEdit.objects.filter(track=track).update(track=into)
+        Recommendation.objects.filter(track=track).update(track=into)
+        Comparison.objects.filter(left=track).update(left=into)
+        Comparison.objects.filter(right=track).update(right=into)
+        DiscoveryCandidate.objects.filter(track=track).update(track=into)
+        for playlist in SourcePlaylist.objects.filter(tracks=track):
+            playlist.tracks.add(into)
+        for model in (ContextTrack, ContextMembershipOverride):  # one each: `into` keeps its own
+            if not model.objects.filter(track=into).exists():
+                model.objects.filter(track=track).update(track=into)
+        # lists kept as they are (yours, and ones kept in Tidal) name it by id
+        for mix in Mix.objects.filter(items__contains=[{"track_id": track.pk}]):
+            mix.items = [{**i, "track_id": into.pk} if i.get("track_id") == track.pk else i for i in mix.items]
+            mix.save(update_fields=["items"])
         for release in Release.objects.filter(tracks=track):
             release.tracks.add(into)
         TrackTag.objects.filter(track=track).exclude(tag__in=into.track_tags.values("tag")).update(track=into)

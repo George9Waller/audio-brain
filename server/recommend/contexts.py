@@ -290,13 +290,41 @@ def recent_activity(track_ids):
 
 
 def name_families(groups, families, styles):
-    """A short name per family from its most common styles, e.g. "House / Tech House"."""
-    names = {}
-    for family in set(families.values()):
-        counts = Counter(style for label, members in groups.items() if families[label] == family for a in members for style in styles.get(a.track_id, [])[:2])
-        top = [style for style, _ in counts.most_common(2)]
-        names[family] = " / ".join(top) or "Mixed"
+    """A short name per family: the style that most sets it apart from the rest of your music ("Deep House", "Trance"),
+    not the most common one, which is often the same broad style for several families ("House / Tech House", "House /
+    Trance"...). A second style is added only where two families would otherwise share a name."""
+    counts = {}
+    for label, members in groups.items():
+        family = counts.setdefault(families[label], Counter())
+        for a in members:
+            family.update(styles.get(a.track_id, [])[:2])
+    overall = Counter()
+    for family in counts.values():
+        overall.update(family)
+    total = sum(overall.values()) or 1
+    ranked = {f: distinctive(c, overall, total) for f, c in counts.items()}
+    # each family takes its most telling style that no other has taken, the most distinct families choosing first
+    names, taken = {}, set()
+    for f in sorted(ranked, key=lambda f: -ranked[f][0][0] if ranked[f] else 0):
+        free = [s for _, s in ranked[f] if s not in taken]
+        names[f] = style_name(free[:1] or [s for _, s in ranked[f][:2]])
+        taken.update(free[:1])
     return names
+
+
+def distinctive(counts, overall, total, least=0.04):
+    """[(score, style)] in order of how much each sets this family apart: share here times how much likelier than across all
+    (a lift weighted by share), among styles at least `least` of this family's, so a rare stray can't win."""
+    here = sum(counts.values()) or 1
+    scored = [(n / here * math.log((n / here) / (overall[s] / total)), s) for s, n in counts.items() if n / here >= least]
+    return sorted(scored, reverse=True) or [(0.0, s) for s, _ in counts.most_common()]
+
+
+def style_name(styles):
+    """"deep house" -> "Deep House", two as "Deep House & Garage"; "Mixed" for none."""
+    def title(style):
+        return " ".join(w if w[:1].isupper() else w[:1].upper() + w[1:] for w in style.split())
+    return " & ".join(title(s) for s in styles) or "Mixed"
 
 
 def closest_context(existing, centroid, taken):
