@@ -269,10 +269,29 @@ class TracklistApiTests(NoLLM):
         self.assertEqual(self.send("post", "/api/v1/sets/tracklist", {"text": "just some words"}).status_code, 422)
         self.assertEqual(self.send("post", "/api/v1/sets/tracklist", {"text": "A - B", "set_id": 999}).status_code, 404)
 
+    def test_blocked_links_come_back_through_the_app(self):
+        url = "https://www.1001tracklists.com/tracklist/109hzdzk/calvin-harris-head-trip.html"
+        wait = "<html><head><title>Please wait, you will be forwarded to the requested page</title></head><body></body></html>"
+        with mock.patch("sets.provided.fetch", return_value=wait) as fetch:
+            self.assertEqual(self.send("post", "/api/v1/sets/tracklist", {"url": url}).status_code, 428)
+            response = self.send("post", "/api/v1/sets/tracklist", {"url": url, "html": fixture("1001tracklists_page.html")})
+            self.assertEqual((response.status_code, response.json()["via"], len(response.json()["lines"])), (200, "1001tracklists", 41))
+            self.assertEqual(fetch.call_count, 1)  # the app's page was read, not fetched again
+            self.assertEqual(self.send("post", "/api/v1/sets/tracklist", {"url": url, "html": wait}).status_code, 422)
+            response = self.send("post", "/api/v1/sets/tracklist", {"url": url, "text": "1. Prospa - Prayer"})
+            self.assertEqual((response.status_code, response.json()["via"]), (200, "text"))
+
     def test_links_are_read_by_site(self):
         with mock.patch("sets.provided.fetch", return_value=fixture("1001tracklists_page.html")):
             found = provided.read_url("https://www.1001tracklists.com/tracklist/109hzdzk/calvin-harris-head-trip.html")
         self.assertEqual((found.via, len(found.entries), found.dj), ("1001tracklists", 41, "Calvin Harris"))
+        full = "https://www.1001tracklists.com/tracklist/109hzdzk/calvin-harris-head-trip.html"
+        with mock.patch("sets.provided.unshorten", return_value=full), mock.patch("sets.provided.fetch", return_value=fixture("1001tracklists_page.html")):
+            found = provided.read_url("https://1001.tl/109hzdzk")
+        self.assertEqual((found.via, len(found.entries), found.url), ("1001tracklists", 41, full))
+        wait = "<html><head><title>Please wait, you will be forwarded to the requested page</title></head><body></body></html>"
+        with mock.patch("sets.provided.fetch", return_value=wait), self.assertRaises(provided.Blocked):
+            provided.read_url(full)
         with mock.patch("clients.mixesdb.MixesDBClient.wikitext", return_value=fixture("mixesdb_wikitext.txt")) as wikitext:
             found = provided.read_url("https://www.mixesdb.com/w/2021-06-26_-_Prospa_-_Essential_Mix")
         wikitext.assert_called_with("2021-06-26 - Prospa - Essential Mix")

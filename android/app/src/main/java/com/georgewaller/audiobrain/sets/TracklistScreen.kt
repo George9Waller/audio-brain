@@ -59,6 +59,7 @@ fun TracklistScreen(vm: TracklistViewModel, padding: PaddingValues, onOpenList: 
     val result = s.result
     Box(Modifier.fillMaxSize()) {
         if (result == null) Entry(vm, s, padding) else Result(vm, result, padding, onOpenList, onPlay)
+        s.browse?.let { PageBrowser(it, padding, vm::readPage, vm::closeBrowser) }
         AbDrawer(s.fixing != null, vm::closeFix) {
             val line = result?.lines?.firstOrNull { it.position == s.fixing }
             if (line != null) FixPicker(vm, line, s.candidates, s.searching)

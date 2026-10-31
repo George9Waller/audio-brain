@@ -20,6 +20,8 @@ import kotlinx.coroutines.launch
  * Giving the server a set's tracklist: pasted or shared text, or a link (1001Tracklists, MixesDB, YouTube,
  * SoundCloud). The server answers at once from the catalogue and looks the rest up on Tidal in the background, so
  * while lines are pending this polls until they've all been looked up. Lines it got wrong are fixed one at a time.
+ * When a site turns the server away (1001Tracklists' browser check), the link opens in the app's own browser and
+ * the page it shows is sent instead.
  */
 class TracklistViewModel(private val graph: DataGraph) : ViewModel() {
     data class State(
@@ -28,6 +30,7 @@ class TracklistViewModel(private val graph: DataGraph) : ViewModel() {
         val dj: String = "",
         val attachTo: Long? = null,  // an existing set this tracklist is for
         val reading: Boolean = false,
+        val browse: String? = null,  // a link the server couldn't fetch, open in the app's browser
         val result: Tracklist? = null,
         val error: String? = null,
         val fixing: Int? = null,  // the position whose match is being fixed
@@ -62,10 +65,27 @@ class TracklistViewModel(private val graph: DataGraph) : ViewModel() {
                 val request = TracklistRequest(text = if (url == null) input else "", url = url.orEmpty(), title = s.title.trim(), dj = s.dj.trim(), setId = s.attachTo)
                 show(graph.api.addTracklist(request))
             } catch (e: ApiException) {
-                _state.update { it.copy(reading = false, error = e.message ?: "Couldn't read that tracklist") }
+                if (url != null && e is ApiException.Http && e.code == BLOCKED) _state.update { it.copy(reading = false, browse = url) }
+                else _state.update { it.copy(reading = false, error = e.message ?: "Couldn't read that tracklist") }
             }
         }
     }
+
+    /** Read [html], the page the app's browser shows at [url], for the link the server couldn't fetch. */
+    fun readPage(url: String, html: String) {
+        val s = _state.value
+        if (s.reading) return
+        _state.update { it.copy(reading = true, browse = null, error = null) }
+        viewModelScope.launch {
+            try {
+                show(graph.api.addTracklist(TracklistRequest(url = url, html = html, title = s.title.trim(), dj = s.dj.trim(), setId = s.attachTo)))
+            } catch (e: ApiException) {
+                _state.update { it.copy(reading = false, error = e.message ?: "Couldn't read that page") }
+            }
+        }
+    }
+
+    fun closeBrowser() = _state.update { it.copy(browse = null) }
 
     private fun load(setId: Long) {
         _state.update { it.copy(reading = true) }
@@ -136,6 +156,7 @@ class TracklistViewModel(private val graph: DataGraph) : ViewModel() {
     }
 
     companion object {
+        private const val BLOCKED = 428  // the server was turned away from the link: open it here
         private val URL = Regex("""https?://\S+""")
 
         /** A shared or pasted link, when that's all the text is (sharing from a browser adds the page title). */

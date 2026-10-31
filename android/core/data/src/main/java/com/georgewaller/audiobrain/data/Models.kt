@@ -512,6 +512,7 @@ data class LibrarySearch(
 @Serializable
 data class TracklistRequest(
     val text: String = "", val url: String = "", val title: String = "", val dj: String = "",
+    val html: String = "",  // the url's page as the app's browser showed it, when the server was turned away
     @SerialName("set_id") val setId: Long? = null, val wait: Boolean = false,
 )
 

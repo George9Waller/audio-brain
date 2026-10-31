@@ -193,6 +193,9 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# The app sends whole pages when a site turned the server away (api/sets.py); a long tracklist's is about 1-2 MB.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
+
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration

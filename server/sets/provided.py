@@ -58,6 +58,7 @@ ID = "id"  # an unidentified track ("ID - ID")
 MATCHES = [FOUND, ADDED, ORIGINAL, FIXED, NO_TIDAL, PENDING, UNMATCHED, ID]
 PLAYABLE = {FOUND, ADDED, ORIGINAL, FIXED}
 
+SHORT_LINKS = {"1001.tl"}
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
 MAX_LINE = 150
 LLM_CHARS = 20000
@@ -283,11 +284,21 @@ def with_header(found):
     return found
 
 
-def read_url(url, use_llm=None):
-    """A Tracklist from a link: 1001Tracklists, MixesDB, YouTube, SoundCloud, Mixcloud, or any page with one on it."""
+class Blocked(ValueError):
+    """The site wouldn't give the server the page (a browser check, or turned away), though a browser can open it."""
+
+
+def read_url(url, use_llm=None, html=""):
+    """A Tracklist from a link: 1001Tracklists, MixesDB, YouTube, SoundCloud, Mixcloud, or any page with one on it.
+    With [html], the page as the app's browser showed it, read that instead of fetching it."""
     host = urlparse(url).netloc.lower().removeprefix("www.").removeprefix("m.")
+    if host in SHORT_LINKS:  # the share button's short link: read it as the page it points to
+        url = unshorten(url)
+        host = urlparse(url).netloc.lower().removeprefix("www.").removeprefix("m.")
     if host.endswith("1001tracklists.com"):
-        found = read_1001(fetch(url))
+        found = read_1001(html or fetch(url))
+    elif html:
+        found = read_page(html, use_llm)
     elif host.endswith("mixesdb.com"):
         found = read_mixesdb(url)
     elif host in ("youtube.com", "youtu.be", "music.youtube.com"):
@@ -306,8 +317,19 @@ def fetch(url):
     import requests
 
     response = requests.get(url, headers={"User-Agent": USER_AGENT, "Accept-Language": "en"}, timeout=30)
+    if response.status_code in (403, 429, 503):
+        raise Blocked(f"{urlparse(url).netloc} turned the server away ({response.status_code})")
     response.raise_for_status()
     return response.text
+
+
+def unshorten(url):
+    """Where a short link leads."""
+    import requests
+
+    response = requests.head(url, headers={"User-Agent": USER_AGENT}, allow_redirects=True, timeout=30)
+    response.raise_for_status()
+    return response.url
 
 
 def read_1001(html):
@@ -337,6 +359,8 @@ def read_1001(html):
     if not found.entries:  # the page changed, or a captcha: fall back to reading its text
         text = read_page(html)
         text.title, text.dj = found.title or text.title, found.dj
+        if not text.entries:  # usually its "Please wait, you will be forwarded" check, which only a browser passes
+            raise Blocked("1001Tracklists didn't show the server the tracklist")
         return with_header(text)
     return with_header(found)
 
