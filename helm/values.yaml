@@ -31,8 +31,8 @@ paused: false
 
 # CI rewrites these lines on every build (.github/workflows/deploy.yaml); the MCP image is tagged mcp-<sha>
 env:
-  IMAGE_TAG: 'bf566f201db069e1d4a2675603d2b0a331408d54'
-  MCP_IMAGE_TAG: 'be995b4d885fac2e587e711fef8516acf993e034'
+  IMAGE_TAG: '68fdc435d9ce9837b174f21eb11651ab960b4cef'
+  MCP_IMAGE_TAG: '68fdc435d9ce9837b174f21eb11651ab960b4cef'
 
 # Every property of this AWS Secrets Manager secret becomes an environment variable: POSTGRES_PASSWORD, SECRET_KEY,
 # API_TOKEN and the API keys (the list is in deploy/KUBERNETES.md, Phase 0)
@@ -143,7 +143,7 @@ backtest:
       memory: 10Gi
 
 postgresql:
-  image: pgvector/pgvector:pg18
+  image: 810574566145.dkr.ecr.eu-west-2.amazonaws.com/audio-brain:postgres-68fdc435d9ce9837b174f21eb11651ab960b4cef
   database: audio_brain
   username: audio_brain
   node: large
