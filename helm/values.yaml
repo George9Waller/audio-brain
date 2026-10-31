@@ -31,7 +31,7 @@ paused: false
 
 # CI rewrites these lines on every build (.github/workflows/deploy.yaml); the MCP image is tagged mcp-<sha>
 env:
-  IMAGE_TAG: '943d551191ba07a82a7c33d28311e0bbd02e4829'
+  IMAGE_TAG: 'ec884ff4c5697d67725cb8e63faff261a82d2a02'
   MCP_IMAGE_TAG: '68fdc435d9ce9837b174f21eb11651ab960b4cef'
 
 # Every property of this AWS Secrets Manager secret becomes an environment variable: POSTGRES_PASSWORD, SECRET_KEY,
