@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -245,6 +246,9 @@ fun VerdictBar(
     }
 }
 
+/** What a row sits on, so its swipe reveal is covered by the same colour: the page's, unless a card says otherwise. */
+val LocalRowGround = compositionLocalOf<Color?> { null }
+
 /**
  * A track: sigil, title, a second line (artist and why it's here), facts in mono at the end. Swipe right for
  * [onSwipeRight] (Keep), left for [onSwipeLeft] (No); long-press for more. [verdict] shows as a thin edge on the left.
@@ -288,7 +292,7 @@ fun TrackRow(
         Row(
             Modifier
                 .offset { IntOffset(offset.value.roundToInt(), 0) }
-                .background(Ab.colors.ground)
+                .background(LocalRowGround.current ?: Ab.colors.ground)
                 .then(
                     if (onSwipeLeft != null || onSwipeRight != null) Modifier.pointerInput(onSwipeLeft, onSwipeRight) {
                         var crossed = false

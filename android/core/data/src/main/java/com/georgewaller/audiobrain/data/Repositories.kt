@@ -158,7 +158,8 @@ class ListsRepository(context: Context, private val api: ApiClient) {
         _state.update { it.copy(loading = true, error = null) }
         try {
             val raw = api.getRaw("/lists")
-            val parsed = ApiJson.decodeFromString<ListsResponse>(raw)
+            // off the main thread: it's every list at once, and decoding it there held up taps for seconds
+            val parsed = withContext(Dispatchers.Default) { ApiJson.decodeFromString<ListsResponse>(raw) }
             withContext(Dispatchers.IO) { cache.writeText(raw) }
             _state.value = State(parsed.lists, fromCache = false)
         } catch (e: ApiException) {

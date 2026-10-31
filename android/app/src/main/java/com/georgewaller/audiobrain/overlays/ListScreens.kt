@@ -34,6 +34,10 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.georgewaller.audiobrain.AppViewModel
+import com.georgewaller.audiobrain.ThenLine
+import com.georgewaller.audiobrain.ThenAndNowRow
+import com.georgewaller.audiobrain.SetCard
+import com.georgewaller.audiobrain.CloseToRow
 import com.georgewaller.audiobrain.ItemRow
 import com.georgewaller.audiobrain.LinkRow
 import com.georgewaller.audiobrain.ReleaseRow
@@ -112,11 +116,19 @@ fun ListDetail(vm: AppViewModel, key: String, padding: PaddingValues, onMenu: (L
         itemsIndexed(list.items, key = { i, it -> "$i-${it.kind}-${it.trackId ?: it.releaseId ?: it.title}" }) { _, item ->
             val context = LocalContext.current
             when {
-                item.isTrack -> ItemRow(
-                    item, verdicts[item.ref.key], { v -> vm.give(v, item, "list:${list.key}") }, { onMenu(item, "list:${list.key}") },
-                    onSwipeLeft = if (editable) ({ vm.editList(list, remove = item) }) else null, leftLabel = if (editable) "Remove" else "No",
-                )
+                item.isTrack -> Column {
+                    // a track back from your past: the line under it says how much and when, so the row needn't
+                    ItemRow(
+                        if (item.then != null) item.copy(reason = "") else item, verdicts[item.ref.key], { v -> vm.give(v, item, "list:${list.key}") }, { onMenu(item, "list:${list.key}") },
+                        onSwipeLeft = if (editable) ({ vm.editList(list, remove = item) }) else null, leftLabel = if (editable) "Remove" else "No",
+                    )
+                    item.then?.let { ThenLine(it, Modifier.padding(bottom = Ab.space.s)) }
+                }
                 item.kind == "release" -> ReleaseRow(item, decided[item.releaseId], { s -> vm.decide(item, s) }, { openUrl(context, item.url) })
+                // Discover's other sections show the same evidence on their own pages as on Discover
+                item.closeTo.isNotEmpty() -> CloseToRow(item) { openUrl(context, item.url) }
+                item.years.isNotEmpty() -> ThenAndNowRow(item) { openUrl(context, item.url) }
+                item.identified != null -> SetCard(item) { openUrl(context, item.url) }
                 else -> LinkRow(item)
             }
         }

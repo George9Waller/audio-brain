@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -86,7 +87,11 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     private val _queue = MutableStateFlow(QueueSummary())
-    val queue: StateFlow<QueueSummary> = _queue.asStateFlow()
+    // local decisions as they stood when the counts were fetched, so only the ones since come off them
+    private val _queueSeen = MutableStateFlow<Map<Long, String>>(emptyMap())
+    /** The release queue's counts: the server's, less what's been decided here since it gave them. */
+    val queue: StateFlow<QueueSummary> = combine(_queue, _queueSeen, queueStates, lists) { summary, seen, now, l -> queueNow(summary, seen, now, releaseSources(l.lists)) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, QueueSummary())
 
     private val _actions = MutableStateFlow<List<QuickAction>>(emptyList())
     val actions: StateFlow<List<QuickAction>> = _actions.asStateFlow()
@@ -143,7 +148,12 @@ class AppViewModel(private val graph: DataGraph, private val app: Context) : Vie
     }
 
     fun refreshQueue() {
-        viewModelScope.launch { runCatching { graph.api.releaseSummary() }.onSuccess { _queue.value = it } }
+        viewModelScope.launch {
+            runCatching { graph.feedback.queueStates.first() to graph.api.releaseSummary() }.onSuccess { (seen, summary) ->
+                _queueSeen.value = seen
+                _queue.value = summary
+            }
+        }
     }
 
     fun refreshActions() {
