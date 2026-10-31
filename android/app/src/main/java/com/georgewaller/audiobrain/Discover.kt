@@ -84,7 +84,7 @@ fun soundsLike(reason: String): String? = reason.substringAfter(" sounds like ",
 
 fun count(n: Int): String = NumberFormat.getIntegerInstance(Locale.UK).format(n)
 
-private val MONTH = DateTimeFormatter.ofPattern("MMM yyyy", Locale.UK)
+private val MONTH = DateTimeFormatter.ofPattern("MMM yyyy", Locale.ENGLISH)
 
 /**
  * A Discover section: a kicker in its tag's colour (what kind and how many), its name, why things are in it, and its

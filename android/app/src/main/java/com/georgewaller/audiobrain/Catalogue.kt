@@ -86,7 +86,7 @@ class CatalogueNav(
 enum class Recency(val key: String, val label: String, val short: String, val caption: String, val sort: String) {
     Lately("lately", "Played lately", "lately", "Played in the last 45 days", "Most played lately"),
     Year("year", "Earlier this year", "this year", "Played this year, not lately", "Last played"),
-    Older("older", "Not for a year", "older", "Played before, but not this year", "Most played then"),
+    Older("older", "Before this year", "older", "Last played before this year", "Most played then"),
     Never("never", "Never played", "never played", "In the library, never played: each in the colour of what it sounds like", "Closest to your taste"),
 }
 
@@ -179,8 +179,9 @@ fun HueDto.track() = TrackHue(hue, near)
 fun localDate(text: String): LocalDate? = runCatching { OffsetDateTime.parse(text).atZoneSameInstant(ZoneId.systemDefault()).toLocalDate() }.getOrNull()
     ?: runCatching { LocalDate.parse(text.take(10)) }.getOrNull()
 
-private val DAY = DateTimeFormatter.ofPattern("d MMM", Locale.UK)
-private val DAY_YEAR = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.UK)
+// English month names ("Sep", not the UK locale's "Sept"), as the server's lines have them
+private val DAY = DateTimeFormatter.ofPattern("d MMM", Locale.ENGLISH)
+private val DAY_YEAR = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH)
 
 /** "20 Oct" this year, "1 Oct 2025" before. */
 fun dayLabel(date: LocalDate, now: LocalDate = LocalDate.now()): String = date.format(if (date.year == now.year) DAY else DAY_YEAR)
@@ -294,7 +295,9 @@ fun TracklistStrip(strip: List<Int>, modifier: Modifier = Modifier) {
     val yours = Ab.colors.ageNow
     val known = Ab.colors.textFaint
     val unknown = Ab.colors.raised
-    Canvas(modifier.height(8.dp)) {
+    val yoursCount = strip.count { it == 2 }
+    val knownCount = strip.count { it == 1 }
+    Canvas(modifier.height(8.dp).semantics { contentDescription = "Tracklist of ${strip.size}: $yoursCount you've played, $knownCount more in your catalogue" }) {
         val gap = (if (strip.size > 60) 1 else 2).dp.toPx()
         val w = ((size.width - gap * (strip.size - 1)) / strip.size).coerceAtLeast(1f)
         strip.forEachIndexed { i, s -> drawRect(when (s) { 2 -> yours; 1 -> known; else -> unknown }, Offset(i * (w + gap), 0f), Size(w, size.height)) }
@@ -387,7 +390,7 @@ class Paged<T>(private val scope: CoroutineScope, private val pageSize: Int = 50
 }
 
 /** Plays per month this year so far, as "Jan".."Oct" labels. */
-fun monthLabels(count: Int): List<String> = (1..count).map { java.time.Month.of(it).getDisplayName(java.time.format.TextStyle.SHORT, Locale.UK) }
+fun monthLabels(count: Int): List<String> = (1..count).map { java.time.Month.of(it).getDisplayName(java.time.format.TextStyle.SHORT, Locale.ENGLISH) }
 
 /** The month most of [months] (this year, January first) have come since, when most came in the last few: "since August". */
 fun sinceMonth(months: List<Int>): String? {
@@ -395,7 +398,7 @@ fun sinceMonth(months: List<Int>): String? {
     var run = 0
     for (i in months.indices.reversed()) {
         run += months[i]
-        if (run * 2 >= total) return if (i == 0) null else java.time.Month.of(i + 1).getDisplayName(java.time.format.TextStyle.FULL, Locale.UK)
+        if (run * 2 >= total) return if (i == 0) null else java.time.Month.of(i + 1).getDisplayName(java.time.format.TextStyle.FULL, Locale.ENGLISH)
     }
     return null
 }

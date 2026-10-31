@@ -593,7 +593,7 @@ fun TrackScreen(vm: AppViewModel, graph: DataGraph, id: Long, padding: PaddingVa
 /** "Eb maj" -> "E♭ maj", "F# minor" -> "F♯ minor". */
 fun keyName(key: String) = key.replace(Regex("^([A-G])b"), "$1♭").replace("#", "♯")
 
-private val RELEASED = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.UK)
+private val RELEASED = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH)
 
 /** MusicBrainz's partial dates: "2026-05-22" -> "22 May 2026", "2019-03" -> "Mar 2019", "2019" stays. */
 fun released(date: String): String? = when (date.length) {
@@ -613,13 +613,13 @@ private fun Story(story: TrackStory) {
         val first = story.firstPlayed?.let(::localDate)
         val plays = t.plays ?: 0
         if (first == null) { Caption("Not played yet"); return@Column }
-        Caption(listOfNotNull("First played ${if (first.year == LocalDate.now().year) "in ${first.month.getDisplayName(java.time.format.TextStyle.FULL, Locale.UK)}" else dayLabel(first)}", "${count(plays)} plays", t.recent?.takeIf { it > 0 }?.let { "$it in the last 45 days" }).joinToString(" · "))
+        Caption(listOfNotNull("First played ${if (first.year == LocalDate.now().year) "in ${first.month.getDisplayName(java.time.format.TextStyle.FULL, Locale.ENGLISH)}" else dayLabel(first)}", "${count(plays)} plays", t.recent?.takeIf { it > 0 }?.let { "$it in the last 45 days" }).joinToString(" · "))
         if (story.months.isNotEmpty()) {
             val start = YearMonth.from(first).minusMonths(2)
             val months = generateSequence(start) { it.plusMonths(1) }.takeWhile { !it.isAfter(YearMonth.now()) }.toList()
             val values = months.map { story.months[it.toString()] ?: 0 }
-            PlayBars(values, colour, "Plays by month: " + months.zip(values).filter { it.second > 0 }.joinToString { "${it.second} in ${it.first.month.getDisplayName(java.time.format.TextStyle.SHORT, Locale.UK)}" }, height = 70.dp)
-            Row(Modifier.fillMaxWidth()) { months.forEach { AbText(it.month.getDisplayName(java.time.format.TextStyle.SHORT, Locale.UK).uppercase(), Modifier.weight(1f), style = Ab.type.number, color = Ab.colors.textMuted, maxLines = 1) } }
+            PlayBars(values, colour, "Plays by month: " + months.zip(values).filter { it.second > 0 }.joinToString { "${it.second} in ${it.first.month.getDisplayName(java.time.format.TextStyle.SHORT, Locale.ENGLISH)}" }, height = 70.dp)
+            Row(Modifier.fillMaxWidth()) { months.forEach { AbText(it.month.getDisplayName(java.time.format.TextStyle.SHORT, Locale.ENGLISH).uppercase(), Modifier.weight(1f), style = Ab.type.number, color = Ab.colors.textMuted, maxLines = 1) } }
         } else {
             val bars = yearBars(story.years)
             YearBars(bars, "Plays per year: ${bars.filter { it.plays > 0 }.joinToString { "${it.plays} in ${it.year}" }}", height = 64.dp, gap = 4.dp)

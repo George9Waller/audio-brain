@@ -267,9 +267,12 @@ def recent_shelf(since):
     for set_id, track in SetTrack.objects.filter(set__in=sets, track__isnull=False).values_list("set", "track"):
         set_tracks.setdefault(set_id, []).append(track)
     hues = hues_of([t for ts in [*album_tracks.values(), *set_tracks.values()] for t in ts])
+    played = set(Listen.objects.filter(track__in=[t for ts in album_tracks.values() for t in ts]).values_list("track", flat=True).distinct())
     for a in albums:
+        # as on the Albums list: played tracks first and solid, so the icon fills in as more of it is played
+        tracks = sorted(album_tracks.get(a["track__album"], []), key=lambda t: t not in played)
         shelf.append({"kind": "album", "id": a["track__album"], "title": a["track__album__name"], "last": a["last"],
-                      "detail": f"{a['track__album__artist__name']} · {a['n']} plays lately", "hues": [hues[t] for t in album_tracks.get(a["track__album"], []) if t in hues]})
+                      "detail": f"{a['track__album__artist__name']} · {a['n']} plays lately", "hues": [{**hues[t], "near": t not in played} for t in tracks if t in hues]})
     for s in sets:
         shelf.append({"kind": "set", "id": s.pk, "title": s.track.name, "detail": f"Played {day(s.last)}", "last": s.last,
                       "hues": [hues[t] for t in set_tracks.get(s.pk, []) if t in hues]})

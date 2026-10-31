@@ -64,7 +64,7 @@ fun CataloguePage(library: LibraryViewModel, padding: PaddingValues, nav: Catalo
         }
         if (summary.recent.isNotEmpty()) item(key = "recent") {
             Column(Modifier.padding(top = Ab.space.xxl)) {
-                SectionHead("Now · ${summary.recent.size} places", Ab.colors.ageNow, "You've been in lately", "The albums and sets you've played most in the last 45 days, and your busiest context")
+                SectionHead("Now · last 45 days", Ab.colors.ageNow, "You've been in lately", "The albums and sets you've played most in the last 45 days, and your busiest context")
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(Ab.space.m)) {
                     items(summary.recent, key = { "${it.kind}-${it.id}" }) { shelf -> ShelfCard(shelf) { open(shelf, nav) } }
                 }
@@ -76,7 +76,7 @@ fun CataloguePage(library: LibraryViewModel, padding: PaddingValues, nav: Catalo
                 Column(verticalArrangement = Arrangement.spacedBy(Ab.space.s)) {
                     summary.languages.chunked(2).forEach { pair ->
                         Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
-                            pair.forEach { l -> Tile(l.name, "${count(l.played)} played · ${count(l.tracks)} in all", Modifier.weight(1f)) { nav.language(l.code) } }
+                            pair.forEach { l -> Tile(l.name, "${count(l.played)} of ${count(l.tracks)} played", Modifier.weight(1f)) { nav.language(l.code) } }
                             if (pair.size == 1) Spacer(Modifier.weight(1f))
                         }
                     }
