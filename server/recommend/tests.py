@@ -639,3 +639,22 @@ class ReleaseQueueTests(TestCase):
         with override_settings(API_TOKEN="secret"):
             got = self.client.get("/api/v1/releases/summary", headers={"Authorization": "Bearer secret"}).json()
         self.assertEqual(got, {"waiting": {"artist": 2, "remixer": 1}, "decided": 2, "decided_this_week": 2})
+
+
+class FamilyNameTests(TestCase):
+    def test_families_are_named_by_what_sets_them_apart(self):
+        from types import SimpleNamespace
+
+        from recommend.contexts import name_families
+        # three families that are all mostly "House": each is named by its own telling style, not "House / ..."
+        styles, groups, families, n = {}, {}, {}, 0
+        for label, (family, own) in enumerate([("a", "deep house"), ("b", "Trance"), ("c", "Tropical House"), ("d", "Ambient")]):
+            members = []
+            for i in range(10):
+                n += 1
+                styles[n] = (["House", own] if family != "d" else [own]) if i < 8 else ["House"]
+                members.append(SimpleNamespace(track_id=n))
+            groups[label], families[label] = members, family
+        names = name_families(groups, families, styles)
+        self.assertEqual(names, {"a": "Deep House", "b": "Trance", "c": "Tropical House", "d": "Ambient"})
+        self.assertEqual(len(set(names.values())), 4)
