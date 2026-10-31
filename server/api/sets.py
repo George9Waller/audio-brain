@@ -1,6 +1,9 @@
 """Tracklists you provide (sets.provided): paste text or give a link, and get back the set with how each line matched,
 then fix the lines it got wrong.
 
+A site that turns the server away (1001Tracklists' browser check) answers 428, and the app opens the link in its own
+browser and sends the page back as `html`.
+
 Adding answers at once from the catalogue; lines it doesn't know are PENDING until the "tracklist" job has asked
 Tidal (queued here), so the app polls `GET /sets/{id}/tracklist` while any are. `wait` does the lookups in the request
 instead, which can take a minute for a long set.
@@ -28,6 +31,7 @@ router = Router(tags=["sets"])
 class TracklistIn(Schema):
     text: str = ""  # pasted text, or a file's contents
     url: str = ""  # 1001Tracklists, MixesDB, YouTube, SoundCloud, Mixcloud, or any page with a tracklist
+    html: str = ""  # the url's page as the app's browser showed it, when the server couldn't fetch it itself
     title: str = ""
     dj: str = ""
     date: dt.date | None = None
@@ -98,9 +102,17 @@ def add(request, body: TracklistIn):
     if body.set_id and not Set.objects.filter(pk=body.set_id).exists():
         raise HttpError(404, "There's no set with that id")
     try:
-        found = provided.read_url(body.url.strip(), use_llm=body.llm) if body.url.strip() else provided.read_text(body.text, use_llm=body.llm)
+        found = provided.read_url(body.url.strip(), use_llm=body.llm, html=body.html) if body.url.strip() else provided.read_text(body.text, use_llm=body.llm)
+    except provided.Blocked as error:
+        if body.html:  # even the app's browser didn't get it
+            raise HttpError(422, f"{error}. Copy the tracklist from the page and paste it instead")
+        if not body.text.strip():
+            raise HttpError(428, str(error))  # the app opens the page in its own browser and sends it back as html
+        found = provided.Tracklist()
     except Exception as error:
-        raise HttpError(502, f"Couldn't read that link: {str(error)[:200]}")
+        if not body.text.strip():
+            raise HttpError(502, f"Couldn't read that link: {str(error)[:200]}")
+        found = provided.Tracklist()  # the link failed, but there's text too: read that below
     if body.url.strip() and body.text.strip() and not found.entries:  # a link with nothing on it, but text too
         found = provided.read_text(body.text, use_llm=body.llm)
         found.url = body.url.strip()
