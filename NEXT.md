@@ -17,6 +17,8 @@ points** (95% CI 2.56–3.93), came-back rate by **1.55 points** (1.13–1.98), 
 
 **Catalogue rework (31 Oct):** built from the approved canvas; see `android/CATALOGUE.md`, "Built". Needs `migrate recommend` (0024, `NearContext`); the Models job fills it after the map each night (about 25 s), so until then unplayed tracks are coloured the old, slower way and the map's Unplayed view has no colours. Follow-up: duplicate tracks in the catalogue (e.g. "So Good (feat. Kuuda)" twice, same sound, one in a context) split play counts on the track and album pages.
 
+**Catalogue follow-ups (31 Oct):** families are named by the style that sets each apart ("Deep House", "Trance"); the Models job credits collaborations to each of their artists (`catalogue.credits`), which the library counts by; and `manage.py merge_duplicates` lists the catalogue's duplicate tracks (`--apply` merges them, `--versions` also merges tracks that share an ISRC but not a title). `merge_tracks` now keeps verdicts, list edits, comparisons, context membership and saved lists, which identity merges used to lose.
+
 ## State
 
 Everything up to the first session is in the initial commit; the second session (18 Oct, below under "Modelling
