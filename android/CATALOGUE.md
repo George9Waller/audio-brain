@@ -4,6 +4,17 @@
 
 The catalogue as a place you move through, not a list. A home for every mix, kept in sync with Tidal and wired into feedback. Show a lot of data, but only one layer at a time, with detail on demand.
 
+## Built: the Catalogue rework (31 Oct 2026)
+
+From the approved canvas "Catalogue page layouts" (A–D and the rest of the pages). The library leads with when as well as how much.
+
+- **Library home** (`pages/CataloguePage.kt`): one search for everything; the catalogue split by when you last played each track (lately = the last 45 days, earlier this year, before this year, never) as a bar with counts; "You've been in lately" (albums, sets, the busiest context, with colour icons); a door to each part.
+- **Tracks (A)**: the four parts as filters, each sorted its own way (most played lately; last played; most played then, tagged with the peak year; never played, closest to your contexts first and saying what each sounds like). Rows have colour icons, "7 lately · 18 in all · last 27 Oct" and age tags.
+- **Artists (B)**: a bar per year from 2016, the peak in the Era colour and this year in the Now colour; NOW when this year is at least half the peak year, else the peak year. Sorted by this year or all time.
+- **Artist (C)**, **Album**, **Set**, **Context (D)** and **Track** pages, and **Search** over every kind with jump chips, the best match as a card, and "All N" links. Sections use Discover's kicker, big title and rows in a card.
+- **Map, calm**: families as soft regions (a blurred density field per family, drawn once into a small bitmap per Show option); tap one to see its tracks as dots in their contexts' colours, up to four contexts named and the list of them with age tags; tap a context for its page. Show: All, Lately (bigger dots), Faded, Unplayed (hollow). No animation but the frame gliding to a family. The old colour modes, list rings and search on the map are gone.
+- **Server** (`api/library.py`): `/library/summary`, `/library/tracks?when=`, artists with plays per year, albums with played/unplayed and per-track colours, sets with a tracklist strip, pages for each, `/library/search`. `NearContext` stores each track outside a context with the context it sounds closest to, nightly after the map (`recommend.atlas.near_contexts`); `/map` points carry recency flags, a near hue and a family; `/map/version` lets the app download the map only when it changes (checked at most hourly).
+
 ## What there is to show
 
 Measured on the server today:

@@ -65,13 +65,17 @@ class ApiClient(private val settings: SettingsStore) {
     suspend fun artistTracks(id: Long): List<ListItem> = get("/artists/$id/tracks")
     suspend fun search(q: String, sound: Boolean): SearchResult = post("/search", ApiJson.encodeToString(SearchRequest(q, sound)))
 
-    suspend fun libraryTracks(q: String, sort: String, offset: Int): TrackPage = get("/library/tracks?${query(q, sort, offset)}")
+    suspend fun librarySummary(): LibrarySummary = get("/library/summary")
+    suspend fun libraryTracks(q: String, sort: String, offset: Int, recency: String = ""): TrackPage = get("/library/tracks?${query(q, sort, offset)}&when=$recency")
     suspend fun libraryArtists(q: String, sort: String, offset: Int): List<ArtistRow> = get("/library/artists?${query(q, sort, offset)}")
     suspend fun libraryAlbums(q: String, sort: String, offset: Int): List<AlbumRow> = get("/library/albums?${query(q, sort, offset)}")
     suspend fun librarySets(q: String, source: String, offset: Int): List<SetRow> = get("/library/sets?q=${enc(q)}&source=$source&offset=$offset")
+    suspend fun librarySearch(q: String): LibrarySearch = get("/library/search?q=${enc(q)}")
     suspend fun artistPage(id: Long): ArtistPage = get("/library/artists/$id")
     suspend fun albumPage(id: Long): AlbumPage = get("/library/albums/$id")
     suspend fun setPage(id: Long): SetPage = get("/library/sets/$id")
+    suspend fun contextPage(id: Long): ContextPage = get("/library/contexts/$id")
+    suspend fun trackStory(id: Long): TrackStory = get("/library/tracks/$id")
 
     suspend fun addTracklist(request: TracklistRequest): Tracklist = post("/sets/tracklist", ApiJson.encodeToString(request))
     suspend fun tracklist(setId: Long): Tracklist = get("/sets/$setId/tracklist")
@@ -80,6 +84,7 @@ class ApiClient(private val settings: SettingsStore) {
     suspend fun lineCandidates(setId: Long, position: Int, q: String = ""): List<ListItem> = get("/sets/$setId/tracklist/$position/candidates?q=${enc(q)}")
 
     suspend fun mapRaw(): String = call("/map", null)
+    suspend fun mapVersion(): MapVersion = get("/map/version")
     suspend fun track(id: Long): TrackDto = get("/tracks/$id")
 
     private fun query(q: String, sort: String, offset: Int) = "q=${enc(q)}&sort=$sort&offset=$offset"
@@ -92,8 +97,9 @@ class ApiClient(private val settings: SettingsStore) {
     /** Raw body, for the cache: [now] is stored as the server sent it. */
     suspend fun getRaw(path: String): String = call(path, null)
 
-    private suspend inline fun <reified T> get(path: String): T = ApiJson.decodeFromString(call(path, null))
-    private suspend inline fun <reified T> post(path: String, body: String): T = ApiJson.decodeFromString(call(path, body))
+    // decoded off the main thread: some pages (lists, the library's) are large enough to drop frames
+    private suspend inline fun <reified T> get(path: String): T = call(path, null).let { withContext(Dispatchers.Default) { ApiJson.decodeFromString(it) } }
+    private suspend inline fun <reified T> post(path: String, body: String): T = call(path, body).let { withContext(Dispatchers.Default) { ApiJson.decodeFromString(it) } }
 
     private suspend fun call(path: String, body: String?, method: String? = null): String = withContext(Dispatchers.IO) {
         val (server, token) = settings.connection()

@@ -62,8 +62,15 @@ import com.georgewaller.audiobrain.overlays.ItemMenuContent
 import com.georgewaller.audiobrain.overlays.ListDetail
 import com.georgewaller.audiobrain.overlays.NowDrawerContent
 import com.georgewaller.audiobrain.overlays.AlbumScreen
+import com.georgewaller.audiobrain.overlays.AlbumsScreen
 import com.georgewaller.audiobrain.overlays.ArtistScreen
+import com.georgewaller.audiobrain.overlays.ArtistsScreen
+import com.georgewaller.audiobrain.overlays.ContextScreen
+import com.georgewaller.audiobrain.overlays.SearchScreen
 import com.georgewaller.audiobrain.overlays.SetScreen
+import com.georgewaller.audiobrain.overlays.SetsScreen
+import com.georgewaller.audiobrain.overlays.TrackScreen
+import com.georgewaller.audiobrain.overlays.TracksScreen
 import com.georgewaller.audiobrain.pages.LibraryViewModel
 import com.georgewaller.audiobrain.pages.MapPage
 import com.georgewaller.audiobrain.design.AbChip
@@ -92,6 +99,13 @@ sealed interface Overlay {
     data class Artist(val id: Long) : Overlay
     data class Album(val id: Long) : Overlay
     data class Set(val id: Long) : Overlay
+    data class Context(val id: Long) : Overlay
+    data class Track(val id: Long) : Overlay
+    data class Tracks(val recency: String, val q: String = "") : Overlay
+    data class Artists(val q: String = "") : Overlay
+    data class Albums(val q: String = "") : Overlay
+    data class Sets(val q: String = "") : Overlay
+    data class Search(val q: String = "") : Overlay
     data class Ask(val prefill: String = "") : Overlay
     /** Give a tracklist: [prefill] from the share sheet, [attachTo] an existing set, [show] a provided set's matches. */
     data class Tracklist(val prefill: String = "", val attachTo: Long? = null, val show: Long? = null) : Overlay
@@ -158,6 +172,17 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit,
     val wide = LocalConfiguration.current.smallestScreenWidthDp >= 400
     var catalogueMode by rememberSaveable { mutableStateOf(if (wide) "map" else "library") }
     val pad = PaddingValues(start = Ab.space.gutter, end = Ab.space.gutter, bottom = 96.dp)
+    val open: (Overlay) -> Unit = { overlays.add(it) }
+    val nav = remember {
+        CatalogueNav(
+            tracks = { r, q -> open(Overlay.Tracks(r, q)) }, artists = { open(Overlay.Artists(it)) }, albums = { open(Overlay.Albums(it)) },
+            sets = { open(Overlay.Sets(it)) }, map = { catalogueMode = "map" }, search = { open(Overlay.Search(it)) },
+            artist = { open(Overlay.Artist(it)) }, album = { open(Overlay.Album(it)) }, set = { open(Overlay.Set(it)) },
+            context = { open(Overlay.Context(it)) }, track = { open(Overlay.Track(it)) }, list = { open(Overlay.List(it)) },
+            menu = { item, where -> menu = item to where }, pasteTracklist = { openTracklist(Overlay.Tracklist()) },
+            tracklist = { id, provided -> openTracklist(if (provided) Overlay.Tracklist(show = id) else Overlay.Tracklist(attachTo = id)) },
+        )
+    }
 
     Box(Modifier.fillMaxSize().background(Ab.colors.ground)) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -179,8 +204,9 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit,
                                 AbChip("Map", selected = catalogueMode == "map") { catalogueMode = "map" }
                                 AbChip("Library", selected = catalogueMode == "library") { catalogueMode = "library" }
                             }
-                            if (catalogueMode == "map") MapPage(vm, graph, onMenu)
-                            else CataloguePage(vm, library, pad, { overlays.add(Overlay.Artist(it)) }, { overlays.add(Overlay.Album(it)) }, { overlays.add(Overlay.Set(it)) }, onMenu, onPasteTracklist = { openTracklist(Overlay.Tracklist()) })
+                            // the map checks for a new layout only while it is the page in view; at rest it draws nothing new
+                            if (catalogueMode == "map") MapPage(vm, graph, nav, shown = pager.settledPage == 3)
+                            else CataloguePage(library, pad, nav)
                         }
                     }
                     else -> MorePage(vm, pad, { overlays.add(Overlay.Jobs) }, { overlays.add(Overlay.Settings) }, { overlays.add(Overlay.DeviceCheck) }, { overlays.add(Overlay.Catalog) })
@@ -217,9 +243,16 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit,
                 val p = PaddingValues(start = Ab.space.gutter, end = Ab.space.gutter, bottom = 96.dp)
                 when (overlay) {
                     is Overlay.List -> ListDetail(vm, overlay.key, p, onMenu) { overlays.remove(overlay) }
-                    is Overlay.Artist -> ArtistScreen(vm, graph, overlay.id, p, { overlays.add(Overlay.Album(it)) }, onMenu)
-                    is Overlay.Album -> AlbumScreen(vm, graph, overlay.id, p, { overlays.add(Overlay.Artist(it)) }, onMenu)
-                    is Overlay.Set -> SetScreen(vm, graph, overlay.id, p, onMenu) { provided -> openTracklist(if (provided) Overlay.Tracklist(show = overlay.id) else Overlay.Tracklist(attachTo = overlay.id)) }
+                    is Overlay.Artist -> ArtistScreen(vm, graph, overlay.id, p, nav)
+                    is Overlay.Album -> AlbumScreen(vm, graph, overlay.id, p, nav)
+                    is Overlay.Set -> SetScreen(vm, graph, overlay.id, p, nav)
+                    is Overlay.Context -> ContextScreen(vm, graph, overlay.id, p, nav)
+                    is Overlay.Track -> TrackScreen(vm, graph, overlay.id, p, nav)
+                    is Overlay.Tracks -> TracksScreen(vm, graph, library, overlay.recency, overlay.q, p, nav)
+                    is Overlay.Artists -> ArtistsScreen(graph, library, overlay.q, p, nav)
+                    is Overlay.Albums -> AlbumsScreen(graph, library, overlay.q, p, nav)
+                    is Overlay.Sets -> SetsScreen(graph, library, overlay.q, p, nav)
+                    is Overlay.Search -> SearchScreen(vm, graph, overlay.q, p, nav)
                     is Overlay.Tracklist -> TracklistScreen(tracklist, p, onOpenList = { overlays.add(Overlay.List(it)) }, onPlay = vm::play)
                     is Overlay.Ask -> AskScreen(vm, overlay.prefill, p) { overlays.add(Overlay.List(it)) }
                     Overlay.Jobs -> JobsScreen(jobs, p) { message = it }

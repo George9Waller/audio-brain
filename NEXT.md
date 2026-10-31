@@ -15,6 +15,8 @@ points** (95% CI 2.56–3.93), came-back rate by **1.55 points** (1.13–1.98), 
 (0.20–0.30), and plays covered by **3.26 points** (1.54–5.14); all four cutoffs agreed. New played rate changed
 −0.50 points (−1.81 to 0.78), so there is no reliable new-track cost.
 
+**Catalogue rework (31 Oct):** built from the approved canvas; see `android/CATALOGUE.md`, "Built". Needs `migrate recommend` (0024, `NearContext`); the Models job fills it after the map each night (about 25 s), so until then unplayed tracks are coloured the old, slower way and the map's Unplayed view has no colours. Follow-up: duplicate tracks in the catalogue (e.g. "So Good (feat. Kuuda)" twice, same sound, one in a context) split play counts on the track and album pages.
+
 ## State
 
 Everything up to the first session is in the initial commit; the second session (18 Oct, below under "Modelling

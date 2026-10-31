@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -198,23 +199,37 @@ class JobsRepository(private val api: ApiClient) {
     suspend fun cancel(id: Long) = api.cancelRun(id)
 }
 
-/** The map's points and places, kept on disk: the layout changes once a night, so it's fetched when the app opens. */
+/**
+ * The map's points and places, kept on disk. The layout changes once a night, so [load] asks the server for the
+ * map's version at most once an hour, and downloads the map (over a megabyte) only when that has changed.
+ */
 class MapRepository(context: Context, private val api: ApiClient) {
     private val cache = File(context.filesDir, "map.json")
     private val _data = MutableStateFlow<MapData?>(null)
     val data: StateFlow<MapData?> = _data.asStateFlow()
+    private var checked = 0L
+    private val loading = kotlinx.coroutines.sync.Mutex()
 
-    suspend fun load() {
+    /** Pages that show the map all call this; one at a time, so they share a check. */
+    suspend fun load() = loading.withLock { fetch() }
+
+    private suspend fun fetch() {
         if (_data.value == null) withContext(Dispatchers.Default) {
             if (cache.exists()) runCatching { ApiJson.decodeFromString<MapData>(cache.readText()) }.getOrNull()?.let { _data.value = it }
         }
+        val now = System.currentTimeMillis()
+        if (_data.value != null && now - checked < CHECK_EVERY) return
         runCatching {
+            if (_data.value != null && api.mapVersion().version == _data.value?.version) { checked = now; return }
             val raw = api.mapRaw()
             val parsed = withContext(Dispatchers.Default) { ApiJson.decodeFromString<MapData>(raw) }
             if (parsed.version != _data.value?.version) {
                 _data.value = parsed
                 withContext(Dispatchers.IO) { cache.writeText(raw) }
             }
+            checked = now
         }
     }
+
+    private companion object { const val CHECK_EVERY = 60 * 60 * 1000L }
 }

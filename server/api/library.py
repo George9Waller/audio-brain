@@ -113,7 +113,7 @@ def track_rows(tracks, peaks=False, context=None):
             item["peak"] = f"{peak[item['track_id']]:%Y-%m}"
         if not n:
             name = near.get(item.get("near_context_id"))
-            item["reason"] = f"Sounds like {name}" if name else "Not played yet"
+            item["reason"] = f"Sounds like {name.split(' (')[0]}" if name else "Not played yet"  # without its era, "(2021–2024)"
         elif recent:
             item["reason"] = f"{recent} lately · {n} in all · last {day(last)}"
         elif last >= year:
@@ -360,7 +360,7 @@ class AlbumRow(Schema):
     listens: int = 0
     recent: int = 0  # plays lately
     last_played: datetime | None = None
-    hues: list[Hue] = []  # a colour per track: solid for ones in a context, hollow for ones that only sound like one
+    hues: list[Hue] = []  # a colour per track, its context's or the one it sounds closest to: solid if played, hollow if not
     tidal_url: str | None
 
 
@@ -404,8 +404,8 @@ def album_rows(page):
     for a in page:
         ts = tracks.get(a.pk, [])
         mine = [stats[t] for t in ts if t in stats]
-        # played tracks' colours first, so the icon fills in as more of it is played
-        cells = [hues[t] for t in sorted(ts, key=lambda t: t not in stats) if t in hues]
+        # played tracks first and solid, unplayed ones hollow: the icon fills in as more of it is played
+        cells = [{**hues[t], "near": t not in stats} for t in sorted(ts, key=lambda t: t not in stats) if t in hues]
         out.append({
             "id": a.pk, "name": a.name, "artist": a.artist.name, "artist_id": a.artist_id, "tracks": len(ts), "played": len(mine),
             "plays": round(weighted.get(a.pk, 0), 1), "listens": sum(s[0] for s in mine), "recent": sum(s[1] for s in mine),

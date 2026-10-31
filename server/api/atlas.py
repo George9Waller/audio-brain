@@ -11,7 +11,7 @@ from catalogue.models import Artist, AudioFeatures, Track
 from history.models import Listen
 from library.models import Favourite
 from recommend.atlas import placed_by_sound
-from recommend.mixes import RECENT
+from recommend.mixes import play_stats
 from recommend.models import Context, ContextTrack, MapPoint, Mix, NearContext
 
 router = Router(tags=["map"])
@@ -31,6 +31,10 @@ class Place(Schema):
     kind: str
     size: int
     members: list[int] = []  # for lists: their tracks on the map, in play order
+    family: str = ""  # for contexts: the family they're in
+    recent: int = 0  # for contexts: plays lately (RECENT), for their age tags
+    era_start: Any = None  # for contexts: when their tracks peaked in your listening
+    era_end: Any = None
 
 
 class MapOut(Schema):
@@ -48,6 +52,24 @@ class MapOut(Schema):
     # Per-track attributes stay outside the hot point rows.  The app can switch
     # colour modes without asking the server for a second copy of the layout.
     metadata: dict[str, dict[str, Any]] = {}
+
+
+def map_version():
+    """Changes when the layout, the closest contexts or the lists are rebuilt (each nightly), and as recency moves
+    on, daily: the app downloads the map again only then."""
+    from django.db.models import Count
+    points = MapPoint.objects.aggregate(n=Count("pk"), last=Max("pk"))
+    built = Mix.objects.exclude(section=Mix.DRAFTS).aggregate(b=Max("built_at"))["b"]
+    return f"{points['n']}-{points['last']}-{NearContext.objects.count()}-{built:%Y%m%d%H%M}-{timezone.localdate():%Y%m%d}" if built else f"{points['n']}-{points['last']}"
+
+
+class Version(Schema):
+    version: str
+
+
+@router.get("/map/version", response=Version)
+def version(request):
+    return {"version": map_version()}
 
 
 @router.get("/map", response=MapOut)
@@ -107,6 +129,11 @@ def atlas(request):
         biggest = max((c for c in by_context if family_of.get(c) == f), key=lambda c: len(by_context[c]), default=None)
         return hues.get(biggest)
     contexts = [p for c, ids in by_context.items() if c in names and (p := place(f"context:{c}", names[c], hues.get(c), ids, "context"))]
+    stats = play_stats(set(names))
+    eras = {c: (a, b) for c, a, b in Context.objects.filter(active=True).values_list("pk", "era_start", "era_end")}
+    for p in contexts:
+        c = int(p["key"].split(":")[1])
+        p.update(family=family_of.get(c, ""), recent=stats.get(c, {}).get("recent", 0), era_start=eras[c][0], era_end=eras[c][1])
     families = {}
     for c, ids in by_context.items():
         if c in family_of:
@@ -123,7 +150,4 @@ def atlas(request):
     artist_names = dict(Artist.objects.filter(pk__in=big).values_list("pk", "name"))
     artist_places = [p for a, ids in big.items() if (p := place(f"artist:{a}", artist_names.get(a, ""), None, ids, "artist"))]
     lists = [p for m in mixes if m.section == Mix.LISTS and (p := place(m.key, m.title, hues.get(m.context_id) if m.context_id else None, [i["track_id"] for i in m.items if i.get("kind") == "track"], m.kind, members=True))]
-    stamp = MapPoint.objects.aggregate(n=Max("pk"))["n"]
-    built = max((m.built_at for m in mixes), default=None)
-    near_stamp = len(near)
-    return {"version": f"{len(points)}-{stamp}-{near_stamp}-{built:%Y%m%d%H%M}" if built else f"{len(points)}-{stamp}-{near_stamp}", "scale": SCALE, "points": points, "families": family_places, "contexts": contexts, "artists": artist_places, "lists": lists, "metadata": metadata}
+    return {"version": map_version(), "scale": SCALE, "points": points, "families": family_places, "contexts": contexts, "artists": artist_places, "lists": lists, "metadata": metadata}

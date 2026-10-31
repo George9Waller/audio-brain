@@ -33,6 +33,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.georgewaller.audiobrain.data.ListItem
 import com.georgewaller.audiobrain.data.QueueSummary
@@ -54,14 +55,15 @@ import java.util.Locale
 /** Where then-and-now graphs start: the first year with listening worth showing. */
 const val FIRST_YEAR = 2016
 
-/** One bar of a then-and-now graph: a year's plays, and whether it's the biggest year or this one. */
+/** One bar of a then-and-now graph: a year's plays, and whether it's the biggest year or this one (this one's colour wins). */
 data class YearBar(val year: Int, val plays: Int, val peak: Boolean, val now: Boolean)
 
 /** A bar per year from [from] to [to] (this year), from plays per year keyed by year ("2018"). */
 fun yearBars(years: Map<String, Int>, to: Int = Year.now().value, from: Int = FIRST_YEAR): List<YearBar> {
     val plays = (from..to).associateWith { years[it.toString()] ?: 0 }
-    val peak = plays.maxByOrNull { it.value }?.takeIf { it.value > 0 }?.key
-    return plays.map { (year, n) -> YearBar(year, n, year == peak, year == to) }
+    // every year that ties for the most is lit
+    val top = plays.values.maxOrNull()?.takeIf { it > 0 }
+    return plays.map { (year, n) -> YearBar(year, n, n == top, year == to) }
 }
 
 /** Where a faded favourite's peak and its last play fall between [FIRST_YEAR] and now, each 0–1; null without dates. */
@@ -91,15 +93,7 @@ private val MONTH = DateTimeFormatter.ofPattern("MMM yyyy", Locale.UK)
 @Composable
 fun DiscoverSection(kicker: String, tone: Color, title: String, caption: String, links: List<Pair<String, () -> Unit>>, content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxWidth().padding(top = Ab.space.xxl)) {
-        Column(Modifier.padding(bottom = Ab.space.s)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(8.dp).clip(CircleShape).background(tone))
-                Spacer(Modifier.width(Ab.space.s))
-                AbText(kicker.uppercase(), style = Ab.type.overline, color = tone, maxLines = 1)
-            }
-            AbText(title, Modifier.padding(top = Ab.space.xs), style = Ab.type.display.copy(fontSize = 28.sp, lineHeight = 30.sp), maxLines = 2)
-            AbText(caption, Modifier.padding(top = Ab.space.xxs), style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 2)
-        }
+        SectionHead(kicker, tone, title, caption)
         Column(Modifier.fillMaxWidth().clip(Ab.shapes.large).background(Ab.colors.surface).border(1.dp, Ab.colors.line, Ab.shapes.large)) {
             CompositionLocalProvider(LocalRowGround provides Ab.colors.surface) { content() }
             links.forEachIndexed { i, (label, onOpen) ->
@@ -113,6 +107,20 @@ fun DiscoverSection(kicker: String, tone: Color, title: String, caption: String,
                 }
             }
         }
+    }
+}
+
+/** A section's head on the page: the kicker in its tag's colour, a big title, and why things are in it. */
+@Composable
+fun SectionHead(kicker: String, tone: Color, title: String, caption: String, modifier: Modifier = Modifier) {
+    Column(modifier.padding(bottom = Ab.space.s)) {
+        if (kicker.isNotBlank()) Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(8.dp).clip(CircleShape).background(tone))
+            Spacer(Modifier.width(Ab.space.s))
+            AbText(kicker.uppercase(), style = Ab.type.overline, color = tone, maxLines = 1)
+        }
+        AbText(title, Modifier.padding(top = Ab.space.xs), style = Ab.type.display.copy(fontSize = 28.sp, lineHeight = 30.sp), maxLines = 2)
+        if (caption.isNotBlank()) AbText(caption, Modifier.padding(top = Ab.space.xxs), style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 2)
     }
 }
 
@@ -313,17 +321,17 @@ fun ThenAndNowRow(item: ListItem, onOpen: () -> Unit) {
 }
 
 @Composable
-fun YearBars(bars: List<YearBar>, description: String, modifier: Modifier = Modifier) {
+fun YearBars(bars: List<YearBar>, description: String, modifier: Modifier = Modifier, height: Dp = 30.dp, gap: Dp = 3.dp) {
     val peak = Ab.colors.ageEra
     val now = Ab.colors.ageNow
     val rest = Ab.colors.textFaint.copy(alpha = 0.6f)
-    Canvas(modifier.fillMaxWidth().height(30.dp).semantics { contentDescription = description }) {
+    Canvas(modifier.fillMaxWidth().height(height).semantics { contentDescription = description }) {
         val max = bars.maxOfOrNull { it.plays }?.takeIf { it > 0 } ?: return@Canvas
-        val gap = 3.dp.toPx()
+        val gap = gap.toPx()
         val w = (size.width - gap * (bars.size - 1)) / bars.size
         bars.forEachIndexed { i, b ->
             val h = (b.plays.toFloat() / max * size.height).coerceAtLeast(2.dp.toPx())
-            drawRect(if (b.peak) peak else if (b.now) now else rest, Offset(i * (w + gap), size.height - h), Size(w, h))
+            drawRect(if (b.now) now else if (b.peak) peak else rest, Offset(i * (w + gap), size.height - h), Size(w, h))
         }
     }
 }

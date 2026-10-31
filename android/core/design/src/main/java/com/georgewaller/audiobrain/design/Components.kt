@@ -37,6 +37,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
@@ -227,6 +228,7 @@ fun AbTextField(
     placeholder: String = "",
     secret: Boolean = false,
     keyboardType: KeyboardType = KeyboardType.Text,
+    focus: androidx.compose.ui.focus.FocusRequester? = null,
 ) {
     Column(modifier) {
         if (label.isNotEmpty()) {  // an empty label leaves just the field, where the placeholder says enough
@@ -237,7 +239,7 @@ fun AbTextField(
             Box(Modifier.padding(horizontal = Ab.space.m, vertical = Ab.space.m)) {
                 if (value.isEmpty()) AbText(placeholder, color = Ab.colors.textFaint, maxLines = 1)
                 BasicTextField(
-                    value, onValueChange, Modifier.fillMaxWidth(),
+                    value, onValueChange, Modifier.fillMaxWidth().then(if (focus != null) Modifier.focusRequester(focus) else Modifier),
                     textStyle = Ab.type.body.copy(color = Ab.colors.text),
                     singleLine = true,
                     cursorBrush = SolidColor(Ab.colors.accent),
