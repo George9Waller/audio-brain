@@ -59,7 +59,7 @@ fun MixList.kindLabel(): String = when (kind) {
     "mix" -> "Context mix"
     "era" -> "Past era"
     "fresh" -> "New releases"
-    "rediscovery" -> "Faded favourites"
+    "rediscovery" -> "Era"
     "new" -> "Never played"
     "edges" -> "Edges"
     "repeat" -> "On repeat"

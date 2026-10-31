@@ -1,6 +1,9 @@
 package com.georgewaller.audiobrain.overlays
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -81,15 +84,19 @@ fun ReleaseInbox(vm: AppViewModel, key: String, padding: PaddingValues) {
                     drawRect(track)
                     drawRect(fill, size = size.copy(width = size.width * share))
                 }
-                AbText("${count(done)} decided so far · ${queue.decidedThisWeek} this week", style = Ab.type.caption, color = Ab.colors.textMuted)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AbText("${count(done)} decided so far · ${queue.decidedThisWeek} this week", Modifier.weight(1f), style = Ab.type.caption, color = Ab.colors.textMuted)
+                    // one control for the order, apart from the filters: tapping it switches
+                    AbText(
+                        if (newest) "Newest first ⇅" else "Closest first ⇅",
+                        Modifier.clickable { newest = !newest }.heightIn(min = 44.dp).padding(start = Ab.space.m, top = Ab.space.m),
+                        style = Ab.type.label,
+                    )
+                }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(Ab.space.s), verticalArrangement = Arrangement.spacedBy(Ab.space.s)) {
                     SOURCES.forEach { (k, label) ->
                         AbChip("$label ${count(waitingFrom(k))}", selected = source == k) { source = k }
                     }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
-                    AbChip("Closest to you", selected = !newest) { newest = false }
-                    AbChip("Newest", selected = newest) { newest = true }
                 }
             }
         }

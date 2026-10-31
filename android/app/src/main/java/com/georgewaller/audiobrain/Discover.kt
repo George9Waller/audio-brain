@@ -2,7 +2,6 @@ package com.georgewaller.audiobrain
 
 import androidx.compose.foundation.Canvas
 import com.georgewaller.audiobrain.design.AbIcons
-import com.georgewaller.audiobrain.design.AbIconButton
 import com.georgewaller.audiobrain.design.AbDivider
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.Color
@@ -42,6 +41,9 @@ import com.georgewaller.audiobrain.data.Then
 import com.georgewaller.audiobrain.design.Ab
 import com.georgewaller.audiobrain.design.AbButton
 import com.georgewaller.audiobrain.design.AbText
+import com.georgewaller.audiobrain.design.AbIcon
+import com.georgewaller.audiobrain.design.TrackHue
+import com.georgewaller.audiobrain.design.ListSwatch
 import com.georgewaller.audiobrain.design.ButtonKind
 import java.text.NumberFormat
 import java.time.Year
@@ -84,12 +86,12 @@ private val MONTH = DateTimeFormatter.ofPattern("MMM yyyy", Locale.UK)
 
 /**
  * A Discover section: a kicker in its tag's colour (what kind and how many), its name, why things are in it, and its
- * rows together in one card with a way to all of it at the foot, so where one section ends is plain as you scroll.
+ * rows together in one card with the ways to all of it at the foot, so where one section ends is plain as you scroll.
  */
 @Composable
-fun DiscoverSection(kicker: String, tone: Color, title: String, caption: String, all: String?, onAll: (() -> Unit)?, content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(top = Ab.space.xl)) {
-        Column(Modifier.padding(horizontal = Ab.space.xs).padding(bottom = Ab.space.s)) {
+fun DiscoverSection(kicker: String, tone: Color, title: String, caption: String, links: List<Pair<String, () -> Unit>>, content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = Ab.space.xxl)) {
+        Column(Modifier.padding(bottom = Ab.space.s)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(8.dp).clip(CircleShape).background(tone))
                 Spacer(Modifier.width(Ab.space.s))
@@ -100,12 +102,15 @@ fun DiscoverSection(kicker: String, tone: Color, title: String, caption: String,
         }
         Column(Modifier.fillMaxWidth().clip(Ab.shapes.large).background(Ab.colors.surface).border(1.dp, Ab.colors.line, Ab.shapes.large)) {
             CompositionLocalProvider(LocalRowGround provides Ab.colors.surface) { content() }
-            if (all != null && onAll != null) Row(
-                Modifier.fillMaxWidth().clickable(onClick = onAll).heightIn(min = Ab.space.touch).padding(horizontal = Ab.space.m),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AbText(all, Modifier.weight(1f), style = Ab.type.label, maxLines = 1)
-                AbText("→", style = Ab.type.label, color = Ab.colors.textMuted)
+            links.forEachIndexed { i, (label, onOpen) ->
+                if (i > 0) AbDivider()
+                Row(
+                    Modifier.fillMaxWidth().clickable(onClick = onOpen).heightIn(min = Ab.space.touch).padding(horizontal = Ab.space.m),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    AbText(label, Modifier.weight(1f), style = Ab.type.label, maxLines = 1)
+                    AbText("→", style = Ab.type.label, color = Ab.colors.textMuted)
+                }
             }
         }
     }
@@ -186,7 +191,7 @@ fun DecidedLine(item: ListItem, state: String, onUndo: () -> Unit) {
 }
 
 /**
- * A release in the queue: a play button that opens it in Tidal, what it is, the tracks of yours it sounds like (in
+ * A release in the queue: its colours (what its tracks sound like), which play it in Tidal, what it is, the tracks of yours it sounds like (in
  * full), and Save and Skip under that, so the title has the width. An artist's other waiting releases are folded under
  * it, each decidable too, with a way to skip them all.
  */
@@ -194,7 +199,7 @@ fun DecidedLine(item: ListItem, state: String, onUndo: () -> Unit) {
 fun ReleaseCard(item: ListItem, decided: Map<Long, String>, onDecide: (ListItem, String) -> Unit, onOpen: (ListItem) -> Unit, expanded: Boolean, why: Boolean = true, fresh: Boolean = false, onExpand: () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(vertical = Ab.space.m), verticalArrangement = Arrangement.spacedBy(Ab.space.xxs)) {
         Row(verticalAlignment = Alignment.Top) {
-            AbIconButton(AbIcons.Play, "Play ${item.title} in Tidal", { onOpen(item) }, background = Ab.colors.raised, size = 52.dp)
+            ReleaseCover(item) { onOpen(item) }
             Spacer(Modifier.width(Ab.space.m))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Ab.space.xxs)) {
                 Column(Modifier.clickable { onOpen(item) }, verticalArrangement = Arrangement.spacedBy(Ab.space.xxs)) {
@@ -204,7 +209,7 @@ fun ReleaseCard(item: ListItem, decided: Map<Long, String>, onDecide: (ListItem,
                     }
                     AbText(item.artist, style = Ab.type.body, color = Ab.colors.textMuted, maxLines = 1)
                     AbText(listOf(item.detail, item.why.takeIf { why }.orEmpty()).filter { it.isNotBlank() }.joinToString(" · "), style = Ab.type.number, color = Ab.colors.textMuted, maxLines = 1)
-                    soundsLike(item.reason)?.let { AbText("Sounds like $it", style = Ab.type.caption, color = Ab.colors.text, maxLines = 3) }
+                    soundsLike(item.reason)?.let { AbText("Sounds like $it", style = Ab.type.caption, color = Ab.colors.text, maxLines = 2) }
                 }
                 Row(Modifier.padding(top = Ab.space.xs), verticalAlignment = Alignment.CenterVertically) {
                     Decision(item, decided[item.releaseId], onDecide)
@@ -241,6 +246,23 @@ fun ReleaseCard(item: ListItem, decided: Map<Long, String>, onDecide: (ListItem,
     }
 }
 
+/**
+ * A release's icon: a cell per analysed track in the colour of the context it sounds closest to, hollow as none of
+ * them is yours yet (grey cells before it's analysed), with a play mark over it; tapping it plays it in Tidal.
+ */
+@Composable
+private fun ReleaseCover(item: ListItem, onPlay: () -> Unit) {
+    Box(
+        Modifier.size(52.dp).clip(Ab.shapes.small).clickable(onClick = onPlay).semantics { contentDescription = "Play ${item.title} in Tidal" },
+        contentAlignment = Alignment.Center,
+    ) {
+        ListSwatch(item.hues.map { TrackHue(it, near = true) }, size = 52.dp)
+        Box(Modifier.size(26.dp).clip(CircleShape).background(Ab.colors.surface.copy(alpha = 0.85f)), contentAlignment = Alignment.Center) {
+            AbIcon(AbIcons.Play, tint = Ab.colors.text, size = 14.dp)
+        }
+    }
+}
+
 /** Save and Skip, or what was decided with Undo. Skipping is the queue's "dismissed"; Undo puts it back as new. */
 @Composable
 private fun Decision(item: ListItem, local: String?, onDecide: (ListItem, String) -> Unit) {
@@ -248,8 +270,8 @@ private fun Decision(item: ListItem, local: String?, onDecide: (ListItem, String
         "saved" -> Undo("Saved", Ab.colors.keep) { onDecide(item, "new") }
         "dismissed" -> Undo("Skipped", Ab.colors.textMuted) { onDecide(item, "new") }
         else -> Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.xs)) {
-            AbButton("Save", { onDecide(item, "saved") }, kind = ButtonKind.Ghost, icon = AbIcons.Keep)
-            AbButton("Skip", { onDecide(item, "dismissed") }, kind = ButtonKind.Quiet, icon = AbIcons.Close)
+            AbButton("Save", { onDecide(item, "saved") }, kind = ButtonKind.Keep, icon = AbIcons.Keep)
+            AbButton("Skip", { onDecide(item, "dismissed") }, kind = ButtonKind.Text)
         }
     }
 }

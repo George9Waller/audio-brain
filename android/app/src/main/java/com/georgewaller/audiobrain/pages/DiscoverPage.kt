@@ -78,7 +78,7 @@ fun DiscoverPage(vm: AppViewModel, padding: PaddingValues, onOpenList: (String) 
                 val waiting = queue.waiting[source] ?: l.items.size
                 val slots = refill(l.items, decided, here, shown)
                 if (slots.isEmpty()) return@item
-                DiscoverSection("New · ${count(waiting)} waiting", new, title, caption, "All ${count(waiting)}", { onOpenList(l.key) }) {
+                DiscoverSection("New · ${count(waiting)} waiting", new, title, caption, listOf("All ${count(waiting)}" to { onOpenList(l.key) })) {
                     slots.forEach { slot ->
                         val r = slot.item
                         CardRow {
@@ -100,7 +100,7 @@ fun DiscoverPage(vm: AppViewModel, padding: PaddingValues, onOpenList: (String) 
 
         list("artists")?.takeIf { it.items.isNotEmpty() }?.let { l ->
             item(key = "s-artists") {
-                DiscoverSection("New · ${l.items.size} artists", new, "Close to artists you love", "Artists you haven't played, next to several you do", "All ${l.items.size}", { onOpenList(l.key) }) {
+                DiscoverSection("New · ${l.items.size} artists", new, "Close to artists you love", "Artists you haven't played, next to several you do", listOf("All ${l.items.size}" to { onOpenList(l.key) })) {
                     l.items.take(3).forEach { a -> CardRow { CloseToRow(a) { openUrl(context, a.url) } } }
                 }
             }
@@ -110,7 +110,8 @@ fun DiscoverPage(vm: AppViewModel, padding: PaddingValues, onOpenList: (String) 
         val revisit = list("revisit")
         if (past != null || revisit != null) item(key = "s-past") {
             val n = (past?.items?.size ?: 0)
-            DiscoverSection("Era · $n tracks", Ab.colors.ageEra, "Back from your past", "Tracks and artists you loved and let go", past?.let { "All $n tracks" }, past?.let { { onOpenList(it.key) } }) {
+            DiscoverSection("Era · $n tracks", Ab.colors.ageEra, "Back from your past", "Tracks and artists you loved and let go",
+                listOfNotNull(past?.let { p -> "All $n tracks" to { onOpenList(p.key) } }, revisit?.takeIf { it.items.size > 2 }?.let { r -> "All ${r.items.size} artists to come back to" to { onOpenList(r.key) } })) {
                 past?.tracks?.take(2)?.forEach { t ->
                     CardRow {
                         Column {
@@ -121,22 +122,19 @@ fun DiscoverPage(vm: AppViewModel, padding: PaddingValues, onOpenList: (String) 
                     }
                 }
                 revisit?.items?.take(2)?.forEach { a -> CardRow { ThenAndNowRow(a) { openUrl(context, a.url) } } }
-                if (revisit != null && revisit.items.size > 2) CardRow {
-                    AbText("All ${revisit.items.size} artists to come back to →", Modifier.clickable { onOpenList(revisit.key) }.heightIn(min = 44.dp).padding(top = Ab.space.m), style = Ab.type.label, color = Ab.colors.textMuted)
-                }
             }
         }
 
         list("sets")?.takeIf { it.items.isNotEmpty() }?.let { l ->
             item(key = "s-sets") {
-                DiscoverSection("Habit · ${l.items.size} sets", Ab.colors.ageHabit, "Long listens", "Sets on channels you save from, by how much of the tracklist you play", "All ${l.items.size}", { onOpenList(l.key) }) {
+                DiscoverSection("Habit · ${l.items.size} sets", Ab.colors.ageHabit, "Long listens", "Sets on channels you save from, by how much of the tracklist you play", listOf("All ${l.items.size}" to { onOpenList(l.key) })) {
                     l.items.take(3).forEach { s -> CardRow { SetCard(s) { openUrl(context, s.url) } } }
                 }
             }
         }
         list("albums")?.takeIf { it.items.isNotEmpty() }?.let { l ->
             item(key = "s-albums") {
-                DiscoverSection("${l.items.size} albums", Ab.colors.textMuted, "Albums to go back to", "Saved albums you haven't played for a year, and ones by artists you love", "All ${l.items.size}", { onOpenList(l.key) }) {
+                DiscoverSection("${l.items.size} albums", Ab.colors.textMuted, "Albums to go back to", "Saved albums you haven't played for a year, and ones by artists you love", listOf("All ${l.items.size}" to { onOpenList(l.key) })) {
                     l.items.take(3).forEach { a ->
                         CardRow {
                             Column(Modifier.clickable { openUrl(context, a.url) }.heightIn(min = 52.dp).padding(vertical = Ab.space.s)) {

@@ -259,6 +259,7 @@ data class ListItem(
     val source: String = "",  // a release: artist, remixer or label
     val why: String = "",  // and that in words: "artist you play", "on Ninja Tune"
     val released: String = "",  // and its release date, "2026-09-18"
+    val hues: List<Float> = emptyList(),  // and a colour per analysed track: the context each sounds closest to
     val others: List<ListItem> = emptyList(),  // a release: the same artist's other waiting releases, folded under it
     @SerialName("others_count") val othersCount: Int = 0,
     @SerialName("close_to") val closeTo: List<String> = emptyList(),  // an artist to try: yours they're closest to
