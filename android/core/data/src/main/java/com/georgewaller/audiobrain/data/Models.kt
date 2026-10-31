@@ -273,6 +273,13 @@ data class ListItem(
     val yours: Int? = null,
     val context: String = "",
     val then: Then? = null,  // a faded favourite: when it peaked, and when you last played it
+    // the library's (server/api/library.py): when you played it, as well as how much
+    val age: String = "",  // lately, year (earlier this year), older or never
+    @SerialName("last_played") val lastPlayed: String? = null,
+    val peak: String? = null,  // an older track's biggest month, "2016-03"
+    @SerialName("near_context_id") val nearContextId: Long? = null,
+    val key: String = "",  // an album's tracks: "F min"
+    val distance: Float? = null,  // a context's tracks: from its centre
 ) {
     val isTrack get() = kind == "track" && trackId != null
     val ref: TrackRef get() = TrackRef(trackId, tidalId, artist, title, album)
@@ -389,37 +396,116 @@ data class ArtistHit(val id: Long, val name: String, val tracks: Int)
 @Serializable
 data class SearchResult(val tracks: List<ListItem> = emptyList(), val artists: List<ArtistHit> = emptyList(), val contexts: List<ListContext> = emptyList(), val understood: String = "")
 
-// Library
+// Library (server/api/library.py)
 
 @Serializable
-data class TrackPage(val total: Int, val offset: Int, val items: List<ListItem>)
+data class TrackPage(val total: Int, val offset: Int, val items: List<ListItem>, val recency: Map<String, Int>? = null)
+
+/** A language other than English you play: MusicBrainz's code ("fra"), its name, and tracks played and in all. */
+@Serializable
+data class LanguageCount(val code: String, val name: String, val played: Int = 0, val tracks: Int = 0)
+
+/** A cell of a colour icon: a context's hue, hollow when the track only sounds like it. */
+@Serializable
+data class HueDto(val hue: Float, val near: Boolean = false)
 
 @Serializable
-data class ArtistRow(val id: Long, val name: String, val tracks: Int, val plays: Double)
+data class Shelf(val kind: String, val id: Long, val title: String, val detail: String, val hues: List<HueDto> = emptyList())
+
+@Serializable
+data class LibrarySummary(
+    val tracks: Int = 0,
+    val recency: Map<String, Int> = emptyMap(),  // lately, year, older, never
+    val artists: Int = 0, val albums: Int = 0, val sets: Map<String, Int> = emptyMap(), val contexts: Int = 0, val families: Int = 0,
+    val languages: List<LanguageCount> = emptyList(),
+    val recent: List<Shelf> = emptyList(),
+)
+
+@Serializable
+data class ArtistRow(
+    val id: Long, val name: String, val tracks: Int, val plays: Double, val listens: Int = 0,
+    @SerialName("this_year") val thisYear: Int = 0, val years: Map<String, Int> = emptyMap(),
+)
 
 @Serializable
 data class AlbumRow(
     val id: Long, val name: String, val artist: String, @SerialName("artist_id") val artistId: Long,
-    val tracks: Int, val plays: Double, @SerialName("tidal_url") val tidalUrl: String? = null,
+    val tracks: Int, val plays: Double, val played: Int = 0, val listens: Int = 0, val recent: Int = 0,
+    @SerialName("last_played") val lastPlayed: String? = null, val hues: List<HueDto> = emptyList(),
+    @SerialName("tidal_url") val tidalUrl: String? = null,
 )
 
 @Serializable
 data class SetRow(
     val id: Long, val title: String, val by: String, val source: String, val minutes: Int? = null,
-    val published: String? = null, val entries: Int = 0, @SerialName("in_catalogue") val inCatalogue: Int = 0, val url: String,
+    val published: String? = null, @SerialName("saved_at") val savedAt: String? = null, val entries: Int = 0,
+    @SerialName("in_catalogue") val inCatalogue: Int = 0, val yours: Int = 0, val plays: Int = 0,
+    @SerialName("last_played") val lastPlayed: String? = null, val strip: List<Int> = emptyList(), val hits: Int = 0, val url: String,
 )
 
 @Serializable
-data class ArtistPage(val artist: ArtistRow, @SerialName("tidal_url") val tidalUrl: String? = null, val albums: List<AlbumRow>, val tracks: List<ListItem>)
+data class ContextCount(val id: Long, val name: String, val hue: Float, val tracks: Int = 0)
 
 @Serializable
-data class AlbumPage(val album: AlbumRow, val tracks: List<ListItem>)
+data class ArtistPage(
+    val artist: ArtistRow, @SerialName("tidal_url") val tidalUrl: String? = null, val catalogue: Int = 0, val never: Int = 0, val waiting: Int = 0,
+    val contexts: List<ContextCount> = emptyList(), @SerialName("context_count") val contextCount: Int = 0,
+    val albums: List<AlbumRow> = emptyList(), val tracks: List<ListItem> = emptyList(), val unplayed: List<ListItem> = emptyList(),
+)
 
 @Serializable
-data class SetEntry(val position: Int, val cue: String = "", val artist: String, val title: String, val label: String = "", val track: ListItem? = null)
+data class MostPlayed(val title: String, val plays: Int)
 
 @Serializable
-data class SetPage(val set: SetRow, val entries: List<SetEntry>)
+data class AlbumPage(val album: AlbumRow, @SerialName("most_played") val mostPlayed: MostPlayed? = null, val context: ContextCount? = null, val tracks: List<ListItem>)
+
+@Serializable
+data class SetEntry(val position: Int, val cue: String = "", val minute: Float? = null, val artist: String, val title: String, val label: String = "", val track: ListItem? = null)
+
+@Serializable
+data class SetPage(val set: SetRow, val context: ContextCount? = null, val entries: List<SetEntry>)
+
+@Serializable
+data class ContextPage(
+    val id: Long, val name: String, val family: String = "", val hue: Float, val active: Boolean = true, val size: Int = 0,
+    val recent: Int = 0, val lifetime: Int = 0, @SerialName("last_played") val lastPlayed: String? = null, val rank: Int? = null,
+    @SerialName("era_start") val eraStart: String? = null, @SerialName("era_end") val eraEnd: String? = null,
+    val hours: List<Float> = emptyList(), val styles: List<String> = emptyList(), @SerialName("list_key") val listKey: String? = null,
+    val synced: Boolean = false, val members: List<Long> = emptyList(), val far: Float = 1f, val tracks: List<ListItem> = emptyList(),
+)
+
+@Serializable
+data class StoryContext(val id: Long, val name: String, val hue: Float, val near: Boolean = false, val recent: Int = 0)
+
+@Serializable
+data class ListRef(val key: String, val title: String, val kind: String = "", val subtitle: String = "")
+
+@Serializable
+data class TrackStory(
+    val track: ListItem, @SerialName("artist_id") val artistId: Long, @SerialName("album_id") val albumId: Long? = null,
+    val key: String = "", val danceability: Float? = null, val released: String = "", @SerialName("first_played") val firstPlayed: String? = null,
+    val months: Map<String, Int> = emptyMap(), val years: Map<String, Int> = emptyMap(), val context: StoryContext? = null,
+    val lists: List<ListRef> = emptyList(), @SerialName("tidal_url") val tidalUrl: String? = null,
+)
+
+@Serializable
+data class BestMatch(
+    val kind: String, val id: Long, val name: String, val tracks: Int = 0, val listens: Int = 0, val recent: Int = 0,
+    val years: Map<String, Int> = emptyMap(), val months: List<Int> = emptyList(),
+)
+
+@Serializable
+data class Found<T>(val total: Int = 0, val items: List<T> = emptyList())
+
+@Serializable
+data class WaitingRelease(val id: Long, val title: String, val artist: String = "")
+
+@Serializable
+data class LibrarySearch(
+    val q: String = "", val best: BestMatch? = null,
+    val tracks: Found<ListItem> = Found(), val artists: Found<ArtistRow> = Found(), val albums: Found<AlbumRow> = Found(),
+    val lists: Found<ListRef> = Found(), val sets: Found<SetRow> = Found(), val discover: Found<WaitingRelease> = Found(),
+)
 
 // Tracklists you provide (server/api/sets.py)
 
@@ -454,15 +540,25 @@ data class FixLineRequest(@SerialName("track_id") val trackId: Long? = null, val
 // Map
 
 @Serializable
-data class MapPlace(val key: String, val name: String, val hue: Float? = null, val x: Float, val y: Float, val r: Float, val kind: String, val size: Int, val members: List<Long> = emptyList())
+data class MapPlace(
+    val key: String, val name: String, val hue: Float? = null, val x: Float, val y: Float, val r: Float, val kind: String, val size: Int, val members: List<Long> = emptyList(),
+    val family: String = "", val recent: Int = 0, @SerialName("era_start") val eraStart: String? = null, @SerialName("era_end") val eraEnd: String? = null,  // contexts
+)
 
 @Serializable
 data class MapPointMeta(val country: String = "", val language: String = "", val era: Int? = null, val energy: Float? = null)
 
-/** Every placed track as [id, x, y, hue or -1, flags]; flags 1 favourite, 2 played, 4 Fresh/Rediscovery, 8 in a list. */
+/**
+ * Every placed track as [id, x, y, hue or -1, flags, near hue or -1, family or -1]; flags 1 favourite, 2 played,
+ * 4 Fresh/Rediscovery, 8 in a list, 16 placed by sound alone, 32 played lately, 64 earlier this year. Near hue: a
+ * track in no context, the one it sounds closest to; family: an index into [families].
+ */
 @Serializable
 data class MapData(
     val version: String, val scale: Int, val points: List<List<Float>>,
     val families: List<MapPlace> = emptyList(), val contexts: List<MapPlace>, val artists: List<MapPlace> = emptyList(), val lists: List<MapPlace>,
     val metadata: Map<String, MapPointMeta> = emptyMap(),
 )
+
+@Serializable
+data class MapVersion(val version: String)

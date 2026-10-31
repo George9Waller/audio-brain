@@ -1,6 +1,8 @@
 package com.georgewaller.audiobrain.overlays
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -88,7 +90,7 @@ fun NowDrawerContent(vm: AppViewModel, onMenu: (ListItem, String) -> Unit, onTra
 
 /** Long-press on a track: every verdict, radio from it, open it in Tidal. */
 @Composable
-fun ItemMenuContent(vm: AppViewModel, item: ListItem, where: String, onClose: () -> Unit) {
+fun ItemMenuContent(vm: AppViewModel, item: ListItem, where: String, onMore: (() -> Unit)? = null, onClose: () -> Unit) {
     val verdicts by vm.verdicts.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -106,6 +108,11 @@ fun ItemMenuContent(vm: AppViewModel, item: ListItem, where: String, onClose: ()
             item.facts()?.let { AbText(it, style = Ab.type.number, color = Ab.colors.textFaint) }
         }
         if (item.reason.isNotBlank()) AbText(item.reason, style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 3)
+        // swipe up, or tap, for the track's page: its story, where it lives and its lists
+        if (onMore != null) Row(Modifier.fillMaxWidth().clickable(onClick = onMore).heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+            AbText("Its story, where it lives, its lists", Modifier.weight(1f), style = Ab.type.label, color = Ab.colors.textMuted)
+            AbText("↑", style = Ab.type.label, color = Ab.colors.textMuted)
+        }
         VerdictBar((verdicts[item.ref.key] ?: Verdict.fromApi(item.verdict))?.style(), { vm.give(it.verdict(), item, where); onClose() })
         Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.s)) {
             AbButton("Play in ${playerName(playOn)}", { onClose(); vm.playTrack(item) }, icon = AbIcons.Play)

@@ -270,6 +270,8 @@ fun TrackRow(
     rightLabel: String = "Keep",
     leftLabel: String = "No",
     trailing: (@Composable () -> Unit)? = null,
+    leading: (@Composable () -> Unit)? = null,  // in place of the sigil: a colour icon, say
+    detail: String? = null,  // a third line, in mono: how much and when
 ) {
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
@@ -322,12 +324,14 @@ fun TrackRow(
         ) {
             Box(Modifier.width(3.dp).height(28.dp).background(verdict?.color() ?: Color.Transparent))
             Spacer(Modifier.width(Ab.space.s))
-            if (sigil != null) SoundSigil(sigil, size = 30.dp, faint = sigilFaint, playing = playing)
+            if (leading != null) leading()
+            else if (sigil != null) SoundSigil(sigil, size = 30.dp, faint = sigilFaint, playing = playing)
             else Box(Modifier.size(30.dp))
             Spacer(Modifier.width(Ab.space.m))
             Column(Modifier.weight(1f)) {
                 AbText(title, style = Ab.type.label, maxLines = 1)
                 AbText(subtitle, style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 1)
+                if (detail != null) AbText(detail, style = Ab.type.number, color = Ab.colors.textMuted, maxLines = 1)
             }
             if (facts != null) {
                 Spacer(Modifier.width(Ab.space.s))

@@ -9,7 +9,7 @@ from their nearest neighbours by sound, so a new track lands next to what it sou
 import logging
 
 import numpy as np
-from django.db import transaction
+from django.db import connection, transaction
 
 from catalogue.deletions import still_there
 from catalogue.vectors import rows_and_matrices
@@ -42,6 +42,23 @@ def build_map():
             p.pk = by_track[p.track_id]
         MapPoint.objects.bulk_update(updates, ["x", "y"], batch_size=2000)
     return f"{len(ids)} tracks on the map"
+
+
+def near_contexts():
+    """For every analysed track outside the current contexts, the context it sounds closest to (NearContext): the
+    map's colour for unplayed tracks, the library's "sounds like", and its "closest to your taste" order. One pass in
+    the database, so only the ids come back; replaced whole, as contexts are rebuilt every night."""
+    with transaction.atomic(), connection.cursor() as cursor:
+        cursor.execute("DELETE FROM recommend_nearcontext")
+        cursor.execute(
+            "INSERT INTO recommend_nearcontext (track_id, context_id, distance) "
+            "SELECT a.track_id, n.id, n.d FROM catalogue_audiofeatures a "
+            "CROSS JOIN LATERAL (SELECT c.id, c.centroid <=> a.embedding AS d FROM recommend_context c WHERE c.active ORDER BY 2 LIMIT 1) n "
+            "WHERE NOT EXISTS (SELECT 1 FROM recommend_contexttrack m JOIN recommend_context c ON c.id = m.context_id "
+            "WHERE m.track_id = a.track_id AND c.active)"
+        )
+        placed = cursor.rowcount
+    return f"{placed} tracks by the context they sound closest to"
 
 
 def placed_by_sound():

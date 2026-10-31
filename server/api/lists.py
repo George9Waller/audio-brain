@@ -89,6 +89,7 @@ def decorate(items):
             item["hue_near"] = item["hue"] is None and near_hue is not None
             if item["hue_near"]:
                 item["hue"] = near_hue
+                item["near_context_id"] = near[item["track_id"]]
             item["verdict"] = verdicts.get(item["track_id"])
             if item.get("sound") and item["track_id"] in shaped:
                 item["sound"] = {**item["sound"], "shape": shaped[item["track_id"]]}

@@ -37,10 +37,10 @@ import kotlin.math.roundToInt
 
 /**
  * A sheet that rises from the bottom over a dimmed page: the now-playing drawer, a long-press menu. Drag it down or
- * tap outside to close.
+ * tap outside to close; with [onExpand], drag it up to open what it's a sheet of in full.
  */
 @Composable
-fun AbDrawer(open: Boolean, onDismiss: () -> Unit, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+fun AbDrawer(open: Boolean, onDismiss: () -> Unit, modifier: Modifier = Modifier, onExpand: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     Box(modifier.fillMaxSize()) {
         AnimatedVisibility(open, enter = fadeIn(), exit = fadeOut()) {
             Box(Modifier.fillMaxSize().background(Ab.colors.scrim).clickable(remember { MutableInteractionSource() }, null, onClick = onDismiss))
@@ -59,8 +59,19 @@ fun AbDrawer(open: Boolean, onDismiss: () -> Unit, modifier: Modifier = Modifier
                     .background(Ab.colors.surface, Ab.shapes.sheet)
                     .pointerInput(Unit) {
                         detectVerticalDragGestures(
-                            onDragEnd = { if (drag.value > 120f) onDismiss() else scope.launch { drag.animateTo(0f, AbMotion.snappy()) } },
-                        ) { change, dy -> change.consume(); scope.launch { drag.snapTo((drag.value + dy).coerceAtLeast(0f)) } }
+                            onDragEnd = {
+                                when {
+                                    drag.value > 120f -> onDismiss()
+                                    drag.value < -100f && onExpand != null -> onExpand()
+                                    else -> scope.launch { drag.animateTo(0f, AbMotion.snappy()) }
+                                }
+                            },
+                        ) { change, dy ->
+                            change.consume()
+                            // up only as far as it takes to expand, and heavier than down
+                            val step = if (dy < 0 || drag.value < 0) dy * 0.6f else dy
+                            scope.launch { drag.snapTo((drag.value + step).coerceAtLeast(if (onExpand != null) -200f else 0f)) }
+                        }
                     }
                     .clickable(remember { MutableInteractionSource() }, null) {}
                     .padding(horizontal = Ab.space.gutter),

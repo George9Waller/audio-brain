@@ -415,3 +415,137 @@ class MakeAndRefineTests(TestCase):
         self.post("/api/v1/sync", {"feedback": [{"client_id": str(uuid.uuid4()), "verdict": "yes", "track": {"id": self.tracks[0].pk},
                                                   "where": "draft:ab", "given_at": "2026-10-24T12:00:00Z"}]})
         self.assertEqual(Feedback.objects.get().source, "claude")
+
+
+@override_settings(API_TOKEN="secret", LISTENING_TIME_ZONE="Europe/London")
+class LibraryTests(TestCase):
+    """The Catalogue's library: everything by when as well as how much."""
+
+    def setUp(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from catalogue.models import Album, AudioFeatures
+        from history.models import Listen
+        from recommend.atlas import near_contexts
+        from recommend.models import Context, ContextTrack
+        from sets.models import Set, SetTrack
+        self.headers = {"Authorization": "Bearer secret"}
+        self.now = timezone.now()
+        rock, house = ([1.0] + [0.0] * 1279), ([0.0, 1.0] + [0.0] * 1278)
+        self.rock = Context.objects.create(name="Afternoon Rock", family="Indie & Rock", centroid=rock)
+        self.house = Context.objects.create(name="Deep House", family="House", centroid=house)
+        self.artist = Artist.objects.create(name="Becky Hill")
+        self.old = Artist.objects.create(name="Ludovico Einaudi")
+        self.album = Album.objects.create(name="Only Honest", artist=self.artist)
+        make = lambda name, artist, album=None: Track.objects.create(name=name, artist=artist, album=album)
+        self.lately, self.this_year, self.older, self.never = (
+            make("Remember", self.artist, self.album), make("Last Time", self.artist, self.album), make("Le Onde", self.old), make("Unheard", self.artist, self.album))
+        for track, embedding in [(self.lately, rock), (self.this_year, rock), (self.older, rock), (self.never, [0.1, 0.9] + [0.0] * 1278)]:
+            AudioFeatures.objects.create(track=track, preview_source="tidal", model="m", bpm=124, bpm_confidence=3, key="B", scale="minor", key_strength=0.5,
+                                         loudness=-8, danceability=0.9, instrumental=0.2, happy=0.4, sad=0.1, aggressive=0.1, relaxed=0.1, party=0.5, embedding=embedding)
+        for track in (self.lately, self.this_year, self.older):
+            ContextTrack.objects.create(context=self.rock, track=track, distance=0.1 if track == self.lately else 0.2)
+        days = {self.lately: [1, 2, 60], self.older: [800, 801, 802, 1500]}
+        days[self.this_year] = [(self.now - self.now.replace(month=1, day=1)).days - 1] if self.now.month > 2 else [50]
+        for track, ago in days.items():
+            for d in ago:
+                Listen.objects.create(track=track, played_at=self.now - timedelta(days=d), source="lastfm")
+        near_contexts()
+        self.set = Set.objects.create(track=make("Becky Hill @ Ministry", self.artist), source=Set.CHANNEL, status=Set.CANDIDATE, duration=3600)
+        for position, (cue, track) in enumerate([("000", self.lately), ("12:30", None), ("1:02:00", self.never)], 1):
+            SetTrack.objects.create(set=self.set, position=position, cue=cue, artist_name="A", track_name=f"T{position}", track=track)
+
+    def get(self, path):
+        response = self.client.get(f"/api/v1{path}", headers=self.headers)
+        self.assertEqual(response.status_code, 200, response.content[:300])
+        return response.json()
+
+    def test_closest_contexts_are_stored_for_tracks_in_none(self):
+        from recommend.models import NearContext
+        self.assertEqual(list(NearContext.objects.values_list("track_id", "context_id")), [(self.never.pk, self.house.pk)])
+
+    def test_summary_splits_the_catalogue_by_when(self):
+        s = self.get("/library/summary")
+        recency = s["recency"]
+        # the set is a track too, never played
+        self.assertEqual((recency["lately"], recency["older"], recency["never"]), (1, 1, 2))
+        self.assertEqual(recency["lately"] + recency["year"] + recency["older"] + recency["never"], s["tracks"])
+        self.assertEqual(s["sets"]["new"], 1)
+        shelf = {(r["kind"], r["title"]): r for r in s["recent"]}
+        self.assertEqual(shelf[("album", "Only Honest")]["detail"], "Becky Hill · 2 plays lately")
+        self.assertEqual(shelf[("context", "Afternoon Rock")]["detail"], "2 plays lately")
+
+    def test_tracks_by_when_with_their_lines(self):
+        lately = self.get("/library/tracks?when=lately")["items"]
+        self.assertEqual([(i["title"], i["age"], i["reason"]) for i in lately][0][:2], ("Remember", "lately"))
+        self.assertTrue(lately[0]["reason"].startswith("2 lately · 3 in all · last "))
+        older = self.get("/library/tracks?when=older")["items"]
+        self.assertEqual(older[0]["title"], "Le Onde")
+        self.assertIn("4 in all · peak ", older[0]["reason"])
+        never = self.get("/library/tracks?when=never")["items"]
+        unheard = next(i for i in never if i["title"] == "Unheard")
+        self.assertEqual((unheard["age"], unheard["hue_near"], unheard["reason"]), ("never", True, "Sounds like Deep House"))
+        self.assertEqual(never[0]["title"], "Unheard")  # closest to a context first
+
+    def test_artists_by_this_year_with_plays_per_year(self):
+        rows = self.get("/library/artists?sort=year")
+        self.assertEqual(rows[0]["name"], "Becky Hill")
+        self.assertEqual(rows[0]["listens"], 4)
+        einaudi = next(r for r in self.get("/library/artists?sort=plays") if r["name"] == "Ludovico Einaudi")
+        self.assertEqual((einaudi["listens"], einaudi["this_year"]), (4, 0))
+        page = self.get(f"/library/artists/{self.artist.pk}")
+        self.assertEqual((page["catalogue"], page["never"], page["context_count"]), (4, 2, 1))
+        self.assertEqual([t["title"] for t in page["unplayed"]][0], "Unheard")
+
+    def test_albums_count_what_you_have_played(self):
+        row = self.get("/library/albums?sort=unfinished")[0]
+        self.assertEqual((row["name"], row["played"], row["tracks"], row["recent"]), ("Only Honest", 2, 3, 2))
+        self.assertEqual([h["near"] for h in row["hues"]], [False, False, True])  # played first; the unplayed one hollow
+        page = self.get(f"/library/albums/{self.album.pk}")
+        self.assertEqual(page["most_played"], {"title": "Remember", "plays": 3})
+        self.assertEqual(page["context"]["name"], "Afternoon Rock")
+        self.assertEqual({t["key"] for t in page["tracks"]}, {"B min"})
+
+    def test_sets_show_their_tracklist_against_what_you_play(self):
+        row = self.get("/library/sets?source=new")[0]
+        self.assertEqual((row["entries"], row["in_catalogue"], row["yours"], row["strip"], row["minutes"]), (3, 2, 1, [2, 0, 1], 60))
+        page = self.get(f"/library/sets/{self.set.pk}")
+        self.assertEqual([e["minute"] for e in page["entries"]], [0.0, 12.5, 62.0])
+        self.assertEqual(page["entries"][0]["track"]["plays"], 3)
+
+    def test_context_page_runs_core_to_edge(self):
+        page = self.get(f"/library/contexts/{self.rock.pk}")
+        self.assertEqual([t["title"] for t in page["tracks"]][0], "Remember")
+        self.assertEqual((page["size"], page["recent"], page["rank"], page["far"]), (3, 2, 0, 0.2))
+
+    def test_track_page_and_search(self):
+        page = self.get(f"/library/tracks/{self.lately.pk}")
+        self.assertEqual((page["key"], page["context"]["name"], sum(page["months"].values())), ("B minor", "Afternoon Rock", 3))
+        old = self.get(f"/library/tracks/{self.older.pk}")
+        self.assertEqual((old["months"], sum(old["years"].values())), ({}, 4))
+        found = self.get("/library/search?q=becky")
+        self.assertEqual(found["best"]["name"], "Becky Hill")
+        self.assertEqual((found["tracks"]["total"], found["sets"]["total"], found["albums"]["total"]), (4, 1, 1))
+        self.assertEqual(sum(found["best"]["months"]), found["best"]["years"].get(str(self.now.year), 0))
+
+    def test_map_points_carry_recency_near_hue_and_family(self):
+        from recommend.models import MapPoint
+        for i, track in enumerate((self.lately, self.this_year, self.older, self.never)):
+            MapPoint.objects.create(track=track, x=i / 4, y=i / 4)
+        m = self.get("/map")
+        rows = {int(p[0]): p for p in m["points"]}
+        families = [f["name"] for f in m["families"]]
+        self.assertTrue(int(rows[self.lately.pk][4]) & 32)
+        self.assertFalse(int(rows[self.older.pk][4]) & (32 | 64))
+        self.assertEqual(rows[self.never.pk][3], -1)
+        self.assertGreaterEqual(rows[self.never.pk][5], 0)
+        self.assertEqual(families[int(rows[self.lately.pk][6])], "Indie & Rock")
+
+    def test_by_language(self):
+        Artist.objects.filter(pk=self.artist.pk).update(language="fra")
+        page = self.get("/library/tracks?language=fra")
+        self.assertEqual({i["artist"] for i in page["items"]}, {"Becky Hill"})
+        self.assertEqual(page["recency"]["lately"], 1)
+        self.assertEqual([a["name"] for a in self.get("/library/artists?language=fra")], ["Becky Hill"])
+        # two played tracks are below the summary's threshold of ten
+        self.assertEqual(self.get("/library/summary")["languages"], [])
