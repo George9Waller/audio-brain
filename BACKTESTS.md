@@ -71,7 +71,11 @@ same way at most of them.
   that made the postmaster restart and recover. The cgroup recorded no OOM kills. Both failed Jobs and their low
   priority class were removed; no clone database remained. No baseline result was produced. A local fix now builds
   PostgreSQL under `tini`, keeps the readiness check but raises its timeout to five seconds, and routes the image
-  through ECR/Argo. It has not been deployed or retried yet.
+  through ECR/Argo. That fix was then deployed for the retry below.
+- **Retry after deployment:** PostgreSQL remained healthy under `tini`, with no crash recovery, but the pilot still
+  failed. The source database had active connections, so cloning fell back to `pg_dump`; the application image had
+  PostgreSQL client 17, which cannot dump the PostgreSQL 18 server. The failed Job and priority class were removed,
+  and no clone remained. The application image needs client 18 before another pilot.
 
 **Variants that retrain a model.**
 - Today a variant only patches how lists are built; the scorer and taste vectors are trained once per cutoff, in
