@@ -226,14 +226,15 @@ class ModelHelperTests(TestCase):
 
 class MultiCutoffBacktestTests(TestCase):
     def test_container_identity_uses_image_tag_without_git(self):
-        tag = "a" * 40
-        with mock.patch.dict("os.environ", {"BACKTEST_IMAGE_TAG": tag}), \
-             mock.patch("recommend.backtest.subprocess.run", side_effect=FileNotFoundError):
-            identity = backtest.code_identity()
-        self.assertEqual(identity["commit"], tag)
-        self.assertEqual(identity["image tag"], tag)
-        self.assertIsNone(identity["server working tree dirty"])
-        self.assertIsNone(identity["server diff sha256"])
+        sha = "a" * 40
+        for tag in (sha, f"server-{sha}"):
+            with self.subTest(tag=tag), mock.patch.dict("os.environ", {"BACKTEST_IMAGE_TAG": tag}), \
+                 mock.patch("recommend.backtest.subprocess.run", side_effect=FileNotFoundError):
+                identity = backtest.code_identity()
+            self.assertEqual(identity["commit"], sha)
+            self.assertEqual(identity["image tag"], tag)
+            self.assertIsNone(identity["server working tree dirty"])
+            self.assertIsNone(identity["server diff sha256"])
 
     def test_non_commit_image_tag_is_not_reported_as_a_commit(self):
         with mock.patch.dict("os.environ", {"BACKTEST_IMAGE_TAG": "candidate"}), \

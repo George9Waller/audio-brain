@@ -655,7 +655,8 @@ def code_identity():
     except (OSError, subprocess.CalledProcessError) as exc:
         if not image_tag:
             raise RuntimeError("Cannot identify backtest code: Git is unavailable and BACKTEST_IMAGE_TAG is not set") from exc
-        return {"commit": image_tag if re.fullmatch(r"[0-9a-f]{40}", image_tag) else "",
+        match = re.fullmatch(r"(?:server-)?([0-9a-f]{40})", image_tag)
+        return {"commit": match.group(1) if match else "",
                 "server working tree dirty": None, "server diff sha256": None, "image tag": image_tag}
     digest = hashlib.sha256(diff)
     for name in sorted(untracked.splitlines()):
