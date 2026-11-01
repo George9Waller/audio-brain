@@ -9,6 +9,9 @@
   --faint: var(--color-text-tertiary, #73726c);
   --line: var(--color-border-tertiary, rgba(31, 30, 29, 0.12));
   --clash: #c2410c;
+  /* the app's age tags and verdicts (Theme.kt), darkened on light grounds so 11px labels keep 4.5:1 */
+  --age-now: #a84f0f; --age-lately: #8a5a30; --age-era: #2f5dc0; --age-new: #0b7a6c; --age-habit: #9c3f82; --age-retired: #5f656c;
+  --keep: #2f8f52; --no: #c8412f; --not-now: #a87a0b; --never: #7a5cc8;
   --sans: var(--font-sans, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif);
   --mono: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
 }
@@ -20,6 +23,8 @@
   --faint: var(--color-text-tertiary, #9c9a92);
   --line: var(--color-border-tertiary, rgba(250, 249, 245, 0.12));
   --clash: #fb923c;
+  --age-now: #ff9f5a; --age-lately: #d9a27a; --age-era: #8fb3ff; --age-new: #5fd4c4; --age-habit: #e59ad0; --age-retired: #8b9198;
+  --keep: #7bd99a; --no: #ff7a6b; --not-now: #f2c35b; --never: #b79bff;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--text); }
@@ -54,13 +59,14 @@ h1 { font-size: 15px; line-height: 20px; font-weight: 600; }
 .primary { padding: 0 14px; background: var(--text); color: var(--bg); font-weight: 600; }
 .secondary { padding: 0 12px; border: 1px solid var(--line) !important; font-weight: 500; }
 .tertiary { padding: 0 4px; color: var(--faint); font-weight: 500; }
-.actions.stacked { flex-direction: column; align-items: stretch; gap: 8px; }
-.actions.stacked .primary { min-height: 48px; font-size: 15px; }
-.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.pair button { width: 100%; }
 
 /* expanded: the whole list in Claude's full screen */
-.full { display: flex; flex-direction: column; min-height: 100vh; }
+/* the frame's height (frame.ts), else the window's; clear of Claude's header and message box, and only .body scrolls */
+.full { display: flex; flex-direction: column; height: var(--frame-h, 100dvh); overflow: hidden;
+        padding: var(--inset-top, 0) var(--inset-right, 0) 0 var(--inset-left, 0); }
+.full > .head, .full > .bar, .full > .top { flex: none; }
+.full > .body { overflow-y: auto; min-height: 0; padding-bottom: calc(var(--inset-bottom, 0px) + 8px); }
+:root[data-host-full] .full > .bar { display: none; }
 .bar { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px 6px 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
 .bar .icon { border: 0; }
 .head { display: flex; flex-direction: column; gap: 10px; padding: 16px 16px 12px; }
@@ -80,7 +86,6 @@ h1 { font-size: 15px; line-height: 20px; font-weight: 600; }
 .caption { font-size: 13px; line-height: 18px; color: var(--faint); }
 .link { display: flex; align-items: center; gap: 12px; width: 100%; color: inherit; text-decoration: none; }
 .go { color: var(--faint); }
-.foot { position: sticky; bottom: 0; display: flex; flex-direction: column; gap: 8px; padding: 12px 16px 16px; border-top: 1px solid var(--line); background: var(--bg); }
 .sound { display: flex; flex-direction: column; gap: 18px; padding: 12px 0; }
 .sound figure { display: flex; flex-direction: column; gap: 6px; }
 figcaption { font-size: 12px; color: var(--faint); }
@@ -99,7 +104,6 @@ dt { color: var(--faint); }
 .line { display: flex; align-items: baseline; gap: 8px; width: 100%; }
 .line .label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .more { align-self: flex-start; min-height: 36px; font-size: 13px; font-weight: 500; color: var(--faint); }
-.full.pad .top { padding-bottom: 8px; }
 
 /* charts (charts.tsx): the dataviz reference palette's first six categorical slots and its blue ramp, stepped for
    each theme and validated against these surfaces; grid and axes one shade off the surface */
@@ -179,3 +183,91 @@ button.bar-row { min-height: 44px; }
 .status { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .undo { flex: none; min-height: 36px; padding: 0 2px; font-size: 13px; font-weight: 500; color: var(--muted); text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
 .tick.end { font-weight: 500; }
+
+/* the app's pieces (Music.kt): age tags, list rows with their colour square and sync dot, verdict bars, hour bars */
+.mono { font-family: var(--mono); font-size: 12px; letter-spacing: -.1px; }
+.one-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.title-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.title-line h1 { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tag { flex: none; padding: 2px 6px; border-radius: 4px; font: 600 10.5px/14px var(--sans); letter-spacing: .5px; text-transform: uppercase;
+       color: var(--tone); background: color-mix(in srgb, var(--tone) 14%, transparent); }
+.tag.now { --tone: var(--age-now); } .tag.lately { --tone: var(--age-lately); } .tag.era { --tone: var(--age-era); }
+.tag.new { --tone: var(--age-new); } .tag.habit { --tone: var(--age-habit); } .tag.retired { --tone: var(--age-retired); }
+.section + .section { margin-top: 18px; }
+.section-head { display: flex; flex-direction: column; gap: 1px; padding: 0 0 6px; }
+.section-head h2 { margin: 0; font-size: 15px; line-height: 20px; font-weight: 650; letter-spacing: -.1px; }
+.list-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 8px 0; border-top: 1px solid var(--line); }
+.list-row .text { gap: 2px; }
+.heading { font-weight: 600; letter-spacing: -.1px; }
+.list-row .meta { color: var(--muted); }
+.swatch-grid { flex: none; border-radius: 4px; }
+.sync { flex: none; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--faint); }
+.sync.on { background: var(--keep); border-color: var(--keep); }
+.verdict { flex: none; align-self: center; width: 3px; height: 28px; border-radius: 2px; margin-right: -4px; }
+.verdict.yes { background: var(--keep); } .verdict.no { background: var(--no); }
+.verdict.not_now { background: var(--not-now); } .verdict.never { background: var(--never); }
+.hours { display: block; width: 100%; height: 24px; }
+.day { gap: 4px; }
+
+/* small frames: Claude's full screen on a phone leaves a few hundred pixels under its message box. Steer chips go in
+   one row that scrolls sideways; once the tracks are scrolled the head folds (frame.ts) to the name, actions, chips
+   and tabs; and short frames tighten the head */
+.chips-row.scroll { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px; }
+.chips-row.scroll::-webkit-scrollbar { display: none; }
+.chips-row.scroll .chip { flex: none; }
+:root[data-folded] .full .fold { display: none; }
+:root[data-folded] .full .head { padding-bottom: 8px; }
+:root[data-folded] .full .big { font-size: 18px; line-height: 24px; }
+@media (max-height: 760px) {
+  .full .head { gap: 8px; padding-top: 10px; }
+  .full .big { font-size: 20px; line-height: 26px; }
+  .full .actions button { min-height: 40px; }
+  .chip, .tab { min-height: 34px; }
+}
+/* wide frames (desktop full screen): the content keeps to a phone-ish column, as the app's pages are drawn, so tags
+   and counts stay by their titles; the scrolling area stays full width */
+.full > .head, .full > .body { padding-left: max(16px, calc((100% - 760px) / 2)); padding-right: max(16px, calc((100% - 760px) / 2)); }
+
+/* Discover (discover.tsx), as the app's Discover.kt: a kicker in its tag's colour, a title and why, the rows in one
+   raised card with "All" at its foot; release rows with a colour-icon cover, Save and Skip under the text */
+.dsection + .dsection { margin-top: 22px; }
+.card .dsection { margin-top: 2px; }
+.dhead { display: flex; flex-direction: column; gap: 2px; padding-bottom: 8px; }
+.dhead h2 { margin: 2px 0 0; font-size: 19px; line-height: 24px; font-weight: 700; letter-spacing: -.2px; }
+.card .dhead h2 { font-size: 15px; line-height: 20px; }
+.kicker { display: inline-flex; align-items: center; gap: 8px; font: 600 10.5px/14px var(--sans); letter-spacing: .5px; text-transform: uppercase; color: var(--tone, var(--muted)); }
+.kicker i { width: 8px; height: 8px; border-radius: 50%; background: var(--tone, var(--muted)); }
+.kicker.new { --tone: var(--age-new); } .kicker.era { --tone: var(--age-era); } .kicker.habit { --tone: var(--age-habit); }
+.dcard { border: 1px solid var(--line); border-radius: 14px; background: var(--bg-2); overflow: hidden; }
+.drow { display: flex; gap: 12px; width: 100%; padding: 12px 14px; border-bottom: 1px solid var(--line); text-align: left; }
+.drow.block { flex-direction: column; gap: 4px; align-items: stretch; }
+.drow.track { align-items: center; }
+.release { flex-direction: column; gap: 6px; }
+.release-main { display: flex; gap: 12px; align-items: flex-start; }
+.release-text { display: flex; flex-direction: column; gap: 2px; width: 100%; }
+.cover { flex: none; position: relative; display: grid; place-items: center; border-radius: 4px; overflow: hidden; }
+.cover .swatch-grid { position: absolute; inset: 0; }
+.cover .play { position: relative; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; color: var(--text);
+               background: color-mix(in srgb, var(--bg) 85%, transparent); }
+.just-in { flex: none; color: var(--age-new); }
+.decide-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.decide, .decided { display: inline-flex; align-items: center; gap: 6px; }
+.save { min-height: 36px; padding: 0 12px; border-radius: 999px; font-size: 13px; font-weight: 600; color: var(--keep);
+        background: color-mix(in srgb, var(--keep) 14%, transparent); }
+.skip { min-height: 36px; padding: 0 10px; font-size: 13px; font-weight: 500; color: var(--muted); }
+.more-from, .quiet { min-height: 36px; font-size: 13px; font-weight: 500; color: var(--faint); }
+.keep-text { color: var(--keep); } .era-text { color: var(--age-era); } .new-text { color: var(--age-new); }
+.others { display: flex; flex-direction: column; padding-left: 64px; }
+.other { display: flex; align-items: center; gap: 8px; min-height: 52px; border-top: 1px solid var(--line); }
+.other .text { gap: 1px; }
+.decided-line { align-items: center; min-height: 48px; padding-top: 6px; padding-bottom: 6px; }
+.mini-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.mini-chip { padding: 2px 8px; border-radius: 999px; background: var(--bg); font-size: 12.5px; color: var(--muted); }
+.years { display: block; width: 100%; height: 30px; }
+.then { display: flex; justify-content: space-between; gap: 8px; }
+.set-bar { display: block; height: 6px; background: var(--line); }
+.set-bar i { display: block; height: 100%; background: var(--age-new); }
+.all { display: flex; justify-content: space-between; align-items: center; width: 100%; min-height: 44px; padding: 0 14px; font-size: 13.5px; font-weight: 600; }
+.card .all, .card .drow { padding-left: 12px; padding-right: 12px; }
+.other .save { min-height: 32px; padding: 0 9px; font-size: 12.5px; }
+.other .skip { min-height: 32px; padding: 0 6px; font-size: 12.5px; }

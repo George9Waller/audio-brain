@@ -74,10 +74,12 @@ class SearchOut(Schema):
 
 def decorate(items):
     """Add what changes between builds: each track's colour (its context's hue, or for a track in no context, the hue
-    of the one it sounds closest to, flagged `hue_near` so the app can show it paler) and its latest verdict."""
+    of the one it sounds closest to, flagged `hue_near` so the app can show it paler, with that context's name for
+    Claude) and its latest verdict."""
     ids = [i["track_id"] for i in items if i.get("kind") == "track"]
     colours = all_hues()
     near = nearest_contexts([i["track_id"] for i in items if i.get("kind") == "track" and not colours.get(i.get("context_id"))])
+    names = dict(Context.objects.filter(pk__in=set(near.values())).values_list("pk", "name"))
     verdicts = {}
     for track_id, verdict in Feedback.objects.filter(track__in=ids).order_by("given_at").values_list("track_id", "verdict"):
         verdicts[track_id] = verdict
@@ -90,6 +92,7 @@ def decorate(items):
             if item["hue_near"]:
                 item["hue"] = near_hue
                 item["near_context_id"] = near[item["track_id"]]
+                item["near_context_name"] = names.get(item["near_context_id"], "")
             item["verdict"] = verdicts.get(item["track_id"])
             if item.get("sound") and item["track_id"] in shaped:
                 item["sound"] = {**item["sound"], "shape": shaped[item["track_id"]]}

@@ -16,16 +16,25 @@ from claude_mcp.server import build
 CALLBACK = "https://claude.ai/api/mcp/auth_callback"
 PUBLIC = "https://mcp.example.ts.net"
 LIST = {"key": "ctx-7", "kind": "mix", "section": "lists", "title": "Late night", "subtitle": "slow and deep",
-        "context": {"id": 7, "name": "Late night", "hue": 210.0, "family": None}, "items": [
+        "context": {"id": 7, "name": "Late night", "hue": 210.0, "family": None, "active": True, "recent_plays": 120, "lifetime_plays": 900,
+                    "last_played": "2026-10-30T23:10:00Z", "era_start": "2018-03-01", "era_end": "2024-06-01", "hours": [], "weekdays": []}, "items": [
             {"kind": "track", "track_id": 1, "artist": "Burial", "title": "Archangel", "reason": "you play it at night",
              "novel": False, "hue": 210.0, "styles": ["Dubstep"], "verdict": "yes", "sound": {"bpm": 139.6, "camelot": "8A", "energy": 0.41,
              "instrumental": 0.8, "moods": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6], "shape": [0.9, 0.1, 0.5, 0.5, 0.2, 0.7]},
              "length_ms": 238000, "artist_new": False, "context_name": "Late night"},
-            {"kind": "track", "track_id": 2, "artist": "Four Tet", "title": "Lush", "novel": True, "sound": None,
+            {"kind": "track", "track_id": 2, "artist": "Four Tet", "title": "Lush", "novel": True, "sound": None, "hue": 210.0,
+             "hue_near": True, "near_context_id": 7, "near_context_name": "Late night",
              "length_ms": 302000, "artist_new": True, "context_name": None}]}
 RELEASES = {"key": "releases", "kind": "releases", "section": "discover", "title": "New releases", "subtitle": "from artists you play",
             "context": None, "items": [{"kind": "release", "release_id": 9, "title": "Singularity", "artist": "Jon Hopkins",
                                         "detail": "Album · 4 May 2018", "reason": "artist you play", "url": "https://tidal.com/browse/album/1"}]}
+
+BY_ARTIST = {"key": "releases:artist", "kind": "releases", "section": "discover", "title": "From artists you play", "subtitle": "",
+             "context": None, "items": [
+                 {"kind": "release", "release_id": 21, "title": "Ritual", "artist": "Jon Hopkins", "detail": "EP · 24 Oct 2026",
+                  "why": "artist you play", "reason": "It sounds like Late night", "hues": [210.0], "others_count": 2,
+                  "others": [{"release_id": 22, "title": "Ritual (Remixes)", "detail": "Single", "url": None, "state": None}]},
+                 {"kind": "release", "release_id": 23, "title": "II", "artist": "Kiasmos", "detail": "Album", "why": "artist you play"}]}
 
 
 STATS = {"group": "label", "measure": "weighted", "granularity": "year", "start": "2022-01-01", "end": None, "filters": {},
@@ -98,7 +107,7 @@ HEALTH = {
 def env(tmp_path):
     ui = tmp_path / "ui"
     ui.mkdir()
-    for name in ("list", "chart", "story", "draft"):
+    for name in ("list", "chart", "story", "draft", "discover"):
         (ui / f"{name}.html").write_text(f"<html>{name}</html>")
     totp = pyotp.random_base32()
     config = Config(public_url=PUBLIC, api_url="http://api/api/v1", mcp_token="claude-token",
@@ -110,7 +119,9 @@ def env(tmp_path):
         calls.append(request)
         assert request.headers["authorization"] == "Bearer claude-token"
         if request.url.path == "/api/v1/lists":
-            return httpx.Response(200, json={"lists": [LIST, RELEASES]})
+            return httpx.Response(200, json={"lists": [LIST, RELEASES, BY_ARTIST]})
+        if request.url.path == "/api/v1/releases/summary":
+            return httpx.Response(200, json={"waiting": {"artist": 312, "label": 41}, "decided": 80, "decided_this_week": 12})
         if request.method == "GET" and request.url.path in ("/api/v1/mixes/ctx-7", "/api/v1/mixes/releases"):
             return httpx.Response(200, json=LIST if "ctx-7" in request.url.path else RELEASES)
         if request.url.path == "/api/v1/mixes/ctx-7/sync":
@@ -278,23 +289,32 @@ def test_tools_over_mcp(env):
 
     index = call_tool(client, token, "show_list", {})
     assert index["structuredContent"]["lists"][0] == {"key": "ctx-7", "title": "Late night", "subtitle": "slow and deep",
-                                                      "section": "lists", "kind": "mix", "family": "",
+                                                      "section": "lists", "kind": "mix", "family": "", "age": "now",
                                                       "sync": False, "tracks": 2, "count": "2 tracks", "novel": 0.5, "hue": 210.0,
-                                                      "hues": [210.0, None]}
+                                                      "recency": {"active": True, "recent_plays": 120, "lifetime_plays": 900,
+                                                                  "last_played": "2026-10-30T23:10:00Z", "era_start": "2018-03-01",
+                                                                  "era_end": "2024-06-01", "hours": [], "era": "2018–24"},
+                                                      "hues": [210.0, 210.0], "near": [False, True]}
     assert index["structuredContent"]["lists"][1]["count"] == "1 release"
+    assert [s["age"] for s in index["structuredContent"]["sections"]] == ["now", "discover"]
+    assert "**Playing now**" in index["content"][0]["text"]
+    assert "120 plays lately (900 in all), last 2026-10-30, era 2018–24" in index["content"][0]["text"]
 
     shown = call_tool(client, token, "show_list", {"key": "ctx-7"})
     text = shown["content"][0]["text"]
     assert "1. Burial – Archangel (#1): 140 BPM, 8A, energy 0.41, instrumental; Late night, verdict yes; you play it at night" in text
-    assert "2. Four Tet – Lush (#2): new to you, new artist" in text
+    assert "2. Four Tet – Lush (#2): sounds like Late night, new to you, new artist" in text
+    assert "Contexts: Late night 1 (+1 sounding like it)" in text
     assert "Mostly Burial, with Four Tet; 1 artist new to you." in text and "9 m" in text
     data = shown["structuredContent"]
-    assert (data["duration"], data["new"], data["contexts"]) == ("9 m", 1, [{"name": "Late night", "hue": 210.0, "tracks": 1}])
+    assert (data["duration"], data["new"], data["contexts"]) == ("9 m", 1, [{"name": "Late night", "hue": 210.0, "tracks": 1, "near": 1}])
+    assert data["recency"]["recent_plays"] == 120 and "120 plays lately (900 in all)" in text
     assert data["kept"] is False and data["can_keep"] is True
     assert shown["structuredContent"]["tracks"][0]["camelot"] == "8A"
     assert shown["structuredContent"]["tracks"][1]["bpm"] is None
     first = shown["structuredContent"]["tracks"][0]
     assert first["moods"] == [0.9, 0.1, 0.5, 0.5, 0.2, 0.7] and first["vocal"] is False and first["verdict"] == "yes"
+    assert (first["near"], data["tracks"][1]["near"], data["tracks"][1]["context"]) == (False, True, "Late night")
 
     releases = call_tool(client, token, "show_list", {"key": "releases"})
     assert "1. Jon Hopkins – Singularity (release)" in releases["content"][0]["text"]
@@ -377,6 +397,9 @@ def test_mix_tools_over_mcp(env):
     assert (sent["verdict"], sent["track"], sent["where"]) == ("yes", {"id": 1}, "draft:ab") and "client_id" in sent
     assert verdict["content"][0]["text"] == "Recorded yes for #1."
     assert call_tool(client, token, "queue_decision", {"release_id": 9, "state": "saved"})["isError"] is True
+    assert json.loads(calls[-1].content)["queue"][0]["state"] == "saved"
+    call_tool(client, token, "queue_decision", {"release_id": 9, "state": "new"})
+    assert json.loads(calls[-1].content)["queue"][0]["state"] == "new"
 
     radio = call_tool(client, token, "start_radio", {"track_id": 1})
     assert radio["structuredContent"]["key"] == "radio:1" and "TIDAL: https://tidal.com/browse/playlist/radio" in radio["content"][0]["text"]
@@ -398,3 +421,24 @@ def test_server_health_over_mcp(env):
     assert "Enrichment backlog: identity 1,204, clap 3." in text and "lookups not running" in text
     assert "lost to a worker stopping: 1; killed for memory: 1." in text
     assert health["structuredContent"]["catalogue"]["tracks"] == 61402
+
+
+def test_discover_over_mcp(env):
+    client, totp, calls = env
+    _, tokens = connect(client, totp)
+    token = tokens["access_token"]
+
+    tools = {t["name"]: t for t in call_tool(client, token, None, None)["tools"]}
+    assert tools["discover"]["_meta"]["ui"]["resourceUri"] == "ui://audio-brain/discover.html"
+    page = call_tool(client, token, "discover", {})
+    text, data = page["content"][0]["text"], page["structuredContent"]
+    assert "353 new releases waiting (312 from artists, 41 from labels); 12 decided this week." in text
+    assert "**Artists you play** (New · 312 waiting)" in text
+    assert "- Jon Hopkins – Ritual (release #21): EP · 24 Oct 2026; artist you play; sounds like Late night; +2 more from them" in text
+    assert [s["key"] for s in data["sections"]] == ["artist"] and data["total"] == 353
+    first = data["sections"][0]["items"][0]
+    assert first["others"][0]["release_id"] == 22 and first["hues"] == [210.0]
+
+    one = call_tool(client, token, "discover", {"section": "artist"})
+    assert one["structuredContent"]["view"] == "section" and len(one["structuredContent"]["sections"][0]["items"]) == 2
+    assert call_tool(client, token, "discover", {"section": "sets"})["isError"] is True

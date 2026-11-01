@@ -191,6 +191,7 @@ class ListAndSetTests(TestCase):
         items = decorate([{"kind": "track", "track_id": t.pk, "context_id": contexts[0].pk if t == member else None} for t in (member, unplayed, unanalysed)])
         hues = all_hues()
         self.assertEqual([(i["hue"], i["hue_near"]) for i in items], [(hues[contexts[0].pk], False), (hues[contexts[1].pk], True), (None, False)])
+        self.assertEqual(items[1]["near_context_name"], "House")
 
     def test_rename(self):
         response = self.post("/api/v1/mixes/explore:1/rename", {"title": "  Late night  "})

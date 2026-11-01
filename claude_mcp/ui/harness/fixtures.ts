@@ -1,26 +1,43 @@
 // Sample tool results, shaped like the server's structuredContent (claude_mcp/src/claude_mcp/server.py)
 const CONTEXT: Record<number, string> = { 250: "Late night", 200: "Ambient mornings", 160: "Edges", 10: "Running", 40: "Sunday kitchen" };
 const t = (track_id: number, artist: string, title: string, bpm: number | null, camelot: string | null, energy: number | null,
-           hue: number | null, moods: number[] | null, reason: string, extra: { novel?: boolean; verdict?: string; vocal?: boolean; newArtist?: boolean } = {}) =>
+           hue: number | null, moods: number[] | null, reason: string, extra: { novel?: boolean; verdict?: string; vocal?: boolean; newArtist?: boolean; near?: boolean } = {}) =>
   ({ track_id, artist, title, bpm, camelot, energy, hue, moods, reason, novel: !!extra.novel, verdict: extra.verdict ?? null, vocal: !!extra.vocal,
-     context: hue == null ? null : CONTEXT[hue] ?? null, artist_new: !!extra.newArtist });
+     context: hue == null ? null : CONTEXT[hue] ?? null, artist_new: !!extra.newArtist, near: !!extra.near });
 
 const strip = (...hues: (number | null)[]) => Array.from({ length: 30 }, (_, i) => hues[i % hues.length]);
-const row = (key: string, title: string, kind: string, family: string, hue: number | null, tracks: number, novel: number | null, hues: (number | null)[], sync = false, section = "lists", count = `${tracks} tracks`) =>
-  ({ key, title, subtitle: "", section, kind, family, sync, tracks, count, novel, hue, hues });
+const DAY = [0, 0, 0, 0, 0, 0, 1, 3, 5, 4, 3, 3, 4, 3, 2, 2, 3, 4, 6, 8, 10, 12, 9, 4];
+const ago = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+const recency = (recent: number, lifetime: number, last: number | null, era = "", active = true) =>
+  ({ active, recent_plays: recent, lifetime_plays: lifetime, last_played: last == null ? null : ago(last), era_start: null, era_end: null, hours: DAY, era });
+type Rec = ReturnType<typeof recency> | null;
+const row = (key: string, title: string, kind: string, age: string, hue: number | null, tracks: number, novel: number | null, hues: (number | null)[],
+             rec: Rec = null, sync = false, section = "lists", count = `${tracks} tracks`) =>
+  ({ key, title, subtitle: "", section, kind, family: "", sync, age, tracks, count, novel, hue, hues,
+     near: hues.map((_, i) => novel != null && i / hues.length < novel / 2), recency: rec });
 
 export const lists = {
   view: "index",
+  sections: [
+    { age: "yours", title: "Yours", about: "lists the user asked for, and artists they're exploring" },
+    { age: "now", title: "Playing now", about: "the contexts played most in the last 45 days" },
+    { age: "era", title: "From earlier eras", about: "big once, quiet lately" },
+    { age: "kept", title: "Kept as they were", about: "their context has retired; kept because they're in Tidal, no longer rebuilt" },
+    { age: "new", title: "New music", about: "tracks the user hasn't played" },
+    { age: "year", title: "Your years", about: "what they played most each year" },
+    { age: "discover", title: "Discover", about: "releases, sets and artists to try, as the app's Discover page has them" },
+  ],
   lists: [
-    row("radio:1", "Radio: Bonobo – Kerala", "radio", "", 200, 40, 0.3, strip(200, 205, 160, 200, 250)),
-    row("explore:quirky", "Something new and quirky", "explore", "", 160, 25, 0.6, strip(160, 250, 40, 160, null)),
-    row("context:12", "Late night (2019–2026)", "mix", "Downtempo", 250, 32, 0.1, strip(250, 245, 255, 160), true),
-    row("context:13", "Ambient mornings", "mix", "Downtempo", 230, 30, 0.2, strip(230, 250, 235)),
-    row("context:7", "Running: driving house", "mix", "House", 10, 40, 0.15, strip(10, 15, 5, 20), true),
-    row("context:8", "Dom Dolla and friends", "mix", "House", 20, 35, 0.25, strip(20, 10, 25)),
-    row("year:2019", "2019", "year", "", null, 50, 0, strip(300, 250, 10, 160, 40)),
-    row("rediscovery", "Rediscovery", "rediscovery", "", null, 30, 0, strip(250, 10, 40, 200)),
-    row("releases", "New releases", "releases", "", null, 0, null, [], false, "discover", "28 releases"),
+    row("radio:1", "Radio: Bonobo – Kerala", "radio", "yours", 200, 40, 0.3, strip(200, 205, 160, 200, 250)),
+    row("explore:quirky", "Something new and quirky", "explore", "yours", 160, 25, 0.6, strip(160, 250, 40, 160, null)),
+    row("context:12", "Late night (2019–2026)", "mix", "now", 250, 32, 0.1, strip(250, 245, 255, 160), recency(214, 3120, 0), true),
+    row("context:13", "Ambient mornings", "mix", "now", 230, 30, 0.2, strip(230, 250, 235), recency(96, 840, 2)),
+    row("context:7", "Running: driving house", "mix", "now", 10, 40, 0.15, strip(10, 15, 5, 20), recency(41, 1210, 6), true),
+    row("context:8", "Dom Dolla and friends", "mix", "era", 20, 35, 0.25, strip(20, 10, 25), recency(3, 960, 80, "2021–23")),
+    row("context:9", "Festival trance", "mix", "kept", 300, 28, 0.1, strip(300, 310), recency(0, 410, 400, "2018–20", false), true),
+    row("fresh", "Fresh for you", "fresh", "new", null, 30, 0.9, strip(250, 160, 10, 200)),
+    row("year:2019", "2019", "year", "year", null, 50, 0, strip(300, 250, 10, 160, 40)),
+    row("releases", "New releases", "releases", "discover", null, 0, null, [], null, false, "discover", "28 releases"),
   ],
 };
 
@@ -28,15 +45,15 @@ export const list = {
   view: "list", key: "explore:late", kind: "explore", section: "lists", title: "Late night, but new",
   subtitle: "Unfamiliar, but close to what you play late", count: "12 tracks", duration: "58 m", new: 8, novel: 0.67,
   artists: "Kiasmos, Rival Consoles and Ólafur Arnalds lead, with 6 artists new to you.", top_artists: ["Kiasmos", "Rival Consoles", "Ólafur Arnalds"],
-  energy: "Calm, with a lift in the middle.", hue: 250, kept: false, can_keep: true, tidal_url: null,
-  contexts: [{ name: "Late night", hue: 250, tracks: 6 }, { name: "Ambient mornings", hue: 200, tracks: 3 }, { name: "Edges", hue: 160, tracks: 2 }, { name: "Running", hue: 10, tracks: 1 }],
+  energy: "Calm, with a lift in the middle.", hue: 250, recency: recency(214, 3120, 0), kept: false, can_keep: true, tidal_url: null,
+  contexts: [{ name: "Late night", hue: 250, tracks: 4, near: 2 }, { name: "Ambient mornings", hue: 200, tracks: 3 }, { name: "Edges", hue: 160, tracks: 2 }, { name: "Running", hue: 10, tracks: 1 }],
   tracks: [
-    t(101, "Kiasmos", "Blurred EP", 118, "4A", 0.3, 250, [0.3, 0.2, 0.5, 0.1, 0.5, 0.8], "like Late night", { novel: true, newArtist: true }),
+    t(101, "Kiasmos", "Blurred EP", 118, "4A", 0.3, 250, [0.3, 0.2, 0.5, 0.1, 0.5, 0.8], "like Late night", { novel: true, newArtist: true, near: true }),
     t(102, "Rival Consoles", "Persona", 120, "4A", 0.42, 250, [0.2, 0.3, 0.6, 0.3, 0.5, 0.5], "same label as Jon Hopkins", { novel: true, newArtist: true }),
-    t(103, "Ólafur Arnalds", "saman", 68, "11A", 0.12, 200, [0.2, 0.05, 0.2, 0.05, 0.8, 0.9], "close to Nils Frahm", { novel: true }),
+    t(103, "Ólafur Arnalds", "saman", 68, "11A", 0.12, 200, [0.2, 0.05, 0.2, 0.05, 0.8, 0.9], "close to Nils Frahm", { novel: true, near: true }),
     t(104, "Jon Hopkins", "Open Eye Signal", 126, "4A", 0.72, 250, [0.3, 0.6, 0.7, 0.5, 0.3, 0.2], "you played it 6 times this week", { verdict: "yes" }),
     t(105, "Floating Points", "Nuits Sonores", 124, "5A", 0.68, 160, [0.5, 0.7, 0.8, 0.4, 0.2, 0.3], "the lift starts here", { novel: true, newArtist: true, vocal: true }),
-    t(106, "Bonobo", "Kerala", 122, "5A", 0.58, 10, [0.5, 0.6, 0.8, 0.2, 0.3, 0.4], "played 40 times, not lately", { vocal: true }),
+    t(106, "Bonobo", "Kerala", 122, "5A", 0.58, 10, [0.5, 0.6, 0.8, 0.2, 0.3, 0.4], "played 40 times, not lately", { vocal: true, verdict: "not_now" }),
     t(107, "Christian Löffler", "Lune", 121, "6A", 0.5, 160, [0.4, 0.4, 0.6, 0.2, 0.4, 0.6], "", { novel: true, newArtist: true, vocal: true }),
     t(108, "Nils Frahm", "Says", 116, "6A", 0.44, 250, [0.3, 0.3, 0.5, 0.2, 0.4, 0.7], "you play it most Sundays"),
     t(109, "Kiasmos", "Looped", 120, "7A", 0.35, 250, [0.3, 0.2, 0.5, 0.1, 0.4, 0.8], "like Late night", { novel: true }),
@@ -130,4 +147,35 @@ export const draft = {
   subtitle: "sounds like “warm, rolling”; instrumental; medium energy", understood: "sounds like “warm, rolling”; instrumental; medium energy",
   kept: false, request: { sound: "warm, rolling", vocals: "instrumental", energy: "medium", familiarity: "mixed", styles: [] },
   exploration: null, versions: 0, done: [],
+};
+
+// discover: the app's sections (claude_mcp/discover.py), with the evidence each row shows
+const rel = (release_id: number, artist: string, title: string, detail: string, why: string, hues: number[], reason = "", others: number = 0) =>
+  ({ kind: "release", release_id, artist, title, detail, why, hues, reason, url: `https://tidal.com/browse/album/${release_id}`,
+     others_count: others, others: Array.from({ length: Math.min(others, 3) }, (_, i) =>
+       ({ release_id: release_id * 10 + i, title: `${title} (Remixes ${i + 1})`, detail: `Single · ${12 + i} Sep 2026`, url: null, state: null })) });
+export const discover = {
+  view: "page", waiting: { artist: 312, remixer: 64, label: 41 }, total: 417, decided_this_week: 12,
+  sections: [
+    { key: "artist", tone: "new", title: "Artists you play", caption: "Their new releases, closest to your taste first", shown: 3, kicker: "New · 312 waiting", total: 312,
+      items: [
+        rel(901, "Jon Hopkins", "Ritual (Remixes)", "EP · 24 Oct 2026", "artist you play", [250, 250, 160, 250], "It sounds like Late night", 4),
+        rel(902, "Kiasmos", "II", "Album · 17 Oct 2026", "artist you play", [250, 200, 200, 250, 250, 200], "It sounds like Ambient mornings"),
+        rel(903, "Bonobo", "Kiara (Live)", "Single · 18 Oct 2026", "artist you play", [], ""),
+        rel(904, "Floating Points", "Cascade II", "Single · 10 Oct 2026", "artist you play", [160, 160], "It sounds like Edges"),
+        rel(905, "Rival Consoles", "Landscape from Memory", "Album · 3 Oct 2026", "artist you play", [250, 250, 250], "It sounds like Late night"),
+      ] },
+    { key: "label", tone: "new", title: "Labels you play", caption: "Releases on the labels behind your tracks", shown: 2, kicker: "New · 41 waiting", total: 41,
+      items: [rel(911, "Anz", "Night Swim", "EP · 11 Oct 2026", "on Ninja Tune", [10, 20, 10], "It sounds like Running"),
+              rel(912, "Hania Rani", "Ghosts (Reworks)", "EP · 2 Oct 2026", "on Gondwana", [200, 250], "It sounds like Ambient mornings")] },
+    { key: "artists", tone: "new", title: "Close to artists you love", caption: "Artists you haven't played, next to several you do", shown: 3, kicker: "New · 24 artists", total: 24,
+      items: [{ kind: "artist", title: "Lambert", close_to: ["Nils Frahm", "Ólafur Arnalds", "Hania Rani"], close_to_more: 2, url: null },
+               { kind: "artist", title: "Bicep", close_to: ["Floating Points", "Four Tet"], url: null }] },
+    { key: "past", tone: "era", title: "Back from your past", caption: "Tracks and artists you loved and let go", shown: 4, kicker: "Era · 30 tracks", total: 40,
+      items: [{ ...t(201, "Bonobo", "Cirrus", 125, "8A", 0.6, 10, [0.5, 0.6, 0.7, 0.2, 0.3, 0.4], ""), kind: "track", then: { plays: 140, peak: 38, peak_at: "2016-03", last_at: "2019-08" } },
+              { kind: "artist", title: "Ludovico Einaudi", plays: 3297, span: "2016–18", reason: "none since 2021",
+                years: { 2016: 1400, 2017: 1100, 2018: 600, 2019: 150, 2020: 40, 2021: 7 }, url: null }] },
+    { key: "sets", tone: "habit", title: "Long listens", caption: "Sets on channels you save from, by how much of the tracklist you play", shown: 3, kicker: "Habit · 8 sets", total: 8,
+      items: [{ kind: "set", title: "Boiler Room: Floating Points", artist: "Boiler Room", detail: "2 h 04 m", identified: 31, yours: 9, context: "Edges", url: null }] },
+  ],
 };

@@ -1,7 +1,9 @@
 // The draft editor: a mix Claude made, to shape by taps or by words. Inline it's the compact card every list gets
 // (MCP.md's style brief): the name, its size, the colour strip, who's in it, and Open in Tidal, Keep it and Play on
 // Sonos on one line, with Undo by the note once something's changed. Expanded it's the editor: steer chips (more
-// energy, calmer, fewer vocals, more new, darker) and every track, its sigil first, with lock, swap and remove. Each
+// energy, calmer, fewer vocals, more new, darker) in one row that scrolls sideways, and every track, its sigil first,
+// with lock, swap and remove; the head folds to the name, actions and chips once you scroll, to leave the tracks
+// room under Claude's message box. Each
 // tap calls refine_mix and tells Claude what changed (updateModelContext), so the conversation keeps up.
 import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
@@ -51,6 +53,7 @@ function Row({ track, busy, change }: { track: Track; busy: boolean; change: (op
   const ids = { track_ids: [track.track_id] };
   return (
     <li class={track.locked ? "row edit locked" : "row edit"}>
+      <i class={`verdict ${track.verdict ?? ""}`} />
       <Sigil track={track} size={32} />
       <span class="text"><span class="label">{track.title}</span><span class="caption">{why}</span></span>
       <span class="tools">
@@ -107,7 +110,7 @@ function Root() {
   const locked = draft.tracks.filter((t) => t.locked).length;
   const empty = !draft.tracks.length;
   const steer = (
-    <div class="chips-row" role="group" aria-label="Steer the mix">
+    <div class={full ? "chips-row scroll" : "chips-row"} role="group" aria-label="Steer the mix">
       {chips(draft).map((c) => (
         <button key={c.label} class={c.on ? "chip on" : "chip"} aria-pressed={!!c.on} disabled={busy}
                 onClick={() => !c.on && change(c.op)}>{c.on ? `✓ ${c.label}` : c.label}</button>
@@ -126,17 +129,15 @@ function Root() {
       <main class="full">
         <div class="bar"><span class="faint">audio-brain · draft</span><Close onClick={collapse} /></div>
         <header class="head">
-          <h1 class="big">{draft.title}</h1>
-          <p class="muted">{meta}{draft.energy ? `. ${draft.energy}` : ""}</p>
-          {draft.understood && <p class="caption">Read as: {draft.understood}</p>}
-          {!empty && <ColourStrip hues={draft.tracks.map((t) => t.hue)} tall />}
+          <h1 class="big one-line">{draft.title}</h1>
+          <p class="muted one-line">{meta}{draft.energy ? `. ${draft.energy}` : ""}</p>
+          {draft.understood && <p class="caption one-line fold">Read as: {draft.understood}</p>}
+          {!empty && <ColourStrip hues={draft.tracks.map((t) => t.hue)} near={draft.tracks.map((t) => !!t.near)} tall />}
+          <div class="actions">{tidalButton}{keepButton}{sonosButton}</div>
           {steer}
+          {status}
         </header>
         <div class="body"><ol class="rows">{draft.tracks.map((t) => <Row key={t.track_id} track={t} busy={busy} change={change} />)}</ol></div>
-        <footer class="foot">
-          <div class="actions stacked">{tidalButton}<div class="pair">{keepButton}{sonosButton}</div></div>
-          {status}
-        </footer>
       </main>
     );
   }
@@ -146,7 +147,7 @@ function Root() {
         <div class="name"><h1>{draft.title}</h1><p class="meta">{meta}</p></div>
         <Expand onClick={expand} />
       </div>
-      {!empty && <ColourStrip hues={draft.tracks.map((t) => t.hue)} />}
+      {!empty && <ColourStrip hues={draft.tracks.map((t) => t.hue)} near={draft.tracks.map((t) => !!t.near)} />}
       {draft.artists && <Artists text={draft.artists} names={draft.top_artists ?? []} />}
       <div class="actions">{tidalButton}{keepButton}{sonosButton}</div>
       {status}

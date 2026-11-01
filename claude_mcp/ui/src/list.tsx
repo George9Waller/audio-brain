@@ -1,36 +1,85 @@
-// The list component. Inline in the chat it's a short card: the list's name, size and how new it is, the colour strip
-// of its contexts, who's in it, and three actions (Open in Tidal, Keep it, Play on Sonos). Expanded to Claude's full
-// screen it's the whole list: the colour key, every track with its sigil and why it's there, and tabs for its sound
-// and the reasons. Claude gets every detail as text either way, so the card only shows what helps decide.
+// The list component. Inline in the chat it's a short card: the list's name and age tag, its size, how new it is and
+// how recently its context's been played, the colour strip of its contexts, who's in it, and three actions (Open in
+// Tidal, Keep it, Play on Sonos). Expanded to Claude's full screen it's the whole list: the colour key and the hours
+// it's played, every track with its sigil and why it's there, and tabs for its sound and the reasons; the head folds
+// to its name and actions once you scroll. With no key it's every list, in the app's Lists sections (ListAges.kt).
+// Claude gets every detail as text either way, so the card only shows what helps decide.
 import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { App, applyDocumentTheme, applyHostFonts, applyHostStyleVariables } from "@modelcontextprotocol/ext-apps";
 import type { McpUiDisplayMode, McpUiHostContext } from "@modelcontextprotocol/ext-apps";
 import "./style.css";
-import { Artists, ColourStrip, EnergyArc, KeyPath, Sigil, contextColor } from "./music";
+import { applyFrame } from "./frame";
+import { AgeTag, Artists, ColourStrip, EnergyArc, HourBars, KeyPath, ListSwatch, Sigil, contextColor } from "./music";
+import type { Tone } from "./music";
 
 export type Track = {
   track_id: number; artist: string; title: string; reason: string; novel: boolean; hue: number | null; verdict: string | null;
   bpm: number | null; camelot: string | null; energy: number | null; moods: number[] | null; vocal: boolean;
-  context: string | null; artist_new: boolean; locked?: boolean;
+  context: string | null; artist_new: boolean; locked?: boolean; near?: boolean;
 };
+/** How recently a list's context has been played (lists.context_recency); null for a list without one. */
+type Recency = {
+  active: boolean | null; recent_plays: number; lifetime_plays: number; last_played: string | null;
+  era_start: string | null; era_end: string | null; hours: number[]; era: string;
+} | null;
 type Other = { kind: string; title: string; artist: string; detail: string; reason: string; url: string | null; state: string | null };
 type ListRow = {
-  key: string; title: string; subtitle: string; section: string; kind: string; sync: boolean;
-  tracks: number; count: string; novel: number | null; hue: number | null; hues: (number | null)[];
+  key: string; title: string; subtitle: string; section: string; kind: string; sync: boolean; age: string;
+  tracks: number; count: string; novel: number | null; hue: number | null; hues: (number | null)[]; near: boolean[];
+  recency: Recency;
 };
-type Index = { view: "index"; lists: ListRow[] };
+type Index = { view: "index"; sections: { age: string; title: string; about: string }[]; lists: ListRow[] };
 type List = {
   view: "list"; key: string; kind: string; section: string; title: string; subtitle: string; count: string;
   duration: string | null; new: number; novel: number | null; artists: string | null; top_artists: string[];
-  energy: string | null; contexts: { name: string; hue: number | null; tracks: number }[]; hue: number | null;
+  energy: string | null; contexts: { name: string; hue: number | null; tracks: number; near?: number }[]; hue: number | null;
+  recency: Recency;
   kept: boolean; can_keep: boolean; tidal_url: string | null; tracks: Track[]; others: Other[];
 };
 type Data = Index | List;
 
-const INDEX_SHOWN = 6;
 const shortName = (name: string) => name.split(" (")[0];
 const pct = (share: number | null) => (share == null ? "" : `${Math.round(share * 100)}% new to you`);
+const count = (n: number) => n.toLocaleString("en-GB");
+
+/** Each section's line, as the app's Lists page says it (ListAges.kt); the server's `about` is worded for Claude. */
+const CAPTIONS: Record<string, string> = {
+  yours: "Lists you asked for, and artists you're exploring", now: "What you've played most in the last 45 days",
+  lately: "Played lately, just less", era: "Big for you once, quiet lately", kept: "Their context has retired; kept because they're in Tidal",
+  new: "Tracks you haven't played", habit: "What you replay, and what you've left behind", year: "What you played most each year",
+  discover: "Releases, sets and artists to try",
+};
+
+/** "today", "yesterday", "3 days ago", "2 weeks ago", "5 months ago", "2 years ago". */
+function ago(iso: string) {
+  const days = Math.floor((Date.now() - Date.parse(iso)) / 86_400_000);
+  if (days < 1) return "today";
+  if (days < 2) return "yesterday";
+  const [n, unit] = days < 14 ? [days, "day"] : days < 60 ? [Math.round(days / 7), "week"] : days < 365 ? [Math.round(days / 30), "month"] : [Math.round(days / 365), "year"];
+  return `${n} ${unit}${n === 1 ? "" : "s"} ago`;
+}
+
+/** The tag on a list's row in its section (ListAges.tag): none under Yours, Years and Discover, whose titles say it. */
+function tagOf(age: string, recency: Recency): { label: string; tone: Tone } | null {
+  if (age === "era") return { label: recency?.era || "Era", tone: "era" };
+  const tags: Record<string, [string, Tone]> = { now: ["Now", "now"], lately: ["Lately", "lately"], kept: ["Retired", "retired"], new: ["New", "new"], habit: ["Habit", "habit"] };
+  return tags[age] ? { label: tags[age][0], tone: tags[age][1] } : null;
+}
+
+/** How much a context's been played lately, as a list's row says it: "120 plays lately · last 2 days ago". */
+const lately = (r: NonNullable<Recency>) => `${count(r.recent_plays)} plays lately` + (r.last_played ? ` · last ${ago(r.last_played)}` : "");
+
+/** The line under a list's title in its section (ListAges.meta). */
+function rowMeta(row: ListRow) {
+  const base = [row.tracks ? `${row.tracks} tracks` : row.count, row.novel != null && row.tracks ? `${Math.round(row.novel * 100)}% new` : ""].filter(Boolean).join(" · ");
+  const r = row.recency;
+  if (!r) return base;
+  if (row.age === "now" || row.age === "lately") return lately(r);
+  if (row.age === "era") return `${count(r.lifetime_plays)} plays · ${count(r.recent_plays)} lately`;
+  if (row.age === "kept") return `Kept as it last was · ${base}`;
+  return base;
+}
 
 const app = new App({ name: "audio-brain list", version: "0.3.0" });
 let setData: (data: Data) => void = () => {};
@@ -41,6 +90,7 @@ function applyContext(context: McpUiHostContext | undefined) {
   if (context?.theme) applyDocumentTheme(context.theme);
   if (context?.styles?.variables) applyHostStyleVariables(context.styles.variables);
   if (context?.styles?.css?.fonts) applyHostFonts(context.styles.css.fonts);
+  applyFrame({ ...app.getHostContext(), ...context });
   if (context?.displayMode) setMode(context.displayMode);
 }
 
@@ -66,28 +116,39 @@ function Expand({ onClick }: { onClick: () => void }) {
 type Act = { busy: boolean; kept: boolean; note: string; tidal: () => void; keep: () => void; sonos: () => void };
 
 /** Open in Tidal first, then Keep it, then Play on Sonos: the order they matter in. */
-function Actions({ list, act, stacked }: { list: List; act: Act; stacked?: boolean }) {
+function Actions({ list, act }: { list: List; act: Act }) {
   if (!list.tracks.length) return null;
   const keep = list.can_keep && (
     <button class="secondary" disabled={act.busy || act.kept} onClick={act.keep}>{act.kept ? "Kept ✓" : "Keep it"}</button>
   );
   const sonos = <button class="tertiary" disabled={act.busy} onClick={act.sonos}>Play on Sonos</button>;
   const tidal = <button class="primary" disabled={act.busy} onClick={act.tidal}>Open in Tidal ↗</button>;
-  return stacked
-    ? <div class="actions stacked">{tidal}<div class="pair">{keep}{sonos}</div></div>
-    : <div class="actions">{tidal}{keep}{sonos}</div>;
+  return <div class="actions">{tidal}{keep}{sonos}</div>;
+}
+
+/** A single list's recency line, and its tag when its context has retired (a list alone can't tell Now from Lately). */
+function recencyOf(list: List) {
+  const r = list.recency;
+  if (!r) return { line: "", tag: null };
+  if (r.active === false) return { line: "Kept as it last was; no longer rebuilt", tag: { label: "Retired", tone: "retired" as Tone } };
+  return { line: lately(r), tag: null };
 }
 
 function ListCard({ list, act, expand, back }: { list: List; act: Act; expand: () => void; back: (() => void) | null }) {
   const meta = [list.count, list.duration, list.tracks.length ? pct(list.novel) : ""].filter(Boolean).join(" · ");
+  const { line, tag } = recencyOf(list);
   return (
     <main class="card">
       {back && <button class="back" onClick={back}>‹ Your lists</button>}
       <div class="top">
-        <div class="name"><h1>{list.title}</h1><p class="meta">{meta}</p></div>
+        <div class="name">
+          <div class="title-line"><h1>{list.title}</h1>{tag && <AgeTag {...tag} />}</div>
+          <p class="meta">{meta}</p>
+          {line && <p class="meta mono">{line}</p>}
+        </div>
         <Expand onClick={expand} />
       </div>
-      {list.tracks.length > 0 && <ColourStrip hues={list.tracks.map((t) => t.hue)} />}
+      {list.tracks.length > 0 && <ColourStrip hues={list.tracks.map((t) => t.hue)} near={list.tracks.map((t) => !!t.near)} />}
       {list.artists && <Artists text={list.artists} names={list.top_artists} />}
       <Actions list={list} act={act} />
       {act.note && <p class="note">{act.note}</p>}
@@ -99,6 +160,7 @@ function TrackRow({ track }: { track: Track }) {
   const why = [track.artist, track.artist_new ? "new artist" : track.novel ? "new" : "", track.reason].filter(Boolean).join(" · ");
   return (
     <li class="row">
+      <i class={`verdict ${track.verdict ?? ""}`} aria-label={track.verdict ? `Verdict: ${track.verdict.replace("_", " ")}` : undefined} />
       <Sigil track={track} size={32} />
       <span class="text"><span class="label">{track.title}</span><span class="caption">{why}</span></span>
     </li>
@@ -122,6 +184,10 @@ function Sound({ list }: { list: List }) {
   const vocal = list.tracks.filter((t) => t.vocal).length;
   return (
     <div class="sound">
+      {list.recency?.hours?.length === 24 && (
+        <figure class="day"><HourBars hours={list.recency.hours} hue={list.hue} label="When in the day its context is played" />
+          <figcaption>When in the day you play it; the hour now in the text colour</figcaption></figure>
+      )}
       {energies.length > 2 && <figure><EnergyArc energies={energies} /><figcaption>Energy, in play order{list.energy ? `: ${list.energy.toLowerCase()}` : ""}</figcaption></figure>}
       {keys.length > 2 && <figure><KeyPath keys={keys} /><figcaption>Keys, in Camelot; clashes in red</figcaption></figure>}
       <dl>
@@ -149,7 +215,8 @@ function ListFull({ list, act, collapse }: { list: List; act: Act; collapse: () 
   const [tab, setTab] = useState<"tracks" | "sound" | "why">("tracks");
   const summary = [list.count, list.duration, list.tracks.length ? `${list.new} new to you` : ""].filter(Boolean).join(" · ");
   const shown = list.contexts.slice(0, 4);
-  const other = list.contexts.slice(4).reduce((n, c) => n + c.tracks, 0);
+  const other = list.contexts.slice(4).reduce((n, c) => n + c.tracks + (c.near ?? 0), 0);
+  const { line, tag } = recencyOf(list);
   return (
     <main class="full">
       <div class="bar"><span class="faint">audio-brain</span>
@@ -158,16 +225,26 @@ function ListFull({ list, act, collapse }: { list: List; act: Act; collapse: () 
         </button>
       </div>
       <header class="head">
-        <h1 class="big">{list.title}</h1>
-        <p class="muted">{summary}{list.energy ? `. ${list.energy}` : ""}</p>
-        {list.artists && <Artists text={list.artists} names={list.top_artists} />}
-        {list.tracks.length > 0 && <ColourStrip hues={list.tracks.map((t) => t.hue)} tall />}
-        {shown.length > 0 && (
-          <ul class="legend">
-            {shown.map((c) => <li key={c.name}><span class="dot" style={{ background: contextColor(c.hue) }} />{c.name} {c.tracks}</li>)}
-            {other > 0 && <li><span class="dot" style={{ background: contextColor(null) }} />Other {other}</li>}
-          </ul>
-        )}
+        <div class="title-line"><h1 class="big">{list.title}</h1>{tag && <AgeTag {...tag} />}</div>
+        <p class="muted one-line">{summary}{list.energy ? `. ${list.energy}` : ""}</p>
+        <div class="fold">
+          {line && <p class="meta mono">{line}</p>}
+          {list.artists && <Artists text={list.artists} names={list.top_artists} />}
+        </div>
+        {list.tracks.length > 0 && <ColourStrip hues={list.tracks.map((t) => t.hue)} near={list.tracks.map((t) => !!t.near)} tall />}
+        <div class="fold">
+          {shown.length > 0 && (
+            <ul class="legend">
+              {shown.map((c) => (
+                <li key={c.name}><span class="dot" style={{ background: contextColor(c.hue) }} />{c.name} {c.tracks}
+                  {c.near ? <span class="faint"> · {c.near} sound like it</span> : null}</li>
+              ))}
+              {other > 0 && <li><span class="dot" style={{ background: contextColor(null) }} />Other {other}</li>}
+            </ul>
+          )}
+        </div>
+        {list.tracks.length > 0 && <Actions list={list} act={act} />}
+        {act.note && <p class="note">{act.note}</p>}
         {list.tracks.length > 0 && (
           <div class="tabs" role="tablist" aria-label="View">
             {(["tracks", "sound", "why"] as const).map((t) => (
@@ -183,29 +260,43 @@ function ListFull({ list, act, collapse }: { list: List; act: Act; collapse: () 
         {tab === "sound" && <Sound list={list} />}
         {tab === "why" && <Why list={list} />}
       </div>
-      {list.tracks.length > 0 && <footer class="foot"><Actions list={list} act={act} stacked />{act.note && <p class="note">{act.note}</p>}</footer>}
     </main>
   );
 }
 
-function IndexCard({ data, busy, open, full }: { data: Index; busy: boolean; open: (key: string) => void; full: boolean }) {
-  const [all, setAll] = useState(full);
-  const lists = all ? data.lists : data.lists.slice(0, INDEX_SHOWN);
+function IndexRow({ row, busy, open }: { row: ListRow; busy: boolean; open: (key: string) => void }) {
+  const tag = tagOf(row.age, row.recency);
   return (
-    <main class={full ? "full pad" : "card"}>
-      <div class="top"><div class="name"><h1>Your lists</h1><p class="meta">{data.lists.length} lists · tap one to open it</p></div></div>
-      <ul class="lists">
-        {lists.map((l) => (
-          <li key={l.key}>
-            <button class="list" disabled={busy} onClick={() => open(l.key)}>
-              <span class="line"><span class="label">{shortName(l.title)}</span>
-                <span class="faint small">{l.tracks ? [`${l.tracks}`, l.novel != null ? `${Math.round(l.novel * 100)}% new` : ""].filter(Boolean).join(" · ") : l.count}</span></span>
-              {l.hues.length > 0 && <ColourStrip hues={l.hues} />}
-            </button>
-          </li>
-        ))}
-      </ul>
-      {!all && data.lists.length > INDEX_SHOWN && <button class="more" onClick={() => setAll(true)}>Show all {data.lists.length}</button>}
+    <li>
+      <button class="list-row" disabled={busy} onClick={() => open(row.key)}>
+        <ListSwatch hues={row.hues} near={row.near ?? []} />
+        <span class="text"><span class="heading">{shortName(row.title)}</span><span class="meta mono">{rowMeta(row)}</span></span>
+        {tag && <AgeTag {...tag} />}
+        <span class={row.sync ? "sync on" : "sync"} aria-label={row.sync ? "In Tidal" : "Not in Tidal"} />
+      </button>
+    </li>
+  );
+}
+
+/** Every list in the app's sections. Inline, only Playing now (else the first section), as a summary, and a way to
+ * see the rest in full screen, where every section is, in the app's order. */
+function IndexCard({ data, busy, open, full, expand }: { data: Index; busy: boolean; open: (key: string) => void; full: boolean; expand: () => void }) {
+  const sections = data.sections ?? [{ age: "", title: "Your lists", about: "" }];
+  const rows = (age: string) => data.lists.filter((l) => !age || l.age === age);
+  const section = (s: { age: string; title: string; about: string }) => (
+    <section key={s.age} class="section">
+      <header class="section-head"><h2>{s.title}</h2>{CAPTIONS[s.age] && <p class="caption">{CAPTIONS[s.age]}</p>}</header>
+      <ul class="lists">{rows(s.age).map((r) => <IndexRow key={r.key} row={r} busy={busy} open={open} />)}</ul>
+    </section>
+  );
+  const top = <div class="top"><div class="name"><h1>Your lists</h1><p class="meta">{data.lists.length} lists</p></div>{!full && <Expand onClick={expand} />}</div>;
+  if (full) return <main class="full"><header class="head">{top}</header><div class="body">{sections.map(section)}</div></main>;
+  const first = sections.find((s) => s.age === "now") ?? sections[0];
+  return (
+    <main class="card">
+      {top}
+      {first && section(first)}
+      {data.lists.length > rows(first?.age ?? "").length && <button class="more" onClick={expand}>All {data.lists.length} lists, in sections</button>}
     </main>
   );
 }
@@ -218,7 +309,13 @@ function Root() {
   const [busy, setBusy] = useState(false);
   const [kept, setKept] = useState(false);
   const [note, setNote] = useState("");
-  useEffect(() => { setData = set; setMode = setModeState; }, []);
+  useEffect(() => {
+    setData = set; setMode = setModeState;
+    // whatever the host said before this ran: the mode, as well as the result (pending)
+    const shown = app.getHostContext()?.displayMode;
+    if (shown) setModeState(shown);
+    if (pending) set(pending);
+  }, []);
   useEffect(() => { setKept(data?.view === "list" && data.kept); setNote(""); }, [data]);
 
   const full = mode === "fullscreen" || local;
@@ -245,7 +342,7 @@ function Root() {
   });
 
   if (!data) return <p class="note pad">Fetching your lists…</p>;
-  if (data.view === "index") return <IndexCard data={data} busy={busy} open={open} full={full} />;
+  if (data.view === "index") return <IndexCard data={data} busy={busy} open={open} full={full} expand={expand} />;
 
   const list = data;
   const act: Act = {
