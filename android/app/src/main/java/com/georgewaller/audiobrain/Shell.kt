@@ -122,7 +122,7 @@ sealed interface Overlay {
  * for lists and asking, and the Building and Draft screens while a mix is being made.
  */
 @Composable
-fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit, shared: String? = null, onShareHandled: () -> Unit = {}, openList: String? = null, onListOpened: () -> Unit = {}) {
+fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit, shared: String? = null, onShareHandled: () -> Unit = {}, openList: String? = null, onListOpened: () -> Unit = {}, openJobs: Boolean = false, onJobsOpened: () -> Unit = {}) {
     val context = LocalContext.current
     val vm: AppViewModel = viewModel { AppViewModel(graph, context.applicationContext) }
     val jobs: JobsViewModel = viewModel { JobsViewModel(graph) }
@@ -146,6 +146,7 @@ fun Shell(graph: DataGraph, openSettings: Boolean, onSettingsOpened: () -> Unit,
     // text or a link shared from another app (a tracklist page, a video, a friend's message) opens as a tracklist
     LaunchedEffect(shared) { if (shared != null) { openTracklist(Overlay.Tracklist(prefill = shared)); onShareHandled() } }
     LaunchedEffect(openList) { if (openList != null) { overlays.removeAll { it is Overlay.List }; overlays.add(Overlay.List(openList)); onListOpened() } }
+    LaunchedEffect(openJobs) { if (openJobs) { overlays.remove(Overlay.Jobs); overlays.add(Overlay.Jobs); onJobsOpened() } }
     LaunchedEffect(Unit) {
         vm.events.collect { e ->
             when (e) {

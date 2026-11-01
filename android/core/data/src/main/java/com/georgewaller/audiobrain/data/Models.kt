@@ -10,7 +10,16 @@ import java.time.OffsetDateTime
 fun instant(iso: String?): Instant? = iso?.let { runCatching { OffsetDateTime.parse(it).toInstant() }.getOrNull() }
 
 @Serializable
-data class Health(val ok: Boolean, @SerialName("server_time") val serverTime: String, @SerialName("worker_alive") val workerAlive: Boolean)
+data class Health(
+    val ok: Boolean,
+    @SerialName("server_time") val serverTime: String,
+    @SerialName("worker_alive") val workerAlive: Boolean,
+    val warnings: List<ServerWarning> = emptyList(),
+)
+
+/** Models out of date, a scheduled job that failed, a lane without a worker. [key] stays the same while it lasts. */
+@Serializable
+data class ServerWarning(val key: String, val text: String)
 
 // Jobs
 

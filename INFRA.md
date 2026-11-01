@@ -411,6 +411,25 @@ How the new node is kept for the heavy work:
   - A warning when models are more than 36 hours old, or a nightly job failed: in the app's Jobs screen, and as a
     push through the existing notification path if there is one (check `android/`). Otherwise just the screen.
 - *Done when:* the MCP tool answers "how is the server doing" with the table from the top of this file.
+- *Built 1 Nov:*
+  - `GET /health/detail` (`api/health.py`) gives the last 7 local nights as a table of the nightly jobs (enrichment,
+    models, mixes, candidates). Each run shows its state, duration, failed steps and biggest step peak, and a failed
+    run's cause: "worker died", "killed for memory", or the error's last line. It also gives each scheduled job's
+    last 7 runs, the models' age, the backlog per stage, the catalogue and every database's size, each lane's last
+    start, and the runs lost to deaths in the week.
+  - The backlog counts the stages' own queues (`enrichment.stages.waiting`, `artist_tags.untagged`,
+    `audio.unembedded`), so it can't drift from what enrichment does; about 0.3 s.
+  - `warnings`, also on plain `/health`, each with a stable `key`:
+    - the models are more than 36 h old;
+    - a scheduled job's latest finished run failed: one fixed by I4's retry doesn't warn, and a job run every few
+      minutes needs three failures in a row;
+    - a lane has no worker.
+  - The MCP's `server_health` tool (`claude_mcp/health.py`) shows the warnings, the nights table, the peaks of the
+    latest night, the backlog, the sizes and the workers.
+  - The app shows the warnings on the Jobs screen. It has no push path, so a WorkManager job checks `/health` hourly
+    and notifies once per new warning key; tapping opens Jobs. Settings has a "Server alerts" switch.
+  - Not covered: Kubernetes restart counts (the API has no cluster access; deaths are counted from the runs), and
+    peaks against each pod's limit.
 
 **I10. Off-box backups (part you).**
 - *Why:* backups sit on the same node as the database. The off-box copy is a manual `kubectl cp` to the Mac. After
@@ -513,7 +532,7 @@ Checked 28 Oct with `kubectl` from the Mac. Both nodes run k3s v1.36.5. Updated 
   identity finishes in minutes)
 - [ ] I7 Discogs dumps
 - [ ] I8 Scheduled backtests
-- [ ] I9 Health view and MCP tool
+- [x] I9 Health view and MCP tool (1 Nov; the app's alerts need a release)
 - [ ] I10 Off-box backups
 - [ ] I11 More from the faster pipeline
 - [ ] I12 Tailscale operator, so the tailnet doesn't depend on the old node

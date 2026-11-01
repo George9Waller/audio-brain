@@ -6,6 +6,7 @@ import com.georgewaller.audiobrain.data.ApiException
 import com.georgewaller.audiobrain.data.DataGraph
 import com.georgewaller.audiobrain.data.JobsResponse
 import com.georgewaller.audiobrain.data.RunDetail
+import com.georgewaller.audiobrain.data.ServerWarning
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,6 +25,7 @@ class JobsViewModel(private val graph: DataGraph) : ViewModel() {
         val detail: RunDetail? = null,        // the expanded job's active or latest run
         val starting: Set<String> = emptySet(),
         val options: Map<String, Map<String, Boolean>> = emptyMap(),
+        val warnings: List<ServerWarning> = emptyList(),  // from /health: failed jobs, stale models
     )
 
     private val _state = MutableStateFlow(State())
@@ -43,6 +45,7 @@ class JobsViewModel(private val graph: DataGraph) : ViewModel() {
         try {
             val jobs = graph.jobs.list()
             _state.update { it.copy(jobs = jobs, error = null, loading = false) }
+            runCatching { graph.jobs.warnings() }.onSuccess { w -> _state.update { it.copy(warnings = w) } }
             loadDetail()
         } catch (e: ApiException) {
             _state.update { it.copy(error = e.message, loading = false) }

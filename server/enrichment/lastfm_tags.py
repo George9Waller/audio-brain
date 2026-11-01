@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def tag_tracks(limit=None):
-    run(STAGE, tag_track, LastFMClient(), limit, after="identity")
+    run(STAGE, tag_track, LastFMClient(), limit)
 
 
 def tag_track(client, track):

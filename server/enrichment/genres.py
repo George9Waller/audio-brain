@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def tag_genres(limit=None):
-    run(STAGE, tag_track, DiscogsClient(), limit, after="identity")
+    run(STAGE, tag_track, DiscogsClient(), limit)
 
 
 def tag_track(client, track):

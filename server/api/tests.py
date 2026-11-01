@@ -1,6 +1,6 @@
 import uuid
 from unittest import mock
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from django.test import TestCase, override_settings
@@ -603,3 +603,64 @@ class LibraryTests(TestCase):
         # and from now on MusicBrainz's Becky Hill is her own row, which takes the MBID the collaboration held
         self.assertEqual(artist_for({"id": "becky-mbid", "name": "Becky Hill"}), self.artist)
         self.assertEqual(Artist.objects.get(pk=self.artist.pk).mbid, "becky-mbid")
+
+
+@override_settings(API_TOKEN="secret", LISTENING_TIME_ZONE="Europe/London")
+class HealthTests(TestCase):
+    headers = {"Authorization": "Bearer secret"}
+
+    def run_of(self, job, state, hours_ago, minutes=40, error="", **options):
+        from django.utils import timezone
+        started = timezone.now() - timedelta(hours=hours_ago)
+        return JobRun.objects.create(job=job, state=state, trigger=JobRun.SCHEDULE, options=options, started_at=started,
+                                     finished_at=started + timedelta(minutes=minutes), error=error,
+                                     steps=[{"name": "Taste vectors", "state": "failed" if state == JobRun.FAILED else "ok", "peak_mb": 2900},
+                                            {"name": "Map layout", "state": "ok", "peak_mb": 1200}])
+
+    def job_warnings(self):
+        from api.health import warnings
+        return [w["text"] for w in warnings() if not w["key"].startswith("lane:")]
+
+    def test_a_death_then_a_good_retry_warns_of_nothing_but_shows_in_the_nights(self):
+        from jobs.runner import STOPPED
+        died = self.run_of("models", JobRun.FAILED, 5, error=f"{STOPPED}; queued again as run 9")
+        self.run_of("models", JobRun.SUCCEEDED, 4, retry_of=died.pk)
+        self.assertEqual(self.job_warnings(), [])
+        body = self.client.get("/api/v1/health/detail", headers=self.headers).json()
+        cells = [cell for night in body["nights"] for cell in night["runs"]["models"]]
+        self.assertEqual([(c["cause"], c["retry"]) for c in cells], [("worker died", False), (None, True)])
+        self.assertEqual((cells[0]["peak_mb"], cells[0]["peak_step"], cells[0]["failed_steps"]), (2900, "Taste vectors", ["Taste vectors"]))
+        self.assertEqual(len(body["nights"]), 7)
+        self.assertEqual(body["deaths"], {"worker_died": 1, "killed_for_memory": 0})
+        self.assertTrue(any(d["name"] for d in body["databases"]))
+
+    def test_stale_models_and_a_kill_for_memory_warn(self):
+        self.run_of("models", JobRun.SUCCEEDED, 60)
+        self.run_of("models", JobRun.FAILED, 37, error="The job's process stopped (killed by SIGKILL, likely for memory) while this was running")
+        found = self.job_warnings()
+        self.assertIn("Models last rebuilt 59 h ago", found)
+        self.assertTrue(any(w.startswith("Models failed at") and w.endswith(": killed for memory") for w in found))
+        shown = self.client.get("/api/v1/health", headers=self.headers).json()["warnings"]
+        self.assertIn({"key": "models_stale", "text": "Models last rebuilt 59 h ago"}, shown)
+        self.assertIn({"key": "lane:main", "text": "The main worker isn't running"}, shown)
+
+    def test_a_job_run_every_few_minutes_warns_only_after_three_failures(self):
+        self.run_of("models", JobRun.SUCCEEDED, 1)
+        for _ in range(2):
+            self.run_of("lastfm", JobRun.FAILED, 1, error="Traceback\nConnectionError: no route")
+        self.assertEqual(self.job_warnings(), [])
+        self.run_of("lastfm", JobRun.FAILED, 1, error="Traceback\nConnectionError: no route")
+        self.assertEqual(len(self.job_warnings()), 1)
+        self.assertTrue(self.job_warnings()[0].endswith(": ConnectionError: no route"))
+
+    def test_backlog_counts_what_the_stages_would_do(self):
+        from api.health import backlog
+        from enrichment.models import EnrichmentAttempt
+        from enrichment.stages import pending, record
+        tracks = [Track.objects.create(name=f"T{n}", artist=Artist.objects.create(name=f"A{n}")) for n in range(3)]
+        record(tracks[0], "identity", EnrichmentAttempt.OK)
+        counts = backlog()
+        self.assertEqual(counts["identity"], 2)
+        self.assertEqual(counts["tidal"], 1)  # only what identity has finished with
+        self.assertEqual(counts["tidal"], pending("tidal").count())
+        self.assertEqual(counts["artist_tags"], 3)

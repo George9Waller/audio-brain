@@ -20,6 +20,7 @@ class MainActivity : ComponentActivity() {
     private var openSettings by mutableStateOf(false)
     private var shared by mutableStateOf<String?>(null)
     private var openList by mutableStateOf<String?>(null)
+    private var openJobs by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(SystemBarStyle.dark(android.graphics.Color.TRANSPARENT), SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
@@ -27,7 +28,7 @@ class MainActivity : ComponentActivity() {
         handle(intent)
         setContent {
             AbTheme {
-                Shell(dataGraph, openSettings, onSettingsOpened = { openSettings = false }, shared = shared, onShareHandled = { shared = null }, openList = openList, onListOpened = { openList = null })
+                Shell(dataGraph, openSettings, onSettingsOpened = { openSettings = false }, shared = shared, onShareHandled = { shared = null }, openList = openList, onListOpened = { openList = null }, openJobs = openJobs, onJobsOpened = { openJobs = false })
             }
         }
     }
@@ -46,6 +47,7 @@ class MainActivity : ComponentActivity() {
     /** audiobrain://connect?url=…&token=… (printed by `manage.py api_token`): save the connection and show Settings. */
     private fun handle(intent: Intent?) {
         intent?.getStringExtra(EXTRA_LIST)?.let { openList = it; return }  // a list tapped on the widget
+        if (intent?.getBooleanExtra(EXTRA_JOBS, false) == true) { openJobs = true; return }  // a server alert tapped
         if (intent?.action == Intent.ACTION_SEND) {  // shared text or a link: a tracklist (sets.provided on the server)
             val text = listOfNotNull(intent.getStringExtra(Intent.EXTRA_SUBJECT), intent.getStringExtra(Intent.EXTRA_TEXT)).joinToString("\n").trim()
             if (text.isNotBlank()) shared = text
@@ -60,5 +62,6 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_LIST = "list"
+        const val EXTRA_JOBS = "jobs"
     }
 }

@@ -16,6 +16,8 @@ class AudioBrainApp : Application(), DataGraphOwner {
     override fun onCreate() {
         super.onCreate()
         FeedbackNotifier.ensureChannel(this)
+        ServerAlerts.ensureChannel(this)
+        ServerAlerts.schedule(this)
         SyncScheduler.schedulePeriodic(this)
         SyncScheduler.requestNow(this) // anything left from last time
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
