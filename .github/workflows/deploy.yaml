@@ -4,6 +4,7 @@ name: Deploy to argocd
 # helm/values.yaml at them; Argo CD syncs from there. All go in the ECR repository audio-brain, with postgres- and
 # mcp- prefixes for those images. Needs that repository and this repo in GHActionsECRRole's trust policy. The tag
 # commit is pushed with the built-in GITHUB_TOKEN; its pushes start no workflows, and Argo CD reads the change from git.
+# Changes to this workflow rebuild all three images, including images whose deployed ECR tags have been removed.
 
 on:
   push:

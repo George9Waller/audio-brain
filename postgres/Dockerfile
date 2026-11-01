@@ -3,6 +3,7 @@ FROM pgvector/pgvector:pg18
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends tini \
+    && tini --version \
     && rm -rf /var/lib/apt/lists/*
 
 ENTRYPOINT ["tini", "--", "/usr/local/bin/docker-entrypoint.sh"]

@@ -19,9 +19,11 @@ spec:
         spec:
           restartPolicy: OnFailure
           {{- include "audio-brain.placement" (dict "root" . "node" .Values.backup.node) | nindent 10 }}
+          imagePullSecrets:
+            {{- toYaml .Values.imagePullSecrets | nindent 12 }}
           containers:
             - name: pg-dump
-              image: {{ .Values.postgresql.image }}  # the same Postgres version as the server
+              image: {{ .Values.backup.image }}
               command:
                 - sh
                 - -c

@@ -229,6 +229,7 @@ musicbrainz:
 
 backup:
   enabled: true
+  image: postgres:18  # pg_dump must be at least as new as the PostgreSQL server
   schedule: "15 0 * * *"  # before the nightly jobs (enrichment 01:00, models 03:00)
   keepDays: 7
   # on the small node, so the dumps are on a different machine from the database. local-path doesn't enforce the
