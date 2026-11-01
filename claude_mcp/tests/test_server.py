@@ -77,7 +77,18 @@ ROUTES = {
     "/api/v1/query": lambda r: {"columns": ["n"], "rows": [[1], [2]], "truncated": True, "ms": 4},
     "/api/v1/schema": lambda r: {"text": "# guide " + r.url.params.get("tables", "")},
     "/api/v1/health/detail": lambda r: HEALTH,
+    "/api/v1/library/sets": lambda r: [SET_ROW],
+    "/api/v1/sets/tracklist": lambda r: {**TRACKLIST, "via": "1001tracklists", "tracklist_url": "https://www.1001tracklists.com/tracklist/abc/"},
+    "/api/v1/sets/9/tracklist": lambda r: TRACKLIST,
+    "/api/v1/sets/9/tracklist/2": lambda r: TRACKLIST,
 }
+
+SET_ROW = {"id": 9, "title": "Boiler Room London", "by": "Ben UFO", "source": "saved", "minutes": 120, "published": None,
+           "entries": 2, "in_catalogue": 1, "url": "https://www.youtube.com/watch?v=xyz"}
+TRACKLIST = {"set": SET_ROW, "list_key": "set-9", "via": "", "tracklist_url": "",
+             "summary": {"known": 2, "matched": 1, "playable": 1, "rate": 0.5, "pending": 0, "counts": {"matched": 1, "unmatched": 1}},
+             "lines": [{"position": 1, "cue": "001", "artist": "Burial", "title": "Archangel", "label": "", "match": "matched", "track": {"track_id": 1}},
+                       {"position": 2, "cue": "", "artist": "ID", "title": "ID", "label": "", "match": "unmatched", "track": None}]}
 
 RUN = {"id": 747, "state": "succeeded", "trigger": "schedule", "retry": False, "started_at": "2026-10-28T03:00:00Z",
        "finished_at": "2026-10-28T03:48:00Z", "seconds": 2880, "failed_steps": [], "peak_mb": 2900, "peak_step": "Taste vectors", "cause": None}
@@ -442,3 +453,26 @@ def test_discover_over_mcp(env):
     one = call_tool(client, token, "discover", {"section": "artist"})
     assert one["structuredContent"]["view"] == "section" and len(one["structuredContent"]["sections"][0]["items"]) == 2
     assert call_tool(client, token, "discover", {"section": "sets"})["isError"] is True
+
+
+def test_tracklist_tools_over_mcp(env):
+    client, totp, calls = env
+    token = connect(client, totp)[1]["access_token"]
+    found = call_tool(client, token, "find_sets", {"query": "ben ufo"})
+    text = found["content"][0]["text"]
+    assert "**Boiler Room London** by Ben UFO (set 9; 1 of 2 lines matched)" in text
+    assert "site%3A1001tracklists.com+Ben+UFO+Boiler+Room+London" in text and "mixesdb.com/w/index.php?search=" in text
+    assert calls[-1].url.params["q"] == "ben ufo"
+
+    shown = call_tool(client, token, "tracklist", {"set_id": 9})["content"][0]["text"]
+    assert "1. 001 Burial – Archangel [matched] → #1" in shown and "2. ID – ID [unmatched]" in shown
+    assert "1 of 2 known lines matched (50%)" in shown and "key `set-9`" in shown
+
+    added = call_tool(client, token, "tracklist", {"set_id": 9, "url": "https://www.1001tracklists.com/tracklist/abc/"})
+    assert "[tracklist](https://www.1001tracklists.com/tracklist/abc/)" in added["content"][0]["text"]
+    assert "find on 1001Tracklists" not in added["content"][0]["text"]  # it is the 1001Tracklists page
+    assert json.loads(calls[-1].content)["set_id"] == 9
+
+    call_tool(client, token, "tracklist", {"set_id": 9, "position": 2, "is_id": True})
+    assert calls[-1].method == "PATCH" and json.loads(calls[-1].content) == {"track_id": None, "id": True}
+    assert call_tool(client, token, "tracklist", {})["isError"]

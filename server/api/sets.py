@@ -63,6 +63,7 @@ class TracklistOut(Schema):
     set: SetRow
     list_key: str | None  # the "From this set" list, once anything in it is playable
     via: str = ""  # how the tracklist was read: text, llm, 1001tracklists, mixesdb, youtube, soundcloud, page
+    tracklist_url: str = ""  # where the tracklist came from, when it was a link
     summary: Summary
     lines: list[Line]
 
@@ -85,6 +86,7 @@ def tracklist_out(set_, via=""):
         "set": set_row(set_),
         "list_key": key if Mix.objects.filter(key=key).exists() else None,
         "via": via,
+        "tracklist_url": set_.tracklist_url,
         "summary": {**report, "pending": report["counts"].get(provided.PENDING, 0)},
         "lines": [{"position": e.position, "cue": e.cue, "artist": e.artist_name, "title": e.track_name, "label": e.label_name,
                    "match": e.match or (provided.FOUND if e.track_id else provided.UNMATCHED), "track": items.get(e.track_id)} for e in entries],
