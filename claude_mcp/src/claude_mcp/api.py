@@ -18,6 +18,9 @@ class Api:
     async def post(self, path, body=None):
         return await self._send("POST", path, json=body or {})
 
+    async def patch(self, path, body=None):
+        return await self._send("PATCH", path, json=body or {})
+
     async def delete(self, path):
         return await self._send("DELETE", path)
 

@@ -15,7 +15,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
 from claude_mcp import config as settings
-from claude_mcp import discover, health, mixes, reasoning
+from claude_mcp import discover, health, mixes, reasoning, tracklists
 from claude_mcp.api import Api, ApiError
 from claude_mcp.lists import AGE_TITLES, by_age, count, index_row, list_view, recency, result
 from claude_mcp.oauth import SCOPE, Provider
@@ -117,6 +117,7 @@ def build(config=None, transport=None):
     reasoning.register(mcp, api)
     mixes.register(mcp, api)
     health.register(mcp, api)
+    tracklists.register(mcp, api)
 
     @mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
     async def healthz(request: Request):
