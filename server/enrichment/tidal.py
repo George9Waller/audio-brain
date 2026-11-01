@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def match_tidal(limit=None):
-    run(STAGE, match_track, TidalClient(), limit, after="identity")
+    run(STAGE, match_track, TidalClient(), limit)
 
 
 def match_track(client, track):

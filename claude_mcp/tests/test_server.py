@@ -67,6 +67,30 @@ ROUTES = {
     "/api/v1/search": lambda r: {"tracks": [], "artists": [{"id": 3, "name": "Burial", "tracks": 12}], "contexts": []},
     "/api/v1/query": lambda r: {"columns": ["n"], "rows": [[1], [2]], "truncated": True, "ms": 4},
     "/api/v1/schema": lambda r: {"text": "# guide " + r.url.params.get("tables", "")},
+    "/api/v1/health/detail": lambda r: HEALTH,
+}
+
+RUN = {"id": 747, "state": "succeeded", "trigger": "schedule", "retry": False, "started_at": "2026-10-28T03:00:00Z",
+       "finished_at": "2026-10-28T03:48:00Z", "seconds": 2880, "failed_steps": [], "peak_mb": 2900, "peak_step": "Taste vectors", "cause": None}
+HEALTH = {
+    "server_time": "2026-10-28T12:00:00Z", "time_zone": "Europe/London",
+    "warnings": [{"key": "failed:mixes:749", "text": "Mixes and lists failed at 06:30 on Wed 28 Oct: worker died"}],
+    "models_rebuilt_at": "2026-10-28T03:48:00Z", "models_age_hours": 8.2,
+    "nights": [
+        {"night": "2026-10-28", "runs": {
+            "enrichment": [{**RUN, "id": 746, "started_at": "2026-10-28T01:00:00Z", "seconds": 61200, "peak_mb": 300, "peak_step": "Enrichment: identity"}],
+            "models": [{**RUN, "id": 747, "state": "failed", "cause": "killed for memory", "seconds": 540, "failed_steps": ["Taste vectors"]},
+                       {**RUN, "id": 748, "retry": True, "started_at": "2026-10-28T03:10:00Z"}],
+            "mixes": [{**RUN, "id": 749, "state": "failed", "cause": "worker died", "started_at": "2026-10-28T06:30:00Z", "peak_mb": None}],
+            "candidates": []}},
+        {"night": "2026-10-27", "runs": {"enrichment": [], "models": [], "mixes": [], "candidates": []}},
+    ],
+    "jobs": [], "backlog": {"identity": 1204, "tidal": 0, "clap": 3},
+    "catalogue": {"tracks": 61402, "analysed": 58100, "highest_id": 62013},
+    "databases": [{"name": "audio_brain", "mb": 1229}],
+    "workers": [{"lane": "main", "alive": True, "scheduling": True, "seen_at": "2026-10-28T12:00:00Z", "started_at": "2026-10-28T03:09:00Z", "host": "w"},
+                {"lane": "lookups", "alive": False, "scheduling": False, "seen_at": None, "started_at": None, "host": ""}],
+    "deaths": {"worker_died": 1, "killed_for_memory": 1},
 }
 
 
@@ -356,3 +380,21 @@ def test_mix_tools_over_mcp(env):
 
     radio = call_tool(client, token, "start_radio", {"track_id": 1})
     assert radio["structuredContent"]["key"] == "radio:1" and "TIDAL: https://tidal.com/browse/playlist/radio" in radio["content"][0]["text"]
+
+
+def test_server_health_over_mcp(env):
+    client, totp, calls = env
+    token = connect(client, totp)[1]["access_token"]
+    tools = {t["name"]: t for t in call_tool(client, token, None, None)["tools"]}
+    assert tools["server_health"]["annotations"]["readOnlyHint"]
+    health = call_tool(client, token, "server_health", {})
+    text = health["content"][0]["text"]
+    assert "- Mixes and lists failed at 06:30 on Wed 28 Oct: worker died" in text
+    assert "| Night | enrichment | models | mixes | candidates | Cause |" in text
+    # local times (GMT on 28 Oct), a retry after the kill, and each failure's cause
+    assert "| Wed 28 Oct | ok 17h00m | failed 03:00, retry ok 48 min | failed 06:30 | – | models: killed for memory; mixes: worker died |" in text
+    assert "| Tue 27 Oct | – | – | – | – |  |" in text
+    assert "Peak memory on the latest night: models 2.8 GB (Taste vectors), enrichment 300 MB" in text
+    assert "Enrichment backlog: identity 1,204, clap 3." in text and "lookups not running" in text
+    assert "lost to a worker stopping: 1; killed for memory: 1." in text
+    assert health["structuredContent"]["catalogue"]["tracks"] == 61402

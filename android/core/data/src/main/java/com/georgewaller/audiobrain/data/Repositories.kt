@@ -197,6 +197,7 @@ class JobsRepository(private val api: ApiClient) {
     suspend fun run(key: String, options: Map<String, Boolean> = emptyMap()) = api.runJob(key, options)
     suspend fun detail(id: Long) = api.run(id)
     suspend fun cancel(id: Long) = api.cancelRun(id)
+    suspend fun warnings() = api.health().warnings
 }
 
 /**

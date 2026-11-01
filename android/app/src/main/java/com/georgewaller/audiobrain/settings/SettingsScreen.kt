@@ -141,6 +141,9 @@ fun SettingsScreen(graph: DataGraph, contentPadding: PaddingValues, onDeviceChec
         SettingRow("Feedback notification", description = "Keep, No and Never while something plays; works offline") {
             AbSwitch(settings?.feedbackNotification ?: true, { on -> scope.launch { graph.settings.setFeedbackNotification(on) } })
         }
+        SettingRow("Server alerts", description = "A notification when a nightly job fails or the models are out of date") {
+            AbSwitch(settings?.serverAlerts ?: true, { on -> scope.launch { graph.settings.setServerAlerts(on) } })
+        }
         val playOn = settings?.playOn ?: com.georgewaller.audiobrain.data.Settings.TIDAL
         SettingRow("Play tracks in", description = "Where Play on a track starts it") {
             Row(horizontalArrangement = Arrangement.spacedBy(Ab.space.xs)) {

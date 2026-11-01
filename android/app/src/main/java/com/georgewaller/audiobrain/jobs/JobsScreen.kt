@@ -74,6 +74,9 @@ fun JobsScreen(vm: JobsViewModel, contentPadding: PaddingValues, onMessage: (Str
             return@LazyColumn
         }
         item(key = "worker") { WorkerBanner(response.worker.alive, response.worker.scheduling, response.worker.host, instant(response.worker.seenAt)) }
+        // a lane without a worker is the banner above's to say
+        val warnings = state.warnings.filterNot { it.key.startsWith("lane:") }
+        if (warnings.isNotEmpty()) item(key = "warnings") { WarningsBanner(warnings.map { it.text }) }
         if (state.error != null) item(key = "error") {
             AbText("Last refresh failed: ${state.error}", style = Ab.type.caption, color = Ab.colors.warning, modifier = Modifier.padding(top = Ab.space.s))
         }
@@ -86,6 +89,21 @@ fun JobsScreen(vm: JobsViewModel, contentPadding: PaddingValues, onMessage: (Str
                 onCancel = { id -> vm.cancel(id, onMessage) }, onOption = { o, on -> vm.setOption(job.key, o, on) },
                 modifier = Modifier.animateItem(),
             )
+        }
+    }
+}
+
+/** What the server warns of: models out of date, a scheduled job whose latest run failed. */
+@Composable
+private fun WarningsBanner(warnings: List<String>) {
+    AbSurface(Modifier.fillMaxWidth().padding(top = Ab.space.s), color = Ab.colors.warning.copy(alpha = 0.10f), shape = Ab.shapes.medium) {
+        Row(Modifier.padding(Ab.space.m), verticalAlignment = Alignment.CenterVertically) {
+            StatusPill("warning", Ab.colors.warning, live = false)
+            Spacer(Modifier.width(Ab.space.m))
+            Column {
+                AbText(if (warnings.size == 1) "Needs a look" else "${warnings.size} things need a look", style = Ab.type.label)
+                warnings.forEach { AbText(it, style = Ab.type.caption, color = Ab.colors.textMuted) }
+            }
         }
     }
 }

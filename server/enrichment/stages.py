@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 WORKER = {"index": 0, "count": 1}  # set by `enrich --worker N --workers M` so parallel runs split the queue
 
 
-def run(stage, enrich_track, client, limit=None, after=None, tracks=None):
+def run(stage, enrich_track, client, limit=None, tracks=None):
     """Call `enrich_track(client, track)` for each pending track. One failure shouldn't stop an hours-long run."""
     if tracks is None:
-        tracks = pending(stage, after)
+        tracks = pending(stage)
         if WORKER["count"] > 1:
             tracks = tracks.annotate(slot=F("pk") % WORKER["count"]).filter(slot=WORKER["index"])
         tracks = tracks[:limit] if limit else tracks
@@ -32,24 +32,25 @@ def run(stage, enrich_track, client, limit=None, after=None, tracks=None):
                 record(track, stage, EnrichmentAttempt.ERROR, detail=repr(error))
 
 
-def pending(stage, after=None):
-    """Tracks the stage still has to do, most-played first. Errors are retried every run, misses after 30 days.
+# The stage each one builds on: it only takes tracks that stage has finished with
+BUILDS_ON = {"tidal": "identity", "genres": "identity", "lastfm_tags": "identity"}
 
-    `after` names a stage this one builds on; only tracks that stage has finished with are included.
-    """
+
+def waiting(stage):
+    """Tracks the stage still has to do, unordered: what `pending` works through, and what the health view counts.
+    Errors are retried every run, misses after 30 days."""
     done = EnrichmentAttempt.objects.filter(stage=stage).filter(
         Q(status=EnrichmentAttempt.OK) | Q(status=EnrichmentAttempt.NOT_FOUND, attempted_at__gt=timezone.now() - RETRY_NOT_FOUND_AFTER)
     )
     tracks = Track.objects.all()
-    if after:
+    if after := BUILDS_ON.get(stage):
         tracks = tracks.filter(enrichment_attempts__stage=after, enrichment_attempts__status__in=[EnrichmentAttempt.OK, EnrichmentAttempt.NOT_FOUND])
-    return (
-        tracks.exclude(pk__in=done.values("track"))
-        .exclude(set__status__in=[Set.CANDIDATE, Set.CONFIRMED])
-        .select_related("artist", "album")
-        .annotate(plays=Count("listens"))
-        .order_by("-plays", "id")
-    )
+    return tracks.exclude(pk__in=done.values("track")).exclude(set__status__in=[Set.CANDIDATE, Set.CONFIRMED])
+
+
+def pending(stage):
+    """`waiting`, most-played first."""
+    return waiting(stage).select_related("artist", "album").annotate(plays=Count("listens")).order_by("-plays", "id")
 
 
 def record(track, stage, status, source="", detail=""):

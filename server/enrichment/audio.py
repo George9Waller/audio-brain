@@ -111,10 +111,15 @@ def corrected_bpm(bpm, danceability, styles):
     return bpm
 
 
+def unembedded():
+    """Analysed tracks still without a CLAP vector."""
+    return AudioFeatures.objects.filter(clap_embedding__isnull=True)
+
+
 def embed_clap(limit=None):
     """CLAP vectors for tracks analysed before CLAP was added: fetch the preview again, embed it, discard it."""
     clients = AudioClients()
-    pending = AudioFeatures.objects.filter(clap_embedding__isnull=True).select_related("track__artist").order_by("id")
+    pending = unembedded().select_related("track__artist").order_by("id")
     done = 0
     for features in pending[:limit] if limit else pending:
         try:

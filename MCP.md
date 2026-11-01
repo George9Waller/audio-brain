@@ -211,6 +211,7 @@ About 30, grouped so the descriptions stay short. Every list-like tool defaults 
 - `search` (words), `search_by_vibe` (sound), `time_travel(period, mode)`
 - `now` (the context ranker's picks), `contexts`, `lists`, `explain_pick(list_key, track)`
 - `whats_new` (discovery queue and weekly summary), `beyond` (artists to try or revisit, albums, sets)
+- `server_health`: the last week's nightly runs and what failed them, warnings, backlog and sizes (INFRA.md, I9)
 
 **Mixes**
 - `make_mix(prompt | request | track_ids, length, exploration)`: a draft, in the draft editor

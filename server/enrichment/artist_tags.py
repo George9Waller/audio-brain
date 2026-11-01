@@ -20,19 +20,22 @@ logger = logging.getLogger(__name__)
 
 def tag_artists(limit=None):
     client = LastFMClient()
-    # Scrobbled credit strings like "Prospa, KETTAMA" aren't Last.fm artists; their members are tagged via credits.
     artists = (
-        Artist.objects.filter(tags_fetched_at=None)
-        .filter(Q(credits__isnull=False) | ~Q(name__contains=", "))
+        untagged()
         .annotate(plays=Count("tracks__listens", distinct=True) + Count("credits__track__listens", distinct=True))
         .order_by("-plays", "id")
-        .distinct()
     )
     for artist in artists[:limit] if limit else artists:
         try:
             tag_artist(client, artist)
         except Exception:
             logger.exception("Artist tags failed for %s", artist)
+
+
+def untagged():
+    """Artists still to tag. Scrobbled credit strings like "Prospa, KETTAMA" aren't Last.fm artists; their members
+    are tagged via credits."""
+    return Artist.objects.filter(tags_fetched_at=None).filter(Q(credits__isnull=False) | ~Q(name__contains=", ")).distinct()
 
 
 def tag_artist(client, artist):
