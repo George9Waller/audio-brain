@@ -8,7 +8,7 @@ import org.junit.Test
 import com.georgewaller.audiobrain.design.swatchCells
 
 class ListAgesTest {
-    private fun list(key: String, kind: String, context: ListContext? = null) = MixList(key, kind, "lists", key, builtAt = "2026-10-30T06:30:00Z", context = context)
+    private fun list(key: String, kind: String, context: ListContext? = null, builtAt: String = "2026-10-30T06:30:00Z") = MixList(key, kind, "lists", key, builtAt = builtAt, context = context)
 
     private fun context(id: Long, recent: Int, active: Boolean = true, hours: List<Float> = emptyList(), eraEnd: String? = null) =
         ListContext(id, "Context $id", 0f, active = active, recentPlays = recent, hours = hours, eraStart = "2018-01-31", eraEnd = eraEnd)
@@ -19,7 +19,8 @@ class ListAgesTest {
         val lists = listOf(
             list("year:2019", "year"), list("year:2025", "year"), list("fresh", "fresh"), list("repeat", "repeat"),
             list("context:90", "era", context(90, 3, eraEnd = "2024-05-08")), list("context:91", "era", context(91, 11, eraEnd = "2025-04-28")),
-            list("context:45", "mix", context(45, 0, active = false)), list("ask:1", "asked"),
+            list("context:45", "mix", context(45, 0, active = false)), list("ask:1", "asked"), list("radio:5", "radio", builtAt = "2026-10-31T09:00:00Z"),
+            list("set:7", "set"), list("set:12", "set"),
         ) + contexts
         val sections = byAge(lists).associate { (age, ls) -> age to ls.map { it.key } }
         assertEquals(ListAge.entries.toList(), sections.keys.toList())
@@ -27,6 +28,8 @@ class ListAgesTest {
         assertEquals(listOf("context:2", "context:1"), sections[ListAge.Lately])
         assertEquals(listOf("context:91", "context:90"), sections[ListAge.Era])
         assertEquals(listOf("context:45"), sections[ListAge.Kept])
+        assertEquals(listOf("radio:5", "ask:1"), sections[ListAge.Yours])
+        assertEquals(listOf("set:12", "set:7"), sections[ListAge.Sets])
         assertEquals(listOf("year:2025", "year:2019"), sections[ListAge.Year])
     }
 

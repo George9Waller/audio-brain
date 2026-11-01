@@ -7,6 +7,7 @@ USER_MADE = ("asked", "radio", "explore", "set")  # lists the user made (recomme
 
 # the app's Lists page sections, in order (android ListAges.kt): (key, title, what's in it)
 AGES = [("yours", "Yours", "lists the user asked for, and artists they're exploring"),
+        ("sets", "From sets", "lists made from DJ sets' tracklists"),
         ("now", "Playing now", "the contexts played most in the last 45 days"),
         ("lately", "Also in rotation", "played lately, just less"),
         ("era", "From earlier eras", "big once, quiet lately"),
@@ -17,6 +18,7 @@ AGES = [("yours", "Yours", "lists the user asked for, and artists they're explor
         ("discover", "Discover", "releases, sets and artists to try, as the app's Discover page has them")]
 AGE_TITLES = {key: (title, about) for key, title, about in AGES}
 PLAYING_NOW = 6  # context lists that count as "Playing now"; the rest played lately are "Also in rotation"
+SHOWN = {"yours": 10, "sets": 5}  # rows a section shows before "Show all" (ListAges.shown)
 
 
 def track_line(item):
@@ -112,6 +114,8 @@ def age_of(mix):
     context = mix.get("context") or {}
     if mix["section"] != "lists":
         return "discover"
+    if mix["kind"] == "set":
+        return "sets"
     if mix["kind"] in USER_MADE + ("interest",):
         return "yours"
     if context.get("active") is False:
@@ -120,13 +124,15 @@ def age_of(mix):
 
 
 def by_age(lists):
-    """[(age, lists)] as the app's Lists page sections them: contexts by plays lately (the top few are "now"), eras
-    by when they ended, years newest first."""
+    """[(age, lists)] as the app's Lists page sections them: yours by when last made or changed, sets by when added,
+    contexts by plays lately (the top few are "now"), eras by when they ended, years newest first."""
     sections = {}
     for mix in lists:
         sections.setdefault(age_of(mix), []).append(mix)
     contexts = sorted(sections.pop("lately", []), key=lambda m: -(m.get("context") or {}).get("recent_plays", 0))
     sections["now"], sections["lately"] = contexts[:PLAYING_NOW], contexts[PLAYING_NOW:]
+    sections["yours"] = sorted(sections.get("yours", []), key=lambda m: m.get("built_at") or "", reverse=True)
+    sections["sets"] = sorted(sections.get("sets", []), key=lambda m: int(m["key"].partition(":")[2] or 0), reverse=True)  # set:<id>
     sections["era"] = sorted(sections.get("era", []), key=lambda m: (m.get("context") or {}).get("era_end") or "", reverse=True)
     sections["year"] = sorted(sections.get("year", []), key=lambda m: m["key"], reverse=True)
     return [(key, sections[key]) for key, _, _ in AGES if sections.get(key)]

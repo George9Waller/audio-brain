@@ -1,5 +1,7 @@
 package com.georgewaller.audiobrain.pages
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -7,6 +9,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -16,6 +19,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.georgewaller.audiobrain.AppViewModel
@@ -24,8 +29,11 @@ import com.georgewaller.audiobrain.ListAge
 import com.georgewaller.audiobrain.MixRow
 import com.georgewaller.audiobrain.byAge
 import com.georgewaller.audiobrain.meta
+import com.georgewaller.audiobrain.shown
 import com.georgewaller.audiobrain.tag
 import com.georgewaller.audiobrain.design.AbChip
+import com.georgewaller.audiobrain.design.AbIcon
+import com.georgewaller.audiobrain.design.AbIcons
 import com.georgewaller.audiobrain.data.ListItem
 import com.georgewaller.audiobrain.design.AbTextField
 import com.georgewaller.audiobrain.shortName
@@ -50,6 +58,7 @@ fun ListsPage(vm: AppViewModel, padding: PaddingValues, onOpenList: (String) -> 
     val state by vm.lists.collectAsStateWithLifecycle()
     val verdicts by vm.verdicts.collectAsStateWithLifecycle()
     var query by rememberSaveable { mutableStateOf("") }
+    var opened by rememberSaveable { mutableStateOf(emptyList<String>()) }  // sections showing all their lists
     val all = state.lists.filter { it.section == "lists" }
     val words = query.lowercase().split(" ").filter { it.isNotBlank() }
     fun matches(vararg text: String) = words.all { w -> text.any { w in it.lowercase() } }
@@ -79,13 +88,18 @@ fun ListsPage(vm: AppViewModel, padding: PaddingValues, onOpenList: (String) -> 
             EmptyState(if (state.loading) "Fetching your lists" else "No lists yet", state.error ?: "They're built by the Mixes job each morning; run it from More › Jobs.")
         }
         sections.forEach { (age, ls) ->
-            item(key = "s-${age.name}") { AgeHeader(age) }
+            // a long section shows its first few, unless opened from its header or searching
+            val long = words.isEmpty() && ls.size > (age.shown ?: Int.MAX_VALUE)
+            val open = age.name in opened
+            item(key = "s-${age.name}") {
+                AgeHeader(age, if (long) ls.size else null, open) { opened = if (open) opened - age.name else opened + age.name }
+            }
             if (age == ListAge.Year) item(key = "years") {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(Ab.space.s), verticalArrangement = Arrangement.spacedBy(Ab.space.s)) {
                     ls.forEach { l -> AbChip(l.key.substringAfter(":"), onClick = { onOpenList(l.key) }) }
                 }
             }
-            else items(ls, key = { it.key }) { l -> MixRow(l, age.meta(l), age.tag(l)) { onOpenList(l.key) } }
+            else items(if (long && !open) ls.take(age.shown!!) else ls, key = { it.key }) { l -> MixRow(l, age.meta(l), age.tag(l)) { onOpenList(l.key) } }
         }
         if (state.error != null && mixes.isNotEmpty()) item(key = "error") {
             AbText("Showing saved lists: ${state.error}", style = Ab.type.caption, color = Ab.colors.textFaint, modifier = Modifier.padding(top = Ab.space.m))
@@ -93,12 +107,25 @@ fun ListsPage(vm: AppViewModel, padding: PaddingValues, onOpenList: (String) -> 
     }
 }
 
-/** A section's name, and a line on what puts a list in it. */
+/** A section's name, and a line on what puts a list in it. With [total], the section is longer than it shows: the
+ * header opens and closes it, saying how many there are and turning its chevron. */
 @Composable
-fun AgeHeader(age: ListAge) {
-    Column(Modifier.padding(top = Ab.space.xl, bottom = Ab.space.xs)) {
-        AbText(age.title, style = Ab.type.title, maxLines = 1)
-        AbText(age.caption, style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 2)
+fun AgeHeader(age: ListAge, total: Int? = null, open: Boolean = false, onToggle: () -> Unit = {}) {
+    val turn by animateFloatAsState(if (open) 180f else 0f, label = "chevron")
+    Row(
+        Modifier.fillMaxWidth()
+            .then(if (total != null) Modifier.clickable(role = Role.Button, onClickLabel = if (open) "Show fewer" else "Show all", onClick = onToggle) else Modifier)
+            .padding(top = Ab.space.xl, bottom = Ab.space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            AbText(age.title, style = Ab.type.title, maxLines = 1)
+            AbText(age.caption, style = Ab.type.caption, color = Ab.colors.textMuted, maxLines = 2)
+        }
+        if (total != null) {
+            AbText(if (open) "All $total" else "${age.shown} of $total", style = Ab.type.number, color = Ab.colors.textMuted, modifier = Modifier.padding(start = Ab.space.s))
+            AbIcon(AbIcons.Down, Modifier.padding(start = Ab.space.xs).rotate(turn), tint = Ab.colors.textMuted, size = 18.dp)
+        }
     }
 }
 

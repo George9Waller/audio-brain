@@ -45,11 +45,14 @@ const count = (n: number) => n.toLocaleString("en-GB");
 
 /** Each section's line, as the app's Lists page says it (ListAges.kt); the server's `about` is worded for Claude. */
 const CAPTIONS: Record<string, string> = {
-  yours: "Lists you asked for, and artists you're exploring", now: "What you've played most in the last 45 days",
+  yours: "Lists you asked for, and artists you're exploring", sets: "Lists made from DJ sets' tracklists", now: "What you've played most in the last 45 days",
   lately: "Played lately, just less", era: "Big for you once, quiet lately", kept: "Their context has retired; kept because they're in Tidal",
   new: "Tracks you haven't played", habit: "What you replay, and what you've left behind", year: "What you played most each year",
   discover: "Releases, sets and artists to try",
 };
+
+/** Rows a section shows before "Show all" (ListAges.shown). */
+const SHOWN: Record<string, number> = { yours: 10, sets: 5 };
 
 /** "today", "yesterday", "3 days ago", "2 weeks ago", "5 months ago", "2 years ago". */
 function ago(iso: string) {
@@ -60,7 +63,7 @@ function ago(iso: string) {
   return `${n} ${unit}${n === 1 ? "" : "s"} ago`;
 }
 
-/** The tag on a list's row in its section (ListAges.tag): none under Yours, Years and Discover, whose titles say it. */
+/** The tag on a list's row in its section (ListAges.tag): none under Yours, From sets, Years and Discover, whose titles say it. */
 function tagOf(age: string, recency: Recency): { label: string; tone: Tone } | null {
   if (age === "era") return { label: recency?.era || "Era", tone: "era" };
   const tags: Record<string, [string, Tone]> = { now: ["Now", "now"], lately: ["Lately", "lately"], kept: ["Retired", "retired"], new: ["New", "new"], habit: ["Habit", "habit"] };
@@ -282,13 +285,28 @@ function IndexRow({ row, busy, open }: { row: ListRow; busy: boolean; open: (key
  * see the rest in full screen, where every section is, in the app's order. */
 function IndexCard({ data, busy, open, full, expand }: { data: Index; busy: boolean; open: (key: string) => void; full: boolean; expand: () => void }) {
   const sections = data.sections ?? [{ age: "", title: "Your lists", about: "" }];
+  const [opened, setOpened] = useState<string[]>([]);  // sections showing all their lists
   const rows = (age: string) => data.lists.filter((l) => !age || l.age === age);
-  const section = (s: { age: string; title: string; about: string }) => (
-    <section key={s.age} class="section">
-      <header class="section-head"><h2>{s.title}</h2>{CAPTIONS[s.age] && <p class="caption">{CAPTIONS[s.age]}</p>}</header>
-      <ul class="lists">{rows(s.age).map((r) => <IndexRow key={r.key} row={r} busy={busy} open={open} />)}</ul>
-    </section>
-  );
+  const section = (s: { age: string; title: string; about: string }) => {
+    const all = rows(s.age);
+    const long = all.length > (SHOWN[s.age] ?? Infinity);
+    const shown = long && !opened.includes(s.age) ? all.slice(0, SHOWN[s.age]) : all;
+    const head = <span class="text"><h2>{s.title}</h2>{CAPTIONS[s.age] && <p class="caption">{CAPTIONS[s.age]}</p>}</span>;
+    const isOpen = opened.includes(s.age);
+    return (
+      <section key={s.age} class="section">
+        {long
+          // a long section opens and closes from its header, which says how many there are
+          ? <button class="section-head toggle" aria-expanded={isOpen} onClick={() => setOpened(isOpen ? opened.filter((a) => a !== s.age) : [...opened, s.age])}>
+              {head}
+              <span class="count mono">{isOpen ? `All ${all.length}` : `${SHOWN[s.age]} of ${all.length}`}</span>
+              <svg class="chevron" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 9.5L12 16l6.5-6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+          : <header class="section-head">{head}</header>}
+        <ul class="lists">{shown.map((r) => <IndexRow key={r.key} row={r} busy={busy} open={open} />)}</ul>
+      </section>
+    );
+  };
   const top = <div class="top"><div class="name"><h1>Your lists</h1><p class="meta">{data.lists.length} lists</p></div>{!full && <Expand onClick={expand} />}</div>;
   if (full) return <main class="full"><header class="head">{top}</header><div class="body">{sections.map(section)}</div></main>;
   const first = sections.find((s) => s.age === "now") ?? sections[0];

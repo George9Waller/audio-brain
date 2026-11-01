@@ -195,6 +195,12 @@ button.bar-row { min-height: 44px; }
 .tag.new { --tone: var(--age-new); } .tag.habit { --tone: var(--age-habit); } .tag.retired { --tone: var(--age-retired); }
 .section + .section { margin-top: 18px; }
 .section-head { display: flex; flex-direction: column; gap: 1px; padding: 0 0 6px; }
+.section-head .text { display: flex; flex-direction: column; gap: 1px; }
+.section-head.toggle { flex-direction: row; align-items: center; gap: 6px; width: 100%; text-align: left; }
+.section-head.toggle .text { flex: 1; min-width: 0; }
+.section-head .count { font-size: 12px; color: var(--faint); white-space: nowrap; }
+.section-head .chevron { flex: none; color: var(--faint); transition: transform .2s; }
+.section-head.toggle[aria-expanded="true"] .chevron { transform: rotate(180deg); }
 .section-head h2 { margin: 0; font-size: 15px; line-height: 20px; font-weight: 650; letter-spacing: -.1px; }
 .list-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 8px 0; border-top: 1px solid var(--line); }
 .list-row .text { gap: 2px; }
