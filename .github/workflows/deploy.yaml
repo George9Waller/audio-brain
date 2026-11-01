@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
@@ -34,11 +34,11 @@ jobs:
       postgres: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.postgres == 'true' }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: What changed
       id: filter
-      uses: dorny/paths-filter@v3
+      uses: dorny/paths-filter@v4
       with:
         filters: |
           server:
@@ -56,17 +56,17 @@ jobs:
   build:
     needs: changes
     if: needs.changes.outputs.server == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write
       contents: read
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
+      uses: aws-actions/configure-aws-credentials@v6
       with:
         aws-region: eu-west-2
         role-to-assume: arn:aws:iam::810574566145:role/GHActionsECRRole
@@ -93,14 +93,14 @@ jobs:
   build-mcp:
     needs: changes
     if: needs.changes.outputs.mcp == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write
       contents: read
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Set up uv
       uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2; no floating major tags after v7
@@ -112,7 +112,7 @@ jobs:
       run: uv run --frozen pytest -q
 
     - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
+      uses: aws-actions/configure-aws-credentials@v6
       with:
         aws-region: eu-west-2
         role-to-assume: arn:aws:iam::810574566145:role/GHActionsECRRole
@@ -138,17 +138,17 @@ jobs:
   build-postgres:
     needs: changes
     if: needs.changes.outputs.postgres == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       id-token: write
       contents: read
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
+      uses: aws-actions/configure-aws-credentials@v6
       with:
         aws-region: eu-west-2
         role-to-assume: arn:aws:iam::810574566145:role/GHActionsECRRole
@@ -176,13 +176,13 @@ jobs:
     needs: [changes, build, build-mcp, build-postgres]
     # after whichever builds ran, as long as none failed
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && (needs.build.result == 'success' || needs.build-mcp.result == 'success' || needs.build-postgres.result == 'success') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Configure git
       run: |
