@@ -34,6 +34,7 @@ object AbIcons {
     val Close by lazy { line("close") { moveTo(7f, 7f); lineTo(17f, 17f); moveTo(17f, 7f); lineTo(7f, 17f) } }
     val Delete by lazy { line("delete") { moveTo(4.5f, 7f); lineTo(19.5f, 7f); moveTo(9.5f, 7f); lineTo(10f, 4.5f); lineTo(14f, 4.5f); lineTo(14.5f, 7f); moveTo(6.5f, 7f); lineTo(7.5f, 19.5f); lineTo(16.5f, 19.5f); lineTo(17.5f, 7f) } }
     val Edit by lazy { line("edit") { moveTo(5f, 19f); lineTo(5.8f, 15.2f); lineTo(15.5f, 5.5f); lineTo(18.5f, 8.5f); lineTo(8.8f, 18.2f); close(); moveTo(13.5f, 7.5f); lineTo(16.5f, 10.5f) } }
+    val Down by lazy { line("down") { moveTo(5.5f, 9.5f); lineTo(12f, 16f); lineTo(18.5f, 9.5f) } }
     val Back by lazy { line("back") { moveTo(14.5f, 5.5f); lineTo(8f, 12f); lineTo(14.5f, 18.5f) } }
     val Open by lazy { line("open") { moveTo(10f, 5f); lineTo(19f, 5f); lineTo(19f, 14f); moveTo(19f, 5f); lineTo(6f, 18f) } }
     val Sparkle by lazy {

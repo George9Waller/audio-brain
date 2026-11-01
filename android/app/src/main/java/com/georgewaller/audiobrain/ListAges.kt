@@ -10,6 +10,7 @@ import java.util.Locale
 /** The Lists page's sections, in order, from what you're playing now to what's older. */
 enum class ListAge(val title: String, val caption: String) {
     Yours("Yours", "Lists you asked for, and artists you're exploring"),
+    Sets("From sets", "Lists made from DJ sets' tracklists"),
     Now("Playing now", "What you've played most in the last 45 days"),
     Lately("Also in rotation", "Played lately, just less"),
     Era("From earlier eras", "Big for you once, quiet lately; a few come round each week"),
@@ -22,13 +23,22 @@ enum class ListAge(val title: String, val caption: String) {
 /** How many context lists count as "Playing now"; the rest played lately are "Also in rotation". */
 const val PLAYING_NOW = 6
 
-val YOURS = setOf("radio", "asked", "explore", "interest", "set")
+val YOURS = setOf("radio", "asked", "explore", "interest")
 
-/** Lists into the Lists page's sections, each in its order: contexts by plays lately, years newest first. */
+/** How many rows a section shows before "Show all"; the rest have none, as they're kept short where they're built. */
+val ListAge.shown: Int? get() = when (this) {
+    ListAge.Yours -> 10
+    ListAge.Sets -> 5
+    else -> null
+}
+
+/** Lists into the Lists page's sections, each in its order: yours by when last made or changed, sets by when added,
+ * contexts by plays lately, years newest first. */
 fun byAge(lists: List<MixList>): List<Pair<ListAge, List<MixList>>> {
     val sections = lists.groupBy { list ->
         when {
             list.kind in YOURS -> ListAge.Yours
+            list.kind == "set" -> ListAge.Sets
             list.context?.active == false -> ListAge.Kept
             list.kind == "mix" -> ListAge.Lately  // the most played become Now, below
             list.kind == "era" -> ListAge.Era
@@ -40,15 +50,17 @@ fun byAge(lists: List<MixList>): List<Pair<ListAge, List<MixList>>> {
     val contexts = sections[ListAge.Lately].orEmpty().sortedByDescending { it.context?.recentPlays ?: 0 }
     sections[ListAge.Now] = contexts.take(PLAYING_NOW)
     sections[ListAge.Lately] = contexts.drop(PLAYING_NOW)
+    sections[ListAge.Yours] = sections[ListAge.Yours].orEmpty().sortedByDescending { it.builtAt }
+    sections[ListAge.Sets] = sections[ListAge.Sets].orEmpty().sortedByDescending { it.key.substringAfter(":").toLongOrNull() ?: 0 }  // set:<id>, the newest set has the highest id
     sections[ListAge.Era] = sections[ListAge.Era].orEmpty().sortedByDescending { it.context?.eraEnd ?: "" }
     sections[ListAge.Year] = sections[ListAge.Year].orEmpty().sortedByDescending { it.key }
     return ListAge.entries.mapNotNull { age -> sections[age]?.takeIf { it.isNotEmpty() }?.let { age to it } }
 }
 
 /** The tag on a list's row in its section: "Now", "Lately", the era's years ("2018–24"), "Retired"... None under
- * Yours, whose titles already say what they are. */
+ * Yours and From sets, whose titles already say what they are. */
 fun ListAge.tag(list: MixList): AgeTag? = when (this) {
-    ListAge.Yours -> null
+    ListAge.Yours, ListAge.Sets -> null
     ListAge.Now -> AgeTag("Now", AgeTone.Now)
     ListAge.Lately -> AgeTag("Lately", AgeTone.Lately)
     ListAge.Era -> AgeTag(eraSpan(list.context?.eraStart, list.context?.eraEnd) ?: "Era", AgeTone.Era)
