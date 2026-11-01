@@ -196,7 +196,7 @@ function Root() {
       <div class="bar"><span class="faint">audio-brain</span><Close onClick={collapse} /></div>
       <header class="head">
         <h1 class="big">{name}</h1><p class="muted">{sub} · {meta}</p>
-        {s.unassigned && <p class="note">{fmt(s.measure === "weighted" ? s.unassigned.weighted : s.unassigned.plays)} plays have no {s.group} yet, so aren't ranked.</p>}
+        {s.unassigned && <p class="note fold">{fmt(s.measure === "weighted" ? s.unassigned.weighted : s.unassigned.plays)} plays have no {s.group} yet, so aren't ranked.</p>}
         <div class="controls">
           <Switch value={tab} options={[["chart", "Chart"], ["table", "Table"]]} onChange={setTab} />
           {tab === "chart" && controls}

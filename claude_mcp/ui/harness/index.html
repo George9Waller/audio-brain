@@ -14,6 +14,13 @@
       iframe { display: block; width: 100%; border: 1px solid #1f1e1d26; border-radius: 12px; background: transparent; }
       body.dark iframe { border-color: #faf9f526; }
       body.fullscreen iframe { position: fixed; inset: 0; width: 100vw; height: 100vh !important; border: 0; border-radius: 0; z-index: 2; }
+      /* Claude's full screen, as seen 1 Nov: its own header above the frame, its message box floating over the frame's
+         bottom, and on the phone its close button and title floating over the top */
+      .chrome { display: none; position: fixed; z-index: 3; background: #ffffffee; border: 1px solid #1f1e1d26; }
+      body.fullscreen .chrome { display: block; }
+      #composer { left: 16px; right: 16px; bottom: 16px; height: 120px; border-radius: 20px; }
+      #pill { left: 50%; transform: translateX(-50%); top: 40px; width: 150px; height: 44px; border-radius: 22px; }
+      body:not(.phone) #pill { display: none; }
       #log { margin-top: 12px; font: 12px ui-monospace, monospace; opacity: .7; white-space: pre-wrap; }
     </style>
   </head>
@@ -22,6 +29,8 @@
       <p class="bubble">Here are your lists:</p>
       <iframe id="app" title="component"></iframe>
       <div id="log"></div>
+      <div class="chrome" id="composer" aria-hidden="true"></div>
+      <div class="chrome" id="pill" aria-hidden="true"></div>
     </div>
     <script type="module" src="./host.ts"></script>
   </body>

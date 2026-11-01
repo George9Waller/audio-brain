@@ -3,6 +3,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { App, applyDocumentTheme, applyHostFonts, applyHostStyleVariables } from "@modelcontextprotocol/ext-apps";
 import type { McpUiDisplayMode, McpUiHostContext } from "@modelcontextprotocol/ext-apps";
+import { applyFrame } from "./frame";
 
 export function connect<T>(name: string) {
   const app = new App({ name, version: "0.1.0" });
@@ -13,6 +14,7 @@ export function connect<T>(name: string) {
     if (context?.theme) applyDocumentTheme(context.theme);
     if (context?.styles?.variables) applyHostStyleVariables(context.styles.variables);
     if (context?.styles?.css?.fonts) applyHostFonts(context.styles.css.fonts);
+    applyFrame({ ...app.getHostContext(), ...context });
     if (context?.displayMode) modes.forEach((m) => m(context.displayMode!));
   };
   // handlers go on before connect(), so the first tool result isn't missed

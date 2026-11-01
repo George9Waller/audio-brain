@@ -15,9 +15,9 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
 from claude_mcp import config as settings
-from claude_mcp import health, mixes, reasoning
+from claude_mcp import discover, health, mixes, reasoning
 from claude_mcp.api import Api, ApiError
-from claude_mcp.lists import count, list_view, novel_share, result
+from claude_mcp.lists import AGE_TITLES, by_age, count, index_row, list_view, recency, result
 from claude_mcp.oauth import SCOPE, Provider
 from claude_mcp.store import Store
 
@@ -28,8 +28,8 @@ INSTRUCTIONS = f"""audio-brain is the user's own music catalogue and listening h
 Tracks are shown as "Artist – Title (#id)". To make a mix, call `make_mix` with what the user asked for as a
 `request`, then change it with `refine_mix` as they react. To play something, call `play` with a list's or draft's
 key; it writes it to the TIDAL playlist "Now". Then play the Sonos favourite "{SONOS_FAVOURITE}" in the room the user
-asked for, through the Sonos connector; it plays whatever was written last. Never record a verdict the user didn't
-state."""
+asked for, through the Sonos connector; it plays whatever was written last. For what's new to them (releases, artists to try,
+things from their past), call `discover`. Never record a verdict the user didn't state."""
 
 
 def build(config=None, transport=None):
@@ -43,21 +43,23 @@ def build(config=None, transport=None):
         annotations=ToolAnnotations(read_only_hint=True, open_world_hint=False),
         description="Show one of audio-brain's lists, or with no key, every list. For a list, the text has every track "
                     "with its sound, context, whether it's new to the user and why it was picked, plus who's in it, its "
-                    "length, energy and context mix; the user sees a short summary they can expand.",
+                    "length, energy and context mix; the user sees a short summary they can expand. Every list comes in the app's "
+                    "sections, from what's playing now to retired contexts whose lists are kept but no longer rebuilt.",
     )
     async def show_list(key: Annotated[str | None, Field(description="The list's key; leave out to see every list")] = None) -> CallToolResult:
         if not key:
-            lists = (await api.get("/lists"))["lists"]
-            rows = [{"key": m["key"], "title": m["title"], "subtitle": m["subtitle"], "section": m["section"], "kind": m["kind"],
-                     "family": (m.get("context") or {}).get("family") or "", "sync": bool(m.get("sync")),
-                     "tracks": sum(1 for i in m["items"] if i.get("kind") == "track"), "count": count(m["items"]),
-                     "novel": novel_share(m["items"]), "hue": (m.get("context") or {}).get("hue"),
-                     # one per track, for the colour strip of what the list is made of
-                     "hues": [i.get("hue") for i in m["items"] if i.get("kind") == "track"][:60]} for m in lists]
-            text = "\n".join(f"- {r['title']} ({r['count']}"
-                             + (f", {round(r['novel'] * 100)}% new" if r["novel"] is not None else "")
-                             + f"), key `{r['key']}`" for r in rows)
-            return result(f"{len(rows)} lists:\n{text}", {"view": "index", "lists": rows})
+            sections = by_age((await api.get("/lists"))["lists"])
+            rows, text = [], []
+            for age, lists in sections:
+                title, about = AGE_TITLES[age]
+                text.append(f"**{title}** ({about}):")
+                for m in lists:
+                    rows.append(index_row(m, age))
+                    facts = [count(m["items"]), f"{round(rows[-1]['novel'] * 100)}% new" if rows[-1]["novel"] is not None else "", recency(m.get("context"))]
+                    text.append(f"- {m['title']} ({'; '.join(x for x in facts if x)}), key `{m['key']}`")
+                text.append("")
+            sections_out = [{"age": age, "title": AGE_TITLES[age][0], "about": AGE_TITLES[age][1]} for age, _ in sections]
+            return result(f"{len(rows)} lists, in the app's sections:\n\n" + "\n".join(text).strip(), {"view": "index", "sections": sections_out, "lists": rows})
         try:
             mix = await api.get(f"/mixes/{key}")
         except ApiError:
@@ -67,6 +69,7 @@ def build(config=None, transport=None):
     apps.add_html_resource(LIST_UI, (config.ui_dir / "list.html").read_text(), title="audio-brain list", prefers_border=True)
     reasoning.register_apps(apps, api, config)
     mixes.register_apps(apps, api, config)
+    discover.register_apps(apps, api, config)
 
     # after the Apps tools and resources: the server takes them from the extension when it's made
     mcp = MCPServer(

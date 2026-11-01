@@ -1,9 +1,9 @@
 import { AppBridge, PostMessageTransport } from "@modelcontextprotocol/ext-apps/app-bridge";
-import { draft, list, lists, played, releases, stats, story } from "./fixtures";
+import { discover, draft, list, lists, played, releases, stats, story } from "./fixtures";
 
 const params = new URLSearchParams(location.search);
 const theme = params.get("theme") === "dark" ? "dark" : "light";
-const page = params.get("page") ?? "list";  // list, chart, story or draft
+const page = params.get("page") ?? "list";  // list, chart, story, draft or discover
 const view = params.get("view") ?? (page === "chart" ? "lines" : page === "story" ? "track" : "index");
 document.body.classList.toggle("dark", theme === "dark");
 document.querySelector<HTMLElement>(".chat")!.style.maxWidth = `${params.get("width") ?? 720}px`;
@@ -22,16 +22,19 @@ const result = (data: object) => ({ content: [{ type: "text" as const, text: "(s
 const byKey: Record<string, object> = { "explore:late": list, releases };
 let mode: "inline" | "fullscreen" = params.get("mode") === "fullscreen" ? "fullscreen" : "inline";
 document.body.classList.toggle("fullscreen", mode === "fullscreen");
+document.body.classList.toggle("phone", params.get("width") === "390");
+// what Claude tells a component about its frame: the window, here (it hasn't been seen to send safe-area insets)
+const frame = () => ({ containerDimensions: { height: innerHeight, width: innerWidth } });
 
 const bridge = new AppBridge(null, { name: "harness", version: "1" }, { openLinks: {}, serverTools: {} },
-  { hostContext: { theme, styles: { variables }, displayMode: mode, availableDisplayModes: ["inline", "fullscreen"],
+  { hostContext: { theme, styles: { variables }, displayMode: mode, ...(mode === "fullscreen" ? frame() : {}), availableDisplayModes: ["inline", "fullscreen"],
     platform: params.get("width") === "390" ? "mobile" : "web" } as never });
 // full screen as a host does it: the component fills the window, and is told so
 bridge.onrequestdisplaymode = async ({ mode: wanted }) => {
   mode = wanted === "fullscreen" ? "fullscreen" : "inline";
   document.body.classList.toggle("fullscreen", mode === "fullscreen");
   log(`requestDisplayMode ${mode}`);
-  bridge.sendHostContextChange({ displayMode: mode });
+  bridge.sendHostContextChange({ displayMode: mode, ...(mode === "fullscreen" ? frame() : { containerDimensions: { maxHeight: 6000 } }) });
   return { mode };
 };
 bridge.oncalltool = async ({ name, arguments: args }) => {
@@ -44,6 +47,11 @@ bridge.oncalltool = async ({ name, arguments: args }) => {
   if (name === "track_story") return result(story.track);
   if (name === "artist") return result(story.artist);
   if (name === "play") return result(played);
+  if (name === "queue_decision") return result({ release_id: args?.release_id, state: args?.state });
+  if (name === "discover") {
+    const one = discover.sections.find((s) => s.key === args?.section) ?? discover.sections[0];
+    return result({ ...discover, view: "section", sections: [one] });
+  }
   if (name === "refine_mix") return result(refined(args?.operations as { op: string; track_ids?: number[]; track_id?: number }[]));
   return result(byKey[String(args?.key)] ?? list);
 };
@@ -79,6 +87,7 @@ async function initial() {
   if (page === "chart") return stats[view];
   if (page === "story") return story[view];
   if (page === "draft") return current;
+  if (page === "discover") return discover;
   return view === "index" ? lists : view === "releases" ? releases : list;
 }
 bridge.oninitialized = async () => { bridge.sendToolResult(result(await initial())); };

@@ -242,12 +242,13 @@ def register(mcp, api):
 
     @mcp.tool(title="Decide on a release", annotations=CHANGE,
               description="Mark a release in the discovery queue (the `releases` list) as heard, saved or dismissed, "
-                          "as the user says.")
-    async def queue_decision(release_id: int, state: Literal["heard", "saved", "dismissed"]) -> CallToolResult:
+                          "as the user says; \"new\" undoes a decision and puts it back in the queue.")
+    async def queue_decision(release_id: int, state: Literal["heard", "saved", "dismissed", "new"]) -> CallToolResult:
         synced = await api.post("/sync", {"queue": [outbox_item(release_id=release_id, state=state)]})
         if synced["rejected"]:
             return error(synced["rejected"][0]["reason"])
-        return result(f"Release {release_id}: {state}.", {"release_id": release_id, "state": state})
+        done = "back in the queue" if state == "new" else state
+        return result(f"Release {release_id}: {done}.", {"release_id": release_id, "state": state})
 
     @mcp.tool(title="Rename a list", annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False),
               description="Rename a draft or a list the user made.")

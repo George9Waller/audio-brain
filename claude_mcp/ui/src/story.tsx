@@ -44,23 +44,25 @@ function Tiles({ items }: { items: [string, string][] }) {
 }
 
 /** Plays per month, from the first month to now; ticks on Januaries. */
-function MonthChart({ months, full }: { months: Month[]; full: boolean }) {
+// Charts take the colour of the context the music sits in (an artist's: the one they're played in most), as the
+// app's track and artist pages do; the dataviz blue only when there's no context.
+function MonthChart({ months, full, color }: { months: Month[]; full: boolean; color?: string }) {
   if (!months.length) return null;
   const years = new Set(months.map((m) => m.month.slice(0, 4))).size;
   const every = Math.max(1, Math.ceil(years / (full ? 8 : 5)));
   return (
     <figure><figcaption>Plays per month</figcaption>
-      <Columns values={months.map((m) => m.plays)} labels={months.map((m) => `${MONTHS[+m.month.slice(5, 7) - 1]} ${m.month.slice(0, 4)}`)} height={full ? 140 : 100}
+      <Columns values={months.map((m) => m.plays)} labels={months.map((m) => `${MONTHS[+m.month.slice(5, 7) - 1]} ${m.month.slice(0, 4)}`)} height={full ? 140 : 100} color={color}
                tick={(i) => (months[i].month.slice(5, 7) === "01" && +months[i].month.slice(0, 4) % every === 0) || (i === 0 && years === 1) ? months[i].month.slice(0, 4) : null}
                detail={(i) => `${months[i].plays} plays`} /></figure>
   );
 }
 
-function HourChart({ hours }: { hours: number[] }) {
+function HourChart({ hours, color }: { hours: number[]; color?: string }) {
   if (!hours.some(Boolean)) return null;
   return (
     <figure><figcaption>When in the day</figcaption>
-      <Columns values={hours} labels={hours.map((_, h) => `${String(h).padStart(2, "0")}:00`)} height={90}
+      <Columns values={hours} labels={hours.map((_, h) => `${String(h).padStart(2, "0")}:00`)} height={90} color={color}
                tick={(h) => (h % 6 === 0 ? String(h).padStart(2, "0") : null)} detail={(h) => `${hours[h]} plays`} /></figure>
   );
 }
@@ -91,6 +93,7 @@ const Head = ({ children, side }: { children: preact.ComponentChildren; side?: p
 
 function TrackCard({ s, full, open, side }: CardProps<TrackStory>) {
   const sound = s.sound;
+  const color = s.context ? contextColor(s.context.hue) : undefined;
   const facts = [
     sound && `${Math.round(sound.bpm)} BPM · ${sound.camelot ?? `${sound.key} ${sound.scale}`} · energy ${sound.energy.toFixed(2)} · ${sound.instrumental < 0.5 ? "vocal" : "instrumental"}`,
     s.verdicts.length ? `Your verdict: ${VERDICTS[s.verdicts[0].verdict] ?? s.verdicts[0].verdict} (${day(s.verdicts[0].given_at)})` : "",
@@ -106,10 +109,10 @@ function TrackCard({ s, full, open, side }: CardProps<TrackStory>) {
             {[s.album, s.released?.slice(0, 4)].filter(Boolean).map((x) => ` · ${x}`).join("")}</p></div>
       </div></Head>
       <Tiles items={[[fmt(s.plays), "plays"], [month(s.first_played), "first heard"], [month(s.last_played), "last played"]]} />
-      <MonthChart months={s.months} full={full} />
+      <MonthChart months={s.months} full={full} color={color} />
       <Chips items={[...(s.context ? [{ label: s.context.name, color: contextColor(s.context.hue) }] : []), ...s.styles.slice(0, full ? 6 : 3).map((x) => ({ label: x }))]} />
       {facts.length > 0 && <ul class="facts">{facts.slice(0, full ? 4 : 2).map((f) => <li key={f}>{f}</li>)}</ul>}
-      {full && <HourChart hours={s.hours} />}
+      {full && <HourChart hours={s.hours} color={color} />}
       {full && <Ranks caption="Where" items={s.countries} />}
       {full && s.lists.length > 0 && <figure><figcaption>In your lists</figcaption><Chips items={s.lists.map((l) => ({ label: l.title }))} /></figure>}
     </>
@@ -119,19 +122,20 @@ function TrackCard({ s, full, open, side }: CardProps<TrackStory>) {
 function ArtistCard({ s, full, open, side }: CardProps<ArtistStory>) {
   const who = [s.kind, s.area || s.country, s.active_from ? `since ${s.active_from}` : ""].filter(Boolean).join(" · ");
   const top = s.top_tracks.slice(0, full ? 15 : 3);
+  const color = s.contexts[0] ? contextColor(s.contexts[0].hue ?? null) : undefined;
   return (
     <>
       <Head side={side}><div class="name"><h1 class={full ? "big" : ""}>{s.name}</h1>{who && <p class="meta">{who}</p>}</div></Head>
       <Tiles items={[[fmt(s.plays), "plays"], [`${s.tracks_played} of ${s.tracks}`, "tracks played"], [month(s.first_played), "first heard"]]} />
-      <MonthChart months={s.months} full={full} />
+      <MonthChart months={s.months} full={full} color={color} />
       {top.length > 0 && (
         <figure><figcaption>Played most</figcaption>
-          <Bars bars={top.map((t) => ({ label: t.title, value: t.plays, detail: `${t.plays}`, onClick: () => open("track_story", { track_id: t.track_id }) }))} /></figure>
+          <Bars bars={top.map((t) => ({ label: t.title, value: t.plays, detail: `${t.plays}`, color, onClick: () => open("track_story", { track_id: t.track_id }) }))} /></figure>
       )}
       <Chips items={s.styles.slice(0, full ? 8 : 3).map((x) => ({ label: x.label }))} />
       {full && <Ranks caption="Contexts" items={s.contexts} color={(r) => contextColor(r.hue ?? null)} />}
       {full && <Ranks caption="Labels" items={s.labels} />}
-      {full && <HourChart hours={s.hours} />}
+      {full && <HourChart hours={s.hours} color={color} />}
       {full && s.similar.length > 0 && (
         <figure><figcaption>Similar artists</figcaption>
           <ul class="chips">{s.similar.map((x) => <li key={x.name}>{x.artist_id

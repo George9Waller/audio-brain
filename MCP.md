@@ -371,6 +371,83 @@ Steps left for you:
 - *Done when:* from the phone, "something for cooking, less vocal", two refinements, then "play it in the
   kitchen" ends with the right music playing.
 
+### Phase 2b: catch up with the app's redesign (planned 1 Nov)
+
+The app's Lists, Discover and Catalogue were reworked 27–31 Oct; Claude kept working (the API only gained fields)
+but saw none of it. The design canvases the app was built from are the reference for the cards: **Lists page
+layouts** (option A, sections by recency), **Discover page layouts** (B, sections by why, with F's cards, G's rows
+and H/I's section pages) and **Catalogue page layouts** (library home, artist then and now, context, track, set and
+album pages), all in the claude.ai artifact gallery. Echo them, at card size; don't clone them.
+
+Fields (done 1 Nov):
+- [x] `show_list` with no key sections lists as the app does (`lists.by_age`, a port of `ListAges.kt`): Yours, Playing
+      now (top 6 by plays lately), Also in rotation, Earlier eras, Kept as they were (retired contexts), New music,
+      Habits, Your years, then Discover. Each row has `age`, `recency` (plays lately and in all, last played, era,
+      active) and `near` per track; the text gives each section and each list's recency.
+- [x] A list's view has its context's `recency`; its text says it ("120 plays lately (900 in all), last …, era
+      2018–24, retired").
+- [x] Tracks in no context: `near: true`, `context` is the one they sound like, and the text says "sounds like X";
+      the context mix counts them apart (`near`). The API's `decorate` now gives `near_context_name`.
+- [x] `queue_decision` takes `"new"`, undoing a decision.
+
+Still to do in the tools:
+- [ ] `artist` counts collaborations like the app (`catalogue.credits`); today `/artists/{id}/story` counts only
+      tracks credited to exactly that artist, so Claude's numbers for collaborators are lower than the app's.
+- [ ] `library` (read): `/library/summary`, tracks by when (`lately` / `older` / `never`), by language, and the
+      context page (`/library/contexts/{id}`: rank, hours, styles, members, its list). `track_story` gains
+      `/library/tracks/{id}`'s age, key and release date.
+- [x] `discover` (read, 1 Nov; `claude_mcp/discover.py`): the Discover lists in the app's sections
+      (`DiscoverPage.kt`: artists, remixers and labels you play, close to artists you love, back from your past,
+      long listens, albums), with `/releases/summary`'s waiting counts; each release with its ID, why, "sounds like"
+      and how many more from that artist, so Claude can work the inbox without `sql`. `section` gives all of one.
+- [ ] `now` also returns Home's leads (`/actions`: now, interest, explore, faded, fresh, era).
+
+Cards:
+- [x] **Full screen fits Claude's frame** (1 Nov). Seen on the phone and desktop: Claude draws its own header and
+      close button, floats its message box over the frame's bottom (covering our footer of Open in Tidal, Keep and
+      Play), and on the phone floats its close button and title over the top. `frame.ts`, shared by all four
+      components: in full screen the page takes `containerDimensions`' height (else `100dvh`), keeps clear of the top
+      on the phone (96 px) and the message box (140 px) unless Claude's `safeAreaInsets` ask for more, and only
+      `.body` scrolls; our close bar hides when Claude's full screen has its own; the actions moved from a footer into
+      the header. The harness's full screen now has the message box and, at `width=390`, the floating title, and
+      sends `containerDimensions`. Check on the phone after deploying; the 96/140 allowances are in `frame.ts`.
+- [x] **The app's pieces, in `music.tsx` and `style.css` (1 Nov),** ported from `Music.kt` and `Theme.kt` so a
+      list reads the same in Claude as in the app: near tracks at half saturation with a dashed sigil ring;
+      `ListSwatch` (the 4×4 colour square, hollow cells for near tracks); `AgeTag` in the six age colours (the app's
+      on dark grounds, darkened on light ones for 4.5:1); `HourBars`; the sync dot; a verdict bar on track rows;
+      meta lines in mono, as the app's number style. Fonts stay Claude's (Archivo and Plex aren't loaded in a
+      sandboxed frame), so headings echo the app by weight, not face.
+- [x] **Lists index in sections:** the app's section titles and captions (`CAPTIONS`, from `ListAges.kt`), rows as
+      the app's `ListRow` (square, title, mono line, tag, sync dot). Inline: Playing now only, and "All N lists, in
+      sections" opens full screen.
+- [x] **List card recency:** plays lately under the meta line; a retired list is tagged and says it's kept as it
+      last was; the legend counts tracks that only sound like each context; the context's hours are in the Sound
+      tab.
+- [x] **Small frames:** in full screen the steer chips are one row that scrolls sideways; titles and meta lines
+      keep to one line; once the tracks are scrolled the head folds (`frame.ts`, `.fold`) to the name, strip,
+      actions, chips and tabs, so a phone shows about six tracks rather than two; frames under 760 px tighten the
+      head. The harness fixtures have ages, recency, near tracks and verdicts to check all this.
+- [x] **Story and chart (1 Nov):** a track's months and hours are drawn in its context's colour, an artist's in the
+      colour of the context they're played in most (the dataviz blue only without one); the chart's "no label yet"
+      note folds. On desktop, full-screen content keeps to a 760 px column, as the app's pages are drawn.
+- Checked in the harness (phone 390 and desktop 1100, light and dark): list index inline and full, a list inline
+  and full (folded and not), the draft inline and full, the releases list, the chart (lines), and the track and
+  artist stories. Not yet seen in Claude itself.
+- [x] **Discover card** (1 Nov, `discover.tsx`), ported from the app's `Discover.kt`: sections as kicker (tone and
+      count), title, why, and the rows in one raised card with "All N →" at its foot, which opens the section's own
+      page in the card. Release rows: the colour-icon cover (hollow cells, a play mark; opens Tidal), title, artist,
+      mono detail, "Sounds like …", Save and Skip; deciding brings the next up ("just in") and leaves a line to
+      Undo (`queue_decision` `"new"`); "+N more" unfolds the artist's other releases with "Skip the other N". Then
+      "Close to" chips, then-and-now lines and year bars, the set bar. Inline: the queue's count and the first
+      section's first two. What's decided is passed to Claude with `updateModelContext`. Checked in the harness
+      (`?page=discover`), phone, light and dark, inline and full screen.
+- [ ] **Library cards:** reuse `story.tsx` for the artist (then-and-now bars per year, contexts, tracks with age
+      tags, releases waiting) and a context page (hours, plays lately, era, styles, tracks core to edge with fit
+      bars); a small library summary card (the recency strip and what you've been in lately).
+- *Done when:* on the phone, "show me my lists" opens in sections with nothing cut off in full screen, "what's new
+  for me" can be worked through with taps (save, skip, undo), and asking about an artist who collaborates a lot shows the
+  then-and-now artist card with numbers that match the app.
+
 ### Phase 3: meta insights
 
 - [ ] `insights` job and endpoints; milestones.
