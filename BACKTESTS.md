@@ -204,3 +204,20 @@ One `default` cutoff, 19 Sep–31 Oct (42 days), using image
 The default scorer gate was off (test AUC 0.655). Across 1,302 distinct listed tracks, 42 came back on at least two
 days (3.2%), 10 of 407 new tracks were played (2.5%), and the lists covered 16.3% of plays. Overall, 127 listed
 tracks were played (9.8%). This is a runner and baseline check on one cutoff, not a comparison or a decision.
+
+### Phase 1 — scorer comparison, 31 Oct–1 Nov 2026
+
+Four tuning cutoffs (42, 84, 126 and 168 days), each scored over the following 42 days, using image
+`ec884ff4c5697d67725cb8e63faff261a82d2a02` and shared snapshot `af32b38a5cd14478b7c4fbbb54498112`.
+The default scorer gate was off for all four. Differences below are percentage points against `default`, with paired
+bootstrap 95% intervals and the number of cutoffs whose difference has the same sign.
+
+| Variant | Came back % | New played % | Plays covered % | Verdict |
+|---|---|---|---|---|
+| `no-scorer` | 0.00 [0.00, 0.00], 0/4 | 0.00 [0.00, 0.00], 0/4 | 0.00 [0.00, 0.00], 0/4 | Identical to default |
+| `scorer-on` | +0.19 [-0.04, +0.43], 4/4 | +0.36 [-0.89, +1.51], 2/4 | +0.14 [-1.20, +1.45], 2/4 | Noise |
+
+The forced-on scorer improved the primary measure at every cutoff, but its interval includes zero and neither guard
+shows a clear change. Keep the current gate for now; this run does not establish that forcing the scorer on wins.
+The Job took 66 minutes with one cutoff at a time and a two-CPU container limit. Its full summary is on the shared
+models volume at `backtests/multi/2026-11-01-42-84-126-168-default+no-scorer+scorer-on.json`.

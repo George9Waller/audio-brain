@@ -29,7 +29,7 @@ nodes:
 # (deploy/KUBERNETES.md, "Moving to another node"); the MCP pod stays up and reports the API as down
 paused: false
 
-# CI rewrites these lines on every build (.github/workflows/deploy.yaml); the MCP image is tagged mcp-<sha>
+# CI rewrites these lines on builds (.github/workflows/deploy.yaml); server tags are server-<sha>, MCP tags mcp-<sha>.
 env:
   IMAGE_TAG: '5d561dbeff34db3ea16d43252a31ad494ee26357'
   MCP_IMAGE_TAG: '68fdc435d9ce9837b174f21eb11651ab960b4cef'
@@ -229,6 +229,7 @@ musicbrainz:
 
 backup:
   enabled: true
+  image: postgres:18  # pg_dump must be at least as new as the PostgreSQL server
   schedule: "15 0 * * *"  # before the nightly jobs (enrichment 01:00, models 03:00)
   keepDays: 7
   # on the small node, so the dumps are on a different machine from the database. local-path doesn't enforce the

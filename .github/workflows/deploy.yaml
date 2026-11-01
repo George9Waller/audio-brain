@@ -1,9 +1,10 @@
 name: Deploy to argocd
 
 # Builds the server, PostgreSQL and Claude MCP images when their code changes, pushes them to ECR and points
-# helm/values.yaml at them; Argo CD syncs from there. All go in the ECR repository audio-brain, with postgres- and
-# mcp- prefixes for those images. Needs that repository and this repo in GHActionsECRRole's trust policy. The tag
+# helm/values.yaml at them; Argo CD syncs from there. All go in the ECR repository audio-brain, with server-, mcp-
+# and postgres- prefixes. Needs that repository and this repo in GHActionsECRRole's trust policy. The tag
 # commit is pushed with the built-in GITHUB_TOKEN; its pushes start no workflows, and Argo CD reads the change from git.
+# Changes to this workflow rebuild all three images, including images whose deployed ECR tags have been removed.
 
 on:
   push:
@@ -85,7 +86,7 @@ jobs:
         platforms: linux/amd64
         push: true
         provenance: false  # one plain image in ECR, not an index with an attestation alongside
-        tags: ${{ steps.login-ecr.outputs.registry }}/audio-brain:${{ github.sha }}
+        tags: ${{ steps.login-ecr.outputs.registry }}/audio-brain:server-${{ github.sha }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
@@ -192,7 +193,7 @@ jobs:
       run: |
         git pull --rebase
         if [ "${{ needs.build.result }}" = success ]; then
-          sed -i "s|^  IMAGE_TAG:.*|  IMAGE_TAG: '${{ github.sha }}'|" helm/values.yaml
+          sed -i "s|^  IMAGE_TAG:.*|  IMAGE_TAG: 'server-${{ github.sha }}'|" helm/values.yaml
         fi
         if [ "${{ needs.build-mcp.result }}" = success ]; then
           sed -i "s|^  MCP_IMAGE_TAG:.*|  MCP_IMAGE_TAG: '${{ github.sha }}'|" helm/values.yaml
