@@ -31,8 +31,8 @@ paused: false
 
 # CI rewrites these lines on builds (.github/workflows/deploy.yaml); server tags are server-<sha>, MCP tags mcp-<sha>.
 env:
-  IMAGE_TAG: 'server-3311a201fcffab1d25c15a3dea6d74882e8c0e0b'
-  MCP_IMAGE_TAG: '3311a201fcffab1d25c15a3dea6d74882e8c0e0b'
+  IMAGE_TAG: 'server-b979ce8b657d354e07df30377e44cc8d9f57c586'
+  MCP_IMAGE_TAG: 'b979ce8b657d354e07df30377e44cc8d9f57c586'
 
 # Every property of this AWS Secrets Manager secret becomes an environment variable: POSTGRES_PASSWORD, SECRET_KEY,
 # API_TOKEN and the API keys (the list is in deploy/KUBERNETES.md, Phase 0)
